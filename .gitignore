@@ -18,12 +18,5 @@ coverage/
 # Logs
 *.log
 
-# Existing unrelated workspace content
-Assets/
-docs/
-My project/
-README.md
-
-# Keep this app tracked
-!crypto-signal-dashboard/
-!crypto-signal-dashboard/**
+# Editor/system artifacts
+.vscode/
