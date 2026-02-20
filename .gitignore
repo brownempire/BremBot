@@ -1,0 +1,29 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Node / Next
+node_modules/
+.npm/
+.next/
+out/
+dist/
+coverage/
+
+# Logs
+*.log
+
+# Existing unrelated workspace content
+Assets/
+docs/
+My project/
+README.md
+
+# Keep this app tracked
+!crypto-signal-dashboard/
+!crypto-signal-dashboard/**

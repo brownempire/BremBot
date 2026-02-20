@@ -1,0 +1,9 @@
+{
+  "name": "PulseSignal",
+  "short_name": "PulseSignal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "icons": []
+}
