@@ -306,6 +306,16 @@ function DashboardPage() {
               Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
             </div>
           </div>
+          <div className="header-alert-slot">
+            <div className="panel compact-panel">
+              <h3>Alerts & Push</h3>
+              <div className="subtext" style={{ marginBottom: 10 }}>{pushStatus}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
+                <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
+              </div>
+            </div>
+          </div>
           <div className="badges">
             <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "live" : "simulated"}</div>
             <div className="badge">Chainlink: {HAS_CHAINLINK ? "ready" : "standby"}</div>
@@ -326,17 +336,6 @@ function DashboardPage() {
           ))}
         </div>
       </header>
-
-      <section className="top-alerts" style={{ marginBottom: 18 }}>
-        <div className="panel compact-panel">
-          <h3>Alerts & Push</h3>
-          <div className="subtext" style={{ marginBottom: 10 }}>{pushStatus}</div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-            <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
-            <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
-          </div>
-        </div>
-      </section>
 
       <section className="panel chart-panel" style={{ marginBottom: 22 }}>
         <h3>TradingView Chart</h3>
