@@ -19,6 +19,13 @@ export type Signal = {
   timestamp: number;
 };
 
+function scoreConfidence(magnitude: number, threshold: number) {
+  if (threshold <= 0) return 0.5;
+  const ratio = magnitude / threshold;
+  // 0.55 at threshold, ramps slower, capped below 1.0 to avoid constant 100% prints.
+  return Math.max(0.3, Math.min(0.95, 0.55 + (ratio - 1) / 3));
+}
+
 export function computeTrend(points: PricePoint[]) {
   if (points.length < 2) {
     return { changePercent: 0, direction: "bullish" as const };
@@ -52,7 +59,8 @@ export function detectSignals({
   }
 
   const trend = computeTrend(points);
-  const recent = points.slice(Math.max(0, points.length - 12));
+  // Use a wider baseline to target slower, 15m+ style setups.
+  const recent = points.slice(Math.max(0, points.length - Math.max(30, Math.floor(points.length / 3))));
   const avg = recent.reduce((sum, point) => sum + point.v, 0) / recent.length;
   const breakoutChange = percentChange(points[points.length - 1].v, avg);
 
@@ -64,7 +72,7 @@ export function detectSignals({
       symbol,
       type: "trend",
       direction: trend.direction,
-      confidence: Math.min(Math.abs(trend.changePercent) / (params.trendThreshold * 2), 1),
+      confidence: scoreConfidence(Math.abs(trend.changePercent), params.trendThreshold),
       summary: `Trend shift of ${trend.changePercent.toFixed(2)}% over window.`,
       timestamp: now,
     });
@@ -76,23 +84,24 @@ export function detectSignals({
       symbol,
       type: "breakout",
       direction: breakoutChange >= 0 ? "bullish" : "bearish",
-      confidence: Math.min(Math.abs(breakoutChange) / (params.breakoutPercent * 2), 1),
+      confidence: scoreConfidence(Math.abs(breakoutChange), params.breakoutPercent),
       summary: `Price action breakout of ${breakoutChange.toFixed(2)}% vs recent avg.`,
       timestamp: now,
     });
   }
 
-  if (Math.abs(newsScore) > 0.4) {
+  if (Math.abs(newsScore) > 0.65) {
     signals.push({
       id: `${symbol}-news-${now}`,
       symbol,
       type: "news",
       direction: newsScore >= 0 ? "bullish" : "bearish",
-      confidence: Math.min(Math.abs(newsScore), 1),
+      confidence: Math.max(0.35, Math.min(0.8, Math.abs(newsScore))),
       summary: `News sentiment suggests ${newsScore >= 0 ? "positive" : "negative"} bias.`,
       timestamp: now,
     });
   }
 
-  return signals;
+  if (signals.length <= 1) return signals;
+  return [...signals].sort((a, b) => b.confidence - a.confidence).slice(0, 1);
 }

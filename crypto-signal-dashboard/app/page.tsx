@@ -14,7 +14,7 @@ import { getMockNews } from "@/lib/news/mock";
 import { formatUsd, percentChange } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"] as const;
+const SYMBOLS = ["SOL/USD", "ETH/USD", "BTC/USD"] as const;
 const HAS_CHAOS_EDGE = Boolean(
   process.env.NEXT_PUBLIC_CHAOS_EDGE_URL && process.env.NEXT_PUBLIC_CHAOS_EDGE_TOKEN
 );
@@ -23,11 +23,11 @@ const HAS_CHAINLINK = Boolean(
 );
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 20,
-  trendThreshold: 1.0,
-  breakoutPercent: 0.8,
-  newsBias: 0.15,
-  cooldownSeconds: 5,
+  trendWindow: 30,
+  trendThreshold: 2.2,
+  breakoutPercent: 1.6,
+  newsBias: 0.08,
+  cooldownSeconds: 300,
 };
 
 type WalletTokenHolding = {
@@ -46,6 +46,15 @@ function shortAddress(address: string) {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function toTradingViewSymbol(pair: typeof SYMBOLS[number]) {
+  const map: Record<typeof SYMBOLS[number], string> = {
+    "SOL/USD": "BINANCE:SOLUSDT",
+    "ETH/USD": "BINANCE:ETHUSDT",
+    "BTC/USD": "BINANCE:BTCUSDT",
+  };
+  return map[pair];
+}
+
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -54,6 +63,7 @@ function DashboardPage() {
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
+  const [selectedChartPair, setSelectedChartPair] = useState<typeof SYMBOLS[number]>("SOL/USD");
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
@@ -73,7 +83,7 @@ function DashboardPage() {
         updates.forEach((update) => {
           const existing = next[update.symbol] ?? [];
           const merged = [...existing, ...update.points];
-          next[update.symbol] = merged.slice(-300);
+          next[update.symbol] = merged.slice(-5400);
         });
         return next;
       });
@@ -95,6 +105,8 @@ function DashboardPage() {
         const recentPoints = points.filter(
           (point) => now - point.t <= params.trendWindow * 60 * 1000
         );
+        const minimumDataPoints = params.trendWindow * 45;
+        if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
           symbol,
@@ -325,14 +337,19 @@ function DashboardPage() {
 
         <div className="grid">
           {cards.map((card) => (
-            <div key={card.symbol} className="panel">
+            <button
+              key={card.symbol}
+              type="button"
+              className={`panel price-card ${selectedChartPair === card.symbol ? "active" : ""}`}
+              onClick={() => setSelectedChartPair(card.symbol)}
+            >
               <h3>{card.symbol}</h3>
               <div className="price">{formatUsd(card.current)}</div>
               <div className="subtext">
                 10s change {card.change >= 0 ? "+" : ""}
                 {card.change.toFixed(2)}%
               </div>
-            </div>
+            </button>
           ))}
         </div>
       </header>
@@ -340,10 +357,10 @@ function DashboardPage() {
       <section className="panel chart-panel" style={{ marginBottom: 22 }}>
         <h3>TradingView Chart</h3>
         <div className="subtext" style={{ marginBottom: 10 }}>
-          Live market chart aligned with signal scanning.
+          Live market chart aligned with signal scanning. Selected: {selectedChartPair}
         </div>
         <div className="tradingview-wrap">
-          <TradingViewChart symbol="BINANCE:BTCUSDT" />
+          <TradingViewChart symbol={toTradingViewSymbol(selectedChartPair)} />
         </div>
       </section>
 
@@ -386,9 +403,9 @@ function DashboardPage() {
               <input
                 type="number"
                 value={params.trendWindow}
-                min={2}
-                max={60}
-                step={1}
+                min={15}
+                max={180}
+                step={5}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))
                 }
@@ -399,9 +416,9 @@ function DashboardPage() {
               <input
                 type="number"
                 value={params.trendThreshold}
-                min={0.2}
-                max={5}
-                step={0.1}
+                min={0.8}
+                max={10}
+                step={0.2}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))
                 }
@@ -412,9 +429,9 @@ function DashboardPage() {
               <input
                 type="number"
                 value={params.breakoutPercent}
-                min={0.2}
-                max={5}
-                step={0.1}
+                min={0.8}
+                max={8}
+                step={0.2}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, breakoutPercent: Number(event.target.value) }))
                 }
@@ -426,8 +443,8 @@ function DashboardPage() {
                 type="number"
                 value={params.newsBias}
                 min={0}
-                max={1}
-                step={0.05}
+                max={0.4}
+                step={0.02}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, newsBias: Number(event.target.value) }))
                 }
@@ -439,8 +456,8 @@ function DashboardPage() {
                 type="number"
                 value={params.cooldownSeconds}
                 min={5}
-                max={120}
-                step={1}
+                max={900}
+                step={5}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))
                 }

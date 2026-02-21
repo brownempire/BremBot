@@ -87,6 +87,21 @@ header {
   gap: 18px;
 }
 
+.price-card {
+  text-align: left;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.price-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(101, 217, 255, 0.35);
+}
+
+.price-card.active {
+  border-color: rgba(101, 217, 255, 0.6);
+  box-shadow: 0 0 0 1px rgba(101, 217, 255, 0.35), 0 20px 45px var(--shadow);
+}
+
 .panel {
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01));
   border: 1px solid var(--border);
