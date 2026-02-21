@@ -211,3 +211,45 @@ button:disabled {
     font-size: 26px;
   }
 }
+
+.wallet-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.wallet-adapter-button {
+  background: rgba(101, 217, 255, 0.15) !important;
+  border: 1px solid rgba(101, 217, 255, 0.25) !important;
+  border-radius: 12px !important;
+  color: var(--text) !important;
+  font-family: "IBM Plex Sans", system-ui, sans-serif !important;
+  font-size: 14px !important;
+  height: 42px !important;
+  padding: 0 14px !important;
+}
+
+.wallet-holdings {
+  margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.holding-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 25, 0.7);
+}
+
+.jupiter-plugin {
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  min-height: 620px;
+  background: rgba(13, 17, 25, 0.7);
+}

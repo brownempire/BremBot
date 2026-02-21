@@ -24,6 +24,7 @@ npm run dev
 - Without live keys, the dashboard runs on a simulated price feed and mock news stream.
 - Push notifications require VAPID keys and a secure origin (localhost is OK).
 - Chainlink backup feed integration is stubbed and ready for RPC/aggregator wiring.
+- Wallet connect and trading are powered by Solana Wallet Adapter + Jupiter Plugin.
 
 ### Generate VAPID keys
 ```
@@ -35,6 +36,9 @@ Paste generated values into `.env.local`:
 - `VAPID_PUBLIC_KEY`
 - `VAPID_PRIVATE_KEY`
 - `VAPID_SUBJECT`
+
+For local Jupiter plugin rendering, keep:
+- `NEXT_PUBLIC_IS_PLUGIN_DEV=true`
 
 ## Roadmap
 - Integrate Chaos Edge REST/WebSocket feed

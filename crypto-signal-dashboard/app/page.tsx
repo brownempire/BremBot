@@ -1,11 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { PublicKey } from "@solana/web3.js";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+
+import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
+import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
 import { createSimulatedFeed, type PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { getMockNews } from "@/lib/news/mock";
 import { formatUsd, percentChange } from "@/lib/utils";
 
+const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const SYMBOLS = ["BTC/USD", "ETH/USD", "SOL/USD"] as const;
 const HAS_CHAOS_EDGE = Boolean(
   process.env.NEXT_PUBLIC_CHAOS_EDGE_URL && process.env.NEXT_PUBLIC_CHAOS_EDGE_TOKEN
@@ -22,6 +29,11 @@ const DEFAULT_PARAMS: UserParams = {
   cooldownMinutes: 2,
 };
 
+type WalletTokenHolding = {
+  mint: string;
+  amount: number;
+};
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -29,7 +41,14 @@ function urlBase64ToUint8Array(base64String: string) {
   return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
 }
 
-export default function Page() {
+function shortAddress(address: string) {
+  return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
+function DashboardPage() {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -37,6 +56,10 @@ export default function Page() {
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
+
+  const [solBalance, setSolBalance] = useState<number | null>(null);
+  const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
+  const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
 
   useEffect(() => {
     const feed = createSimulatedFeed([...SYMBOLS]);
@@ -109,13 +132,61 @@ export default function Page() {
 
       return next;
     });
-  }, [priceHistory, params, lastSignalAt]);
+  }, [lastSignalAt, params, priceHistory, pushEnabled]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").then(() => setPushReady(true));
     }
   }, []);
+
+  async function refreshWalletPortfolio() {
+    if (!wallet.connected || !wallet.publicKey) {
+      setSolBalance(null);
+      setWalletTokens([]);
+      setPortfolioStatus("Wallet not connected");
+      return;
+    }
+
+    try {
+      setPortfolioStatus("Syncing wallet balances...");
+
+      const [lamports, tokenAccounts] = await Promise.all([
+        connection.getBalance(wallet.publicKey),
+        connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+          programId: TOKEN_PROGRAM_ID,
+        }),
+      ]);
+
+      const holdings = tokenAccounts.value
+        .map((accountInfo) => {
+          const parsed = accountInfo.account.data.parsed.info;
+          const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
+          return {
+            mint: String(parsed.mint),
+            amount,
+          } satisfies WalletTokenHolding;
+        })
+        .filter((holding) => holding.amount > 0)
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 6);
+
+      setSolBalance(lamports / 1_000_000_000);
+      setWalletTokens(holdings);
+      setPortfolioStatus("Wallet synced");
+    } catch {
+      setPortfolioStatus("Failed to sync wallet balances");
+    }
+  }
+
+  useEffect(() => {
+    refreshWalletPortfolio().catch(() => undefined);
+    const interval = setInterval(() => {
+      refreshWalletPortfolio().catch(() => undefined);
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [wallet.connected, wallet.publicKey?.toBase58()]);
 
   const latestNews = useMemo(() => getMockNews(), [priceHistory]);
 
@@ -179,22 +250,24 @@ export default function Page() {
           <div>
             <div className="title">PulseSignal Desk</div>
             <div className="subtext">
-              Real-time crypto signals with Chaos Edge primary feed and Chainlink backup.
+              Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
             </div>
           </div>
           <div className="badges">
             <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "live" : "simulated"}</div>
             <div className="badge">Chainlink: {HAS_CHAINLINK ? "ready" : "standby"}</div>
-            <div className="badge">News: X (mock)</div>
+            <div className="badge">Jupiter: integrated</div>
           </div>
         </div>
+
         <div className="grid">
           {cards.map((card) => (
             <div key={card.symbol} className="panel">
               <h3>{card.symbol}</h3>
               <div className="price">{formatUsd(card.current)}</div>
               <div className="subtext">
-                10s change {card.change >= 0 ? "+" : ""}{card.change.toFixed(2)}%
+                10s change {card.change >= 0 ? "+" : ""}
+                {card.change.toFixed(2)}%
               </div>
             </div>
           ))}
@@ -202,6 +275,35 @@ export default function Page() {
       </header>
 
       <section className="grid" style={{ marginBottom: 22 }}>
+        <div className="panel">
+          <h3>Wallet Connect</h3>
+          <div className="wallet-controls">
+            <WalletMultiButton />
+            <button className="secondary" onClick={refreshWalletPortfolio}>
+              Refresh Wallet
+            </button>
+            {wallet.connected ? (
+              <button onClick={() => wallet.disconnect()}>Disconnect</button>
+            ) : null}
+          </div>
+          <div className="subtext" style={{ marginTop: 10 }}>
+            {wallet.publicKey ? `Address: ${shortAddress(wallet.publicKey.toBase58())}` : "Connect Phantom or Solflare to trade."}
+          </div>
+          <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
+          <div className="wallet-holdings">
+            <div className="holding-row">
+              <span>SOL</span>
+              <strong>{solBalance === null ? "-" : solBalance.toFixed(4)}</strong>
+            </div>
+            {walletTokens.map((token) => (
+              <div key={token.mint} className="holding-row">
+                <span>{shortAddress(token.mint)}</span>
+                <strong>{token.amount.toFixed(4)}</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="panel">
           <h3>Signal Parameters</h3>
           <div className="controls">
@@ -272,12 +374,20 @@ export default function Page() {
             </label>
           </div>
         </div>
+      </section>
+
+      <section className="grid" style={{ marginBottom: 22 }}>
+        <div className="panel">
+          <h3>Trade via Jupiter Plugin</h3>
+          <div className="subtext" style={{ marginBottom: 10 }}>
+            Connected wallets can execute swaps directly. Trades route through Jupiter liquidity.
+          </div>
+          <JupiterTradePanel />
+        </div>
 
         <div className="panel">
           <h3>Alerts & Push</h3>
-          <div className="subtext" style={{ marginBottom: 12 }}>
-            {pushStatus}
-          </div>
+          <div className="subtext" style={{ marginBottom: 12 }}>{pushStatus}</div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <button onClick={enablePush} disabled={!pushReady}>
               Enable Push
@@ -286,9 +396,7 @@ export default function Page() {
               Send Test Push
             </button>
           </div>
-          <div className="footer">
-            In-app alerts fire automatically when thresholds are met.
-          </div>
+          <div className="footer">In-app alerts fire automatically when thresholds are met.</div>
         </div>
       </section>
 
@@ -302,7 +410,9 @@ export default function Page() {
               className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
             >
               <div>
-                <div>{signal.symbol} · {signal.type.toUpperCase()}</div>
+                <div>
+                  {signal.symbol} · {signal.type.toUpperCase()}
+                </div>
                 <div className="signal-meta">{signal.summary}</div>
               </div>
               <div>{Math.round(signal.confidence * 100)}%</div>
@@ -325,8 +435,16 @@ export default function Page() {
       </section>
 
       <div className="footer">
-        Signals are informational only and not financial advice. Configure live feeds and social integrations before trading.
+        Signals are informational only and not financial advice. Always verify on-chain details before placing live trades.
       </div>
     </main>
+  );
+}
+
+export default function Page() {
+  return (
+    <SolanaWalletProvider>
+      <DashboardPage />
+    </SolanaWalletProvider>
   );
 }
