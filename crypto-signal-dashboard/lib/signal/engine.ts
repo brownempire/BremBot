@@ -6,7 +6,7 @@ export type UserParams = {
   trendThreshold: number; // percent
   breakoutPercent: number; // percent
   newsBias: number; // -1 to 1
-  cooldownMinutes: number;
+  cooldownSeconds: number;
 };
 
 export type Signal = {
@@ -47,7 +47,7 @@ export function detectSignals({
 }): Signal[] {
   if (points.length < 3) return [];
   const now = points[points.length - 1].t;
-  if (lastSignalAt && now - lastSignalAt < params.cooldownMinutes * 60 * 1000) {
+  if (lastSignalAt && now - lastSignalAt < params.cooldownSeconds * 1000) {
     return [];
   }
 

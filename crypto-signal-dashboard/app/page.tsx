@@ -23,11 +23,11 @@ const HAS_CHAINLINK = Boolean(
 );
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 12,
-  trendThreshold: 0.6,
-  breakoutPercent: 0.5,
-  newsBias: 0.25,
-  cooldownMinutes: 2,
+  trendWindow: 20,
+  trendThreshold: 1.0,
+  breakoutPercent: 0.8,
+  newsBias: 0.15,
+  cooldownSeconds: 5,
 };
 
 type WalletTokenHolding = {
@@ -307,10 +307,10 @@ function DashboardPage() {
             </div>
           </div>
           <div className="header-alert-slot">
-            <div className="panel compact-panel">
-              <h3>Alerts & Push</h3>
-              <div className="subtext" style={{ marginBottom: 10 }}>{pushStatus}</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            <div className="panel compact-panel alerts-row-panel">
+              <strong>Alerts & Push</strong>
+              <span className="subtext">{pushStatus}</span>
+              <div className="alerts-actions">
                 <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
                 <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
               </div>
@@ -434,15 +434,15 @@ function DashboardPage() {
               />
             </label>
             <label>
-              Cooldown (min)
+              Cooldown (sec)
               <input
                 type="number"
-                value={params.cooldownMinutes}
-                min={1}
-                max={30}
+                value={params.cooldownSeconds}
+                min={5}
+                max={120}
                 step={1}
                 onChange={(event) =>
-                  setParams((prev) => ({ ...prev, cooldownMinutes: Number(event.target.value) }))
+                  setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))
                 }
               />
             </label>

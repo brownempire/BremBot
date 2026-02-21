@@ -241,6 +241,21 @@ button:disabled {
   margin: 0;
 }
 
+.alerts-row-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: min(760px, 100%);
+  padding: 10px 12px;
+}
+
+.alerts-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .header-alert-slot {
   display: flex;
   justify-content: center;
@@ -288,6 +303,17 @@ button:disabled {
 
   .compact-panel {
     width: 100%;
+  }
+
+  .alerts-row-panel {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .alerts-actions {
+    justify-content: center;
+    flex-wrap: wrap;
   }
 }
 
