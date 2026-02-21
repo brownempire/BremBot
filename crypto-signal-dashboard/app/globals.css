@@ -230,6 +230,11 @@ button:disabled {
   padding: 0 14px !important;
 }
 
+.wallet-change {
+  min-width: 148px;
+  justify-content: center !important;
+}
+
 .wallet-holdings {
   margin-top: 12px;
   display: grid;

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
@@ -56,6 +56,7 @@ function DashboardPage() {
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
+  const [subscription, setSubscription] = useState<PushSubscriptionJSON | null>(null);
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
@@ -135,9 +136,23 @@ function DashboardPage() {
   }, [lastSignalAt, params, priceHistory, pushEnabled]);
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").then(() => setPushReady(true));
-    }
+    if (!("serviceWorker" in navigator)) return;
+
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then(async () => {
+        setPushReady(true);
+        const registration = await navigator.serviceWorker.ready;
+        const existing = await registration.pushManager.getSubscription();
+        if (existing) {
+          setSubscription(existing.toJSON());
+          setPushEnabled(true);
+          setPushStatus("Push already enabled");
+        }
+      })
+      .catch(() => {
+        setPushStatus("Service worker registration failed");
+      });
   }, []);
 
   async function refreshWalletPortfolio() {
@@ -217,30 +232,64 @@ function DashboardPage() {
       return;
     }
 
-    const registration = await navigator.serviceWorker.ready;
-    const subscription = await registration.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(publicKey),
-    });
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const existing = await registration.pushManager.getSubscription();
+      const activeSubscription =
+        existing ??
+        (await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
+        }));
 
-    await fetch("/api/push/subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(subscription),
-    });
+      const subscriptionJson = activeSubscription.toJSON();
+      const response = await fetch("/api/push/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(subscriptionJson),
+      });
 
-    setPushStatus("Push enabled");
-    setPushEnabled(true);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setPushStatus(payload?.error ?? "Push subscribe failed");
+        return;
+      }
+
+      setSubscription(subscriptionJson);
+      setPushStatus("Push enabled");
+      setPushEnabled(true);
+    } catch {
+      setPushStatus("Push subscribe failed");
+    }
   }
 
   async function sendTestPush() {
+    if (!subscription) {
+      setPushStatus("Enable push first");
+      return;
+    }
+
     setPushStatus("Sending test...");
-    const response = await fetch("/api/push/test", { method: "POST" });
+    const response = await fetch("/api/push/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subscription }),
+    });
+    const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      setPushStatus("Push test failed");
+      setPushStatus(payload?.error ?? "Push test failed");
       return;
     }
     setPushStatus("Test push sent");
+  }
+
+  async function disconnectWallet() {
+    try {
+      await wallet.disconnect();
+      setPortfolioStatus("Wallet disconnected");
+    } catch {
+      setPortfolioStatus("Wallet disconnect failed");
+    }
   }
 
   return (
@@ -278,12 +327,15 @@ function DashboardPage() {
         <div className="panel">
           <h3>Wallet Connect</h3>
           <div className="wallet-controls">
-            <WalletMultiButton />
+            <WalletMultiButton key={wallet.publicKey?.toBase58() ?? "wallet-multi-button"} />
+            <WalletModalButton className="wallet-adapter-button wallet-change">
+              Select Wallet
+            </WalletModalButton>
             <button className="secondary" onClick={refreshWalletPortfolio}>
               Refresh Wallet
             </button>
             {wallet.connected ? (
-              <button onClick={() => wallet.disconnect()}>Disconnect</button>
+              <button onClick={disconnectWallet}>Disconnect</button>
             ) : null}
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
