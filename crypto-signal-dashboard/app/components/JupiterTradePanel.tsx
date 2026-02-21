@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { init, syncProps } from "@jup-ag/plugin";
+import { close, init, syncProps } from "@jup-ag/plugin";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import "@jup-ag/plugin/css";
-
-const TARGET_ID = "jupiter-plugin-container";
 
 export function JupiterTradePanel() {
   const wallet = useWallet();
@@ -16,8 +14,14 @@ export function JupiterTradePanel() {
     if (initialized.current) return;
 
     init({
-      displayMode: "integrated",
-      integratedTargetId: TARGET_ID,
+      displayMode: "widget",
+      widgetStyle: {
+        position: "bottom-right",
+        offset: {
+          x: 50,
+          y: 100,
+        },
+      },
       enableWalletPassthrough: true,
       passthroughWalletContextState: wallet,
       onRequestConnectWallet: async () => {
@@ -32,6 +36,11 @@ export function JupiterTradePanel() {
     }).catch(() => undefined);
 
     initialized.current = true;
+
+    return () => {
+      close();
+      initialized.current = false;
+    };
   }, [wallet]);
 
   useEffect(() => {
@@ -42,5 +51,5 @@ export function JupiterTradePanel() {
     });
   }, [wallet]);
 
-  return <div id={TARGET_ID} className="jupiter-plugin" />;
+  return null;
 }

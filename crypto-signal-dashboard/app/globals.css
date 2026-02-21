@@ -235,6 +235,33 @@ button:disabled {
   justify-content: center !important;
 }
 
+.top-alerts {
+  display: flex;
+  justify-content: center;
+}
+
+.compact-panel {
+  width: min(560px, 100%);
+  padding: 14px;
+}
+
+.chart-panel {
+  padding: 14px;
+}
+
+.tradingview-wrap {
+  height: 520px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 25, 0.7);
+}
+
+.tradingview-container {
+  width: 100%;
+  height: 100%;
+}
+
 .wallet-holdings {
   margin-top: 12px;
   display: grid;

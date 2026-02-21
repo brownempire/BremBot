@@ -7,6 +7,7 @@ import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-rea
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
+import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed, type PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { getMockNews } from "@/lib/news/mock";
@@ -53,6 +54,7 @@ function DashboardPage() {
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
+
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -294,6 +296,8 @@ function DashboardPage() {
 
   return (
     <main>
+      <JupiterTradePanel />
+
       <header>
         <div className="header-row">
           <div>
@@ -305,7 +309,7 @@ function DashboardPage() {
           <div className="badges">
             <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "live" : "simulated"}</div>
             <div className="badge">Chainlink: {HAS_CHAINLINK ? "ready" : "standby"}</div>
-            <div className="badge">Jupiter: integrated</div>
+            <div className="badge">Jupiter: widget</div>
           </div>
         </div>
 
@@ -323,6 +327,27 @@ function DashboardPage() {
         </div>
       </header>
 
+      <section className="top-alerts" style={{ marginBottom: 18 }}>
+        <div className="panel compact-panel">
+          <h3>Alerts & Push</h3>
+          <div className="subtext" style={{ marginBottom: 10 }}>{pushStatus}</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
+            <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel chart-panel" style={{ marginBottom: 22 }}>
+        <h3>TradingView Chart</h3>
+        <div className="subtext" style={{ marginBottom: 10 }}>
+          Live market chart aligned with signal scanning.
+        </div>
+        <div className="tradingview-wrap">
+          <TradingViewChart symbol="BINANCE:BTCUSDT" />
+        </div>
+      </section>
+
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
           <h3>Wallet Connect</h3>
@@ -331,15 +356,13 @@ function DashboardPage() {
             <WalletModalButton className="wallet-adapter-button wallet-change">
               Select Wallet
             </WalletModalButton>
-            <button className="secondary" onClick={refreshWalletPortfolio}>
-              Refresh Wallet
-            </button>
-            {wallet.connected ? (
-              <button onClick={disconnectWallet}>Disconnect</button>
-            ) : null}
+            <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
+            {wallet.connected ? <button onClick={disconnectWallet}>Disconnect</button> : null}
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
-            {wallet.publicKey ? `Address: ${shortAddress(wallet.publicKey.toBase58())}` : "Connect Phantom or Solflare to trade."}
+            {wallet.publicKey
+              ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
+              : "Connect Phantom or Solflare to trade."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
@@ -425,30 +448,6 @@ function DashboardPage() {
               />
             </label>
           </div>
-        </div>
-      </section>
-
-      <section className="grid" style={{ marginBottom: 22 }}>
-        <div className="panel">
-          <h3>Trade via Jupiter Plugin</h3>
-          <div className="subtext" style={{ marginBottom: 10 }}>
-            Connected wallets can execute swaps directly. Trades route through Jupiter liquidity.
-          </div>
-          <JupiterTradePanel />
-        </div>
-
-        <div className="panel">
-          <h3>Alerts & Push</h3>
-          <div className="subtext" style={{ marginBottom: 12 }}>{pushStatus}</div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <button onClick={enablePush} disabled={!pushReady}>
-              Enable Push
-            </button>
-            <button className="secondary" onClick={sendTestPush}>
-              Send Test Push
-            </button>
-          </div>
-          <div className="footer">In-app alerts fire automatically when thresholds are met.</div>
         </div>
       </section>
 
