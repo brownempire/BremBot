@@ -11,19 +11,7 @@ npm install
 2. Create `.env.local`
 
 ```
-# Chaos Edge (primary feed)
-NEXT_PUBLIC_CHAOS_EDGE_URL=
-NEXT_PUBLIC_CHAOS_EDGE_TOKEN=
-
-# Chainlink (backup oracle RPCs)
-NEXT_PUBLIC_ETHEREUM_RPC_URL=
-NEXT_PUBLIC_SOLANA_RPC_URL=
-
-# Push notifications (VAPID)
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=
-VAPID_PUBLIC_KEY=
-VAPID_PRIVATE_KEY=
-VAPID_SUBJECT=mailto:you@example.com
+cp .env.local.example .env.local
 ```
 
 3. Run the app
@@ -41,6 +29,12 @@ npm run dev
 ```
 npx web-push generate-vapid-keys
 ```
+
+Paste generated values into `.env.local`:
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_SUBJECT`
 
 ## Roadmap
 - Integrate Chaos Edge REST/WebSocket feed
