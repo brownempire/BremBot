@@ -6,7 +6,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
+import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -29,6 +29,10 @@ const DEFAULT_PARAMS: UserParams = {
 type WalletTokenHolding = {
   mint: string;
   amount: number;
+};
+
+type StoredTradeRecord = JupiterTradeRecord & {
+  id: string;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -57,11 +61,15 @@ function formatFeedSource(status: string) {
 
 function toTradingViewSymbol(pair: typeof SYMBOLS[number]) {
   const map: Record<typeof SYMBOLS[number], string> = {
-    "SOL/USD": "BINANCE:SOLUSDT",
-    "ETH/USD": "BINANCE:ETHUSDT",
-    "BTC/USD": "BINANCE:BTCUSDT",
+    "SOL/USD": "COINBASE:SOLUSD",
+    "ETH/USD": "COINBASE:ETHUSD",
+    "BTC/USD": "COINBASE:BTCUSD",
   };
   return map[pair];
+}
+
+function tradesStorageKey(walletAddress: string) {
+  return `brembot.recent-trades.${walletAddress}`;
 }
 
 function DashboardPage() {
@@ -84,6 +92,7 @@ function DashboardPage() {
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
+  const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +264,26 @@ function DashboardPage() {
     }
   }, []);
 
+  useEffect(() => {
+    const walletAddress = wallet.publicKey?.toBase58();
+    if (!walletAddress) {
+      setRecentTrades([]);
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(tradesStorageKey(walletAddress));
+      if (!raw) {
+        setRecentTrades([]);
+        return;
+      }
+      const parsed = JSON.parse(raw) as StoredTradeRecord[];
+      setRecentTrades(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setRecentTrades([]);
+    }
+  }, [wallet.publicKey?.toBase58()]);
+
   async function refreshWalletPortfolio() {
     if (!wallet.connected || !wallet.publicKey) {
       setSolBalance(null);
@@ -411,9 +440,30 @@ function DashboardPage() {
     setParamsSaveStatus("Reset to defaults");
   }
 
+  function handleTradeSuccess(trade: JupiterTradeRecord) {
+    const walletAddress = trade.walletAddress ?? wallet.publicKey?.toBase58();
+    if (!walletAddress) return;
+
+    const entry: StoredTradeRecord = {
+      ...trade,
+      walletAddress,
+      id: `${trade.txid}-${trade.timestamp}`,
+    };
+
+    setRecentTrades((prev) => {
+      const next = [entry, ...prev.filter((item) => item.txid !== entry.txid)].slice(0, 20);
+      try {
+        window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }
+
   return (
     <main>
-      <JupiterTradePanel />
+      <JupiterTradePanel onTradeSuccess={handleTradeSuccess} />
 
       <header>
         <div className="header-row">
@@ -592,6 +642,34 @@ function DashboardPage() {
                 <div className="signal-meta">{signal.summary}</div>
               </div>
               <div>{Math.round(signal.confidence * 100)}%</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="panel">
+          <h3>Recent Trades</h3>
+          {!wallet.publicKey && (
+            <div className="subtext">Connect a wallet to view trade history linked to that address.</div>
+          )}
+          {wallet.publicKey && recentTrades.length === 0 && (
+            <div className="subtext">No recent trades recorded for this wallet yet.</div>
+          )}
+          {wallet.publicKey && recentTrades.map((trade) => (
+            <div key={trade.id} className="news-item">
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <span>Swap via Jupiter</span>
+                <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
+              </div>
+              <div className="news-meta">
+                <span>{shortAddress(trade.txid)}</span>
+                <a
+                  href={`https://solscan.io/tx/${trade.txid}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  View Tx
+                </a>
+              </div>
             </div>
           ))}
         </div>

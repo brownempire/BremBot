@@ -3,17 +3,12 @@ import { Contract, JsonRpcProvider } from "ethers";
 type AppSymbol = "SOL/USD" | "ETH/USD" | "BTC/USD";
 
 type PricePayload = {
-  source: "chaos_edge" | "chainlink" | "binance" | "coinbase";
+  source: "chaos_edge" | "chainlink" | "coinbase";
   prices: Record<AppSymbol, number>;
   timestamp: number;
 };
 
 const SYMBOLS: AppSymbol[] = ["SOL/USD", "ETH/USD", "BTC/USD"];
-const BINANCE_SYMBOLS: Record<AppSymbol, string> = {
-  "SOL/USD": "SOLUSDT",
-  "ETH/USD": "ETHUSDT",
-  "BTC/USD": "BTCUSDT",
-};
 
 const CHAINLINK_ETH_MAINNET_FEEDS: Record<AppSymbol, string> = {
   "SOL/USD": "0x4ffC43a60e009B551865A93d232E33Fce9f01507",
@@ -111,35 +106,6 @@ async function fetchChainlinkPrices(): Promise<PricePayload | null> {
   };
 }
 
-async function fetchBinancePrices(): Promise<PricePayload | null> {
-  const symbolsJson = JSON.stringify(SYMBOLS.map((symbol) => BINANCE_SYMBOLS[symbol]));
-  const response = await fetch(
-    `https://api.binance.com/api/v3/ticker/price?symbols=${encodeURIComponent(symbolsJson)}`,
-    { cache: "no-store" }
-  );
-
-  if (!response.ok) return null;
-  const rows = (await response.json()) as Array<{ symbol: string; price: string }>;
-  const prices: Partial<Record<AppSymbol, number>> = {};
-
-  for (const row of rows) {
-    const symbol = SYMBOLS.find((candidate) => BINANCE_SYMBOLS[candidate] === row.symbol);
-    if (!symbol) continue;
-    const value = Number(row.price);
-    if (Number.isFinite(value) && value > 0) {
-      prices[symbol] = value;
-    }
-  }
-
-  if (!SYMBOLS.every((symbol) => typeof prices[symbol] === "number")) return null;
-
-  return {
-    source: "binance",
-    prices: prices as Record<AppSymbol, number>,
-    timestamp: Date.now(),
-  };
-}
-
 async function fetchCoinbasePrices(): Promise<PricePayload | null> {
   const coinbaseProducts: Record<AppSymbol, string> = {
     "SOL/USD": "SOL-USD",
@@ -183,16 +149,9 @@ export async function GET() {
     });
   }
 
-  const tertiary = await fetchBinancePrices().catch(() => null);
+  const tertiary = await fetchCoinbasePrices().catch(() => null);
   if (tertiary) {
     return new Response(JSON.stringify(tertiary), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const quaternary = await fetchCoinbasePrices().catch(() => null);
-  if (quaternary) {
-    return new Response(JSON.stringify(quaternary), {
       headers: { "Content-Type": "application/json" },
     });
   }

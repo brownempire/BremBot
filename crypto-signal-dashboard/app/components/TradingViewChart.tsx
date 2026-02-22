@@ -43,7 +43,7 @@ function loadTradingViewScript() {
   return scriptLoadingPromise;
 }
 
-export function TradingViewChart({ symbol = "BINANCE:BTCUSDT" }: TradingViewChartProps) {
+export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_main_chart", []);
 
   useEffect(() => {
