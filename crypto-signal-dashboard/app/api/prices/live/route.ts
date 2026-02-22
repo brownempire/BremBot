@@ -97,15 +97,8 @@ async function fetchCoinbasePrices(): Promise<PricePayload | null> {
 }
 
 export async function GET() {
-  // Keep box prices aligned with the visible TradingView COINBASE chart.
-  // If Chaos Edge is configured but drifts from the chart source, Coinbase remains the fallback/consistency source.
-  const chaos = await fetchChaosEdgePrices().catch(() => null);
-  if (chaos) {
-    return new Response(JSON.stringify(chaos), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
+  // Signal generation is calibrated against the visible TradingView COINBASE chart.
+  // Use Coinbase directly here so chart + price boxes + signal engine share the same market source.
   const coinbase = await fetchCoinbasePrices().catch(() => null);
   if (coinbase) {
     return new Response(JSON.stringify(coinbase), {
@@ -114,7 +107,7 @@ export async function GET() {
   }
 
   return new Response(
-    JSON.stringify({ error: "No price source available (Chaos Edge and Coinbase unavailable)" }),
+    JSON.stringify({ error: "Coinbase price source unavailable" }),
     {
       status: 503,
       headers: { "Content-Type": "application/json" },
