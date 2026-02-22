@@ -52,8 +52,6 @@ function formatFeedSource(status: string) {
     offline: "offline",
     simulated: "Simulated",
     chaos_edge: "Chaos Edge",
-    chainlink: "Chainlink",
-    binance: "Binance",
     coinbase: "Coinbase",
   };
   return map[status] ?? status;

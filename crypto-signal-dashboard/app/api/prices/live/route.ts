@@ -1,25 +1,12 @@
-import { Contract, JsonRpcProvider } from "ethers";
-
 type AppSymbol = "SOL/USD" | "ETH/USD" | "BTC/USD";
 
 type PricePayload = {
-  source: "chaos_edge" | "chainlink" | "coinbase";
+  source: "chaos_edge" | "coinbase";
   prices: Record<AppSymbol, number>;
   timestamp: number;
 };
 
 const SYMBOLS: AppSymbol[] = ["SOL/USD", "ETH/USD", "BTC/USD"];
-
-const CHAINLINK_ETH_MAINNET_FEEDS: Record<AppSymbol, string> = {
-  "SOL/USD": "0x4ffC43a60e009B551865A93d232E33Fce9f01507",
-  "ETH/USD": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
-  "BTC/USD": "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c",
-};
-
-const AGGREGATOR_ABI = [
-  "function latestRoundData() view returns (uint80,int256,uint256,uint256,uint80)",
-  "function decimals() view returns (uint8)",
-];
 
 const CHAOS_BASE_URL = process.env.CHAOS_EDGE_BASE_URL ?? "https://api.edge-inference.chaoslabs.xyz";
 const CHAOS_API_KEY = process.env.CHAOS_EDGE_API_KEY;
@@ -77,35 +64,6 @@ async function fetchChaosEdgePrices(): Promise<PricePayload | null> {
   };
 }
 
-async function fetchChainlinkPrices(): Promise<PricePayload | null> {
-  const rpcUrl = process.env.ETHEREUM_RPC_URL ?? process.env.NEXT_PUBLIC_ETHEREUM_RPC_URL;
-  if (!rpcUrl) return null;
-
-  const provider = new JsonRpcProvider(rpcUrl);
-  const prices: Partial<Record<AppSymbol, number>> = {};
-
-  for (const symbol of SYMBOLS) {
-    const address = CHAINLINK_ETH_MAINNET_FEEDS[symbol];
-    const contract = new Contract(address, AGGREGATOR_ABI, provider);
-    const [roundData, decimals] = await Promise.all([
-      contract.latestRoundData(),
-      contract.decimals(),
-    ]);
-
-    const answer = Number(roundData[1]);
-    const scale = 10 ** Number(decimals);
-    const value = answer / scale;
-    if (!Number.isFinite(value) || value <= 0) return null;
-    prices[symbol] = value;
-  }
-
-  return {
-    source: "chainlink",
-    prices: prices as Record<AppSymbol, number>,
-    timestamp: Date.now(),
-  };
-}
-
 async function fetchCoinbasePrices(): Promise<PricePayload | null> {
   const coinbaseProducts: Record<AppSymbol, string> = {
     "SOL/USD": "SOL-USD",
@@ -139,7 +97,15 @@ async function fetchCoinbasePrices(): Promise<PricePayload | null> {
 }
 
 export async function GET() {
-  // Align box prices with the visible TradingView COINBASE chart by using Coinbase Exchange only.
+  // Keep box prices aligned with the visible TradingView COINBASE chart.
+  // If Chaos Edge is configured but drifts from the chart source, Coinbase remains the fallback/consistency source.
+  const chaos = await fetchChaosEdgePrices().catch(() => null);
+  if (chaos) {
+    return new Response(JSON.stringify(chaos), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const coinbase = await fetchCoinbasePrices().catch(() => null);
   if (coinbase) {
     return new Response(JSON.stringify(coinbase), {
@@ -147,8 +113,11 @@ export async function GET() {
     });
   }
 
-  return new Response(JSON.stringify({ error: "Coinbase price source unavailable" }), {
-    status: 503,
-    headers: { "Content-Type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({ error: "No price source available (Chaos Edge and Coinbase unavailable)" }),
+    {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 }
