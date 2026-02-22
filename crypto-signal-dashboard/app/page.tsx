@@ -35,6 +35,18 @@ type WalletTokenHolding = {
   amount: number;
 };
 
+const BINANCE_SYMBOL_MAP: Record<typeof SYMBOLS[number], string> = {
+  "SOL/USD": "solusdt",
+  "ETH/USD": "ethusdt",
+  "BTC/USD": "btcusdt",
+};
+
+const BINANCE_TO_APP_SYMBOL: Record<string, typeof SYMBOLS[number]> = {
+  SOLUSDT: "SOL/USD",
+  ETHUSDT: "ETH/USD",
+  BTCUSDT: "BTC/USD",
+};
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -64,6 +76,7 @@ function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartPair, setSelectedChartPair] = useState<typeof SYMBOLS[number]>("SOL/USD");
+  const [priceFeedStatus, setPriceFeedStatus] = useState("live");
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
@@ -75,21 +88,86 @@ function DashboardPage() {
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
 
   useEffect(() => {
-    const feed = createSimulatedFeed([...SYMBOLS]);
-    const interval = setInterval(() => {
-      const updates = feed();
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let simulateInterval: ReturnType<typeof setInterval> | null = null;
+    let closedByApp = false;
+
+    const applyUpdate = (symbol: typeof SYMBOLS[number], price: number, time: number) => {
       setPriceHistory((prev) => {
         const next = { ...prev };
-        updates.forEach((update) => {
-          const existing = next[update.symbol] ?? [];
-          const merged = [...existing, ...update.points];
-          next[update.symbol] = merged.slice(-5400);
-        });
+        const existing = next[symbol] ?? [];
+        next[symbol] = [...existing, { t: time, v: price }].slice(-5400);
         return next;
       });
-    }, 1000);
+    };
 
-    return () => clearInterval(interval);
+    const startSimulationFallback = () => {
+      if (simulateInterval) return;
+      setPriceFeedStatus("fallback");
+      const simulated = createSimulatedFeed([...SYMBOLS]);
+      simulateInterval = setInterval(() => {
+        const updates = simulated();
+        updates.forEach((update) => {
+          const point = update.points[0];
+          if (point) applyUpdate(update.symbol as typeof SYMBOLS[number], point.v, point.t);
+        });
+      }, 1000);
+    };
+
+    const stopSimulationFallback = () => {
+      if (!simulateInterval) return;
+      clearInterval(simulateInterval);
+      simulateInterval = null;
+    };
+
+    const connect = () => {
+      const streams = SYMBOLS.map((symbol) => `${BINANCE_SYMBOL_MAP[symbol]}@miniTicker`).join("/");
+      socket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+
+      socket.onopen = () => {
+        stopSimulationFallback();
+        setPriceFeedStatus("live");
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as {
+            data?: { s?: string; c?: string; E?: number };
+          };
+          const data = payload.data;
+          if (!data?.s || !data?.c) return;
+          const symbol = BINANCE_TO_APP_SYMBOL[data.s];
+          if (!symbol) return;
+          const price = Number(data.c);
+          if (!Number.isFinite(price)) return;
+          applyUpdate(symbol, price, data.E ?? Date.now());
+        } catch {
+          // Ignore malformed frames.
+        }
+      };
+
+      socket.onerror = () => {
+        startSimulationFallback();
+      };
+
+      socket.onclose = () => {
+        if (closedByApp) return;
+        startSimulationFallback();
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      closedByApp = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (simulateInterval) clearInterval(simulateInterval);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -329,7 +407,10 @@ function DashboardPage() {
             </div>
           </div>
           <div className="badges">
-            <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "live" : "simulated"}</div>
+            <div className="badge">
+              Price Feed: {priceFeedStatus === "live" ? "Binance WS live" : "fallback mode"}
+            </div>
+            <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "configured" : "not configured"}</div>
             <div className="badge">Chainlink: {HAS_CHAINLINK ? "ready" : "standby"}</div>
             <div className="badge">Jupiter: widget</div>
           </div>
