@@ -8,19 +8,13 @@ import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-rea
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
-import { createSimulatedFeed, type PricePoint } from "@/lib/price/simulated";
+import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { getMockNews } from "@/lib/news/mock";
 import { formatUsd, percentChange } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const SYMBOLS = ["SOL/USD", "ETH/USD", "BTC/USD"] as const;
-const HAS_CHAOS_EDGE = Boolean(
-  process.env.NEXT_PUBLIC_CHAOS_EDGE_URL && process.env.NEXT_PUBLIC_CHAOS_EDGE_TOKEN
-);
-const HAS_CHAINLINK = Boolean(
-  process.env.NEXT_PUBLIC_ETHEREUM_RPC_URL || process.env.NEXT_PUBLIC_SOLANA_RPC_URL
-);
 
 const DEFAULT_PARAMS: UserParams = {
   trendWindow: 30,
@@ -35,18 +29,6 @@ type WalletTokenHolding = {
   amount: number;
 };
 
-const BINANCE_SYMBOL_MAP: Record<typeof SYMBOLS[number], string> = {
-  "SOL/USD": "solusdt",
-  "ETH/USD": "ethusdt",
-  "BTC/USD": "btcusdt",
-};
-
-const BINANCE_TO_APP_SYMBOL: Record<string, typeof SYMBOLS[number]> = {
-  SOLUSDT: "SOL/USD",
-  ETHUSDT: "ETH/USD",
-  BTCUSDT: "BTC/USD",
-};
-
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -56,6 +38,17 @@ function urlBase64ToUint8Array(base64String: string) {
 
 function shortAddress(address: string) {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
+}
+
+function formatFeedSource(status: string) {
+  const map: Record<string, string> = {
+    loading: "loading",
+    offline: "offline",
+    chaos_edge: "Chaos Edge",
+    chainlink: "Chainlink",
+    binance: "Binance",
+  };
+  return map[status] ?? status;
 }
 
 function toTradingViewSymbol(pair: typeof SYMBOLS[number]) {
@@ -76,7 +69,7 @@ function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartPair, setSelectedChartPair] = useState<typeof SYMBOLS[number]>("SOL/USD");
-  const [priceFeedStatus, setPriceFeedStatus] = useState("live");
+  const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
@@ -88,85 +81,46 @@ function DashboardPage() {
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
 
   useEffect(() => {
-    let socket: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let simulateInterval: ReturnType<typeof setInterval> | null = null;
-    let closedByApp = false;
+    let cancelled = false;
 
-    const applyUpdate = (symbol: typeof SYMBOLS[number], price: number, time: number) => {
-      setPriceHistory((prev) => {
-        const next = { ...prev };
-        const existing = next[symbol] ?? [];
-        next[symbol] = [...existing, { t: time, v: price }].slice(-5400);
-        return next;
-      });
-    };
-
-    const startSimulationFallback = () => {
-      if (simulateInterval) return;
-      setPriceFeedStatus("fallback");
-      const simulated = createSimulatedFeed([...SYMBOLS]);
-      simulateInterval = setInterval(() => {
-        const updates = simulated();
-        updates.forEach((update) => {
-          const point = update.points[0];
-          if (point) applyUpdate(update.symbol as typeof SYMBOLS[number], point.v, point.t);
-        });
-      }, 1000);
-    };
-
-    const stopSimulationFallback = () => {
-      if (!simulateInterval) return;
-      clearInterval(simulateInterval);
-      simulateInterval = null;
-    };
-
-    const connect = () => {
-      const streams = SYMBOLS.map((symbol) => `${BINANCE_SYMBOL_MAP[symbol]}@miniTicker`).join("/");
-      socket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
-
-      socket.onopen = () => {
-        stopSimulationFallback();
-        setPriceFeedStatus("live");
-      };
-
-      socket.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as {
-            data?: { s?: string; c?: string; E?: number };
-          };
-          const data = payload.data;
-          if (!data?.s || !data?.c) return;
-          const symbol = BINANCE_TO_APP_SYMBOL[data.s];
-          if (!symbol) return;
-          const price = Number(data.c);
-          if (!Number.isFinite(price)) return;
-          applyUpdate(symbol, price, data.E ?? Date.now());
-        } catch {
-          // Ignore malformed frames.
+    const pollLivePrices = async () => {
+      try {
+        const response = await fetch("/api/prices/live", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || !payload?.prices) {
+          setPriceFeedStatus("offline");
+          return;
         }
-      };
 
-      socket.onerror = () => {
-        startSimulationFallback();
-      };
+        const now = Number(payload.timestamp) || Date.now();
+        const source = String(payload.source ?? "unknown");
+        const prices = payload.prices as Partial<Record<typeof SYMBOLS[number], number>>;
 
-      socket.onclose = () => {
-        if (closedByApp) return;
-        startSimulationFallback();
-        reconnectTimer = setTimeout(connect, 3000);
-      };
+        if (cancelled) return;
+        setPriceFeedStatus(source);
+        setPriceHistory((prev) => {
+          const next = { ...prev };
+          SYMBOLS.forEach((symbol) => {
+            const price = Number(prices[symbol]);
+            if (!Number.isFinite(price) || price <= 0) return;
+            const existing = next[symbol] ?? [];
+            next[symbol] = [...existing, { t: now, v: price }].slice(-5400);
+          });
+          return next;
+        });
+      } catch {
+        if (!cancelled) setPriceFeedStatus("offline");
+      }
     };
 
-    connect();
+    pollLivePrices().catch(() => undefined);
+    const interval = setInterval(() => {
+      pollLivePrices().catch(() => undefined);
+    }, 1000);
 
     return () => {
-      closedByApp = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (simulateInterval) clearInterval(simulateInterval);
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
-      }
+      cancelled = true;
+      clearInterval(interval);
     };
   }, []);
 
@@ -407,11 +361,7 @@ function DashboardPage() {
             </div>
           </div>
           <div className="badges">
-            <div className="badge">
-              Price Feed: {priceFeedStatus === "live" ? "Binance WS live" : "fallback mode"}
-            </div>
-            <div className="badge">Chaos Edge: {HAS_CHAOS_EDGE ? "configured" : "not configured"}</div>
-            <div className="badge">Chainlink: {HAS_CHAINLINK ? "ready" : "standby"}</div>
+            <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
             <div className="badge">Jupiter: widget</div>
           </div>
         </div>

@@ -21,9 +21,8 @@ npm run dev
 ```
 
 ## Notes
-- Without live keys, the dashboard runs on a simulated price feed and mock news stream.
+- Live price priority is: `Chaos Edge -> Chainlink -> Binance`.
 - Push notifications require VAPID keys and a secure origin (localhost is OK).
-- Chainlink backup feed integration is stubbed and ready for RPC/aggregator wiring.
 - Wallet connect and trading are powered by Solana Wallet Adapter + Jupiter Plugin.
 
 ### Generate VAPID keys
@@ -39,6 +38,10 @@ Paste generated values into `.env.local`:
 
 For local Jupiter plugin rendering, keep:
 - `NEXT_PUBLIC_IS_PLUGIN_DEV=true`
+
+For live feed setup:
+- set `CHAOS_EDGE_API_KEY` and three `CHAOS_EDGE_FEED_*` ids
+- set `ETHEREUM_RPC_URL` for Chainlink fallback
 
 ## Roadmap
 - Integrate Chaos Edge REST/WebSocket feed
