@@ -3,7 +3,7 @@ import { Contract, JsonRpcProvider } from "ethers";
 type AppSymbol = "SOL/USD" | "ETH/USD" | "BTC/USD";
 
 type PricePayload = {
-  source: "chaos_edge" | "chainlink" | "binance";
+  source: "chaos_edge" | "chainlink" | "binance" | "coinbase";
   prices: Record<AppSymbol, number>;
   timestamp: number;
 };
@@ -140,6 +140,34 @@ async function fetchBinancePrices(): Promise<PricePayload | null> {
   };
 }
 
+async function fetchCoinbasePrices(): Promise<PricePayload | null> {
+  const coinbaseProducts: Record<AppSymbol, string> = {
+    "SOL/USD": "SOL-USD",
+    "ETH/USD": "ETH-USD",
+    "BTC/USD": "BTC-USD",
+  };
+
+  const prices: Partial<Record<AppSymbol, number>> = {};
+
+  for (const symbol of SYMBOLS) {
+    const product = coinbaseProducts[symbol];
+    const response = await fetch(`https://api.coinbase.com/v2/prices/${product}/spot`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const raw = await response.json();
+    const amount = Number(raw?.data?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+    prices[symbol] = amount;
+  }
+
+  return {
+    source: "coinbase",
+    prices: prices as Record<AppSymbol, number>,
+    timestamp: Date.now(),
+  };
+}
+
 export async function GET() {
   const primary = await fetchChaosEdgePrices().catch(() => null);
   if (primary) {
@@ -158,6 +186,13 @@ export async function GET() {
   const tertiary = await fetchBinancePrices().catch(() => null);
   if (tertiary) {
     return new Response(JSON.stringify(tertiary), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const quaternary = await fetchCoinbasePrices().catch(() => null);
+  if (quaternary) {
+    return new Response(JSON.stringify(quaternary), {
       headers: { "Content-Type": "application/json" },
     });
   }

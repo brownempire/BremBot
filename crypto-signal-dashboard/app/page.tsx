@@ -8,6 +8,7 @@ import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-rea
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel } from "@/app/components/JupiterTradePanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
+import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { getMockNews } from "@/lib/news/mock";
@@ -15,6 +16,7 @@ import { formatUsd, percentChange } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const SYMBOLS = ["SOL/USD", "ETH/USD", "BTC/USD"] as const;
+const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 
 const DEFAULT_PARAMS: UserParams = {
   trendWindow: 30,
@@ -44,9 +46,11 @@ function formatFeedSource(status: string) {
   const map: Record<string, string> = {
     loading: "loading",
     offline: "offline",
+    simulated: "Simulated",
     chaos_edge: "Chaos Edge",
     chainlink: "Chainlink",
     binance: "Binance",
+    coinbase: "Coinbase",
   };
   return map[status] ?? status;
 }
@@ -66,6 +70,7 @@ function DashboardPage() {
 
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
+  const [paramsSaveStatus, setParamsSaveStatus] = useState("Using defaults");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartPair, setSelectedChartPair] = useState<typeof SYMBOLS[number]>("SOL/USD");
@@ -82,13 +87,51 @@ function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let simulateInterval: ReturnType<typeof setInterval> | null = null;
+    const simulatedFeed = createSimulatedFeed([...SYMBOLS]);
+
+    const appendPrices = (
+      prices: Partial<Record<typeof SYMBOLS[number], number>>,
+      now: number
+    ) => {
+      setPriceHistory((prev) => {
+        const next = { ...prev };
+        SYMBOLS.forEach((symbol) => {
+          const price = Number(prices[symbol]);
+          if (!Number.isFinite(price) || price <= 0) return;
+          const existing = next[symbol] ?? [];
+          next[symbol] = [...existing, { t: now, v: price }].slice(-5400);
+        });
+        return next;
+      });
+    };
+
+    const startSimulationFallback = () => {
+      if (simulateInterval) return;
+      setPriceFeedStatus("simulated");
+      simulateInterval = setInterval(() => {
+        const updates = simulatedFeed();
+        const prices: Partial<Record<typeof SYMBOLS[number], number>> = {};
+        updates.forEach((update) => {
+          const point = update.points[0];
+          if (point) prices[update.symbol as typeof SYMBOLS[number]] = point.v;
+        });
+        appendPrices(prices, Date.now());
+      }, 1000);
+    };
+
+    const stopSimulationFallback = () => {
+      if (!simulateInterval) return;
+      clearInterval(simulateInterval);
+      simulateInterval = null;
+    };
 
     const pollLivePrices = async () => {
       try {
         const response = await fetch("/api/prices/live", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok || !payload?.prices) {
-          setPriceFeedStatus("offline");
+          if (!cancelled) startSimulationFallback();
           return;
         }
 
@@ -97,19 +140,11 @@ function DashboardPage() {
         const prices = payload.prices as Partial<Record<typeof SYMBOLS[number], number>>;
 
         if (cancelled) return;
+        stopSimulationFallback();
         setPriceFeedStatus(source);
-        setPriceHistory((prev) => {
-          const next = { ...prev };
-          SYMBOLS.forEach((symbol) => {
-            const price = Number(prices[symbol]);
-            if (!Number.isFinite(price) || price <= 0) return;
-            const existing = next[symbol] ?? [];
-            next[symbol] = [...existing, { t: now, v: price }].slice(-5400);
-          });
-          return next;
-        });
+        appendPrices(prices, now);
       } catch {
-        if (!cancelled) setPriceFeedStatus("offline");
+        if (!cancelled) startSimulationFallback();
       }
     };
 
@@ -121,6 +156,7 @@ function DashboardPage() {
     return () => {
       cancelled = true;
       clearInterval(interval);
+      if (simulateInterval) clearInterval(simulateInterval);
     };
   }, []);
 
@@ -199,6 +235,24 @@ function DashboardPage() {
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PARAMS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<UserParams>;
+      setParams({
+        trendWindow: Number(parsed.trendWindow ?? DEFAULT_PARAMS.trendWindow),
+        trendThreshold: Number(parsed.trendThreshold ?? DEFAULT_PARAMS.trendThreshold),
+        breakoutPercent: Number(parsed.breakoutPercent ?? DEFAULT_PARAMS.breakoutPercent),
+        newsBias: Number(parsed.newsBias ?? DEFAULT_PARAMS.newsBias),
+        cooldownSeconds: Number(parsed.cooldownSeconds ?? DEFAULT_PARAMS.cooldownSeconds),
+      });
+      setParamsSaveStatus("Saved preset loaded");
+    } catch {
+      setParamsSaveStatus("Failed to load saved preset");
+    }
   }, []);
 
   async function refreshWalletPortfolio() {
@@ -338,6 +392,25 @@ function DashboardPage() {
     }
   }
 
+  function saveSignalParams() {
+    try {
+      window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
+      setParamsSaveStatus("Saved");
+    } catch {
+      setParamsSaveStatus("Save failed");
+    }
+  }
+
+  function resetSignalParams() {
+    setParams(DEFAULT_PARAMS);
+    try {
+      window.localStorage.removeItem(PARAMS_STORAGE_KEY);
+    } catch {
+      // ignore storage errors
+    }
+    setParamsSaveStatus("Reset to defaults");
+  }
+
   return (
     <main>
       <JupiterTradePanel />
@@ -428,6 +501,11 @@ function DashboardPage() {
 
         <div className="panel">
           <h3>Signal Parameters</h3>
+          <div className="controls params-toolbar">
+            <div className="subtext">{paramsSaveStatus}</div>
+            <button type="button" onClick={saveSignalParams}>Save</button>
+            <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
+          </div>
           <div className="controls">
             <label>
               Trend window (min)

@@ -154,6 +154,13 @@ header {
   margin-top: 8px;
 }
 
+.params-toolbar {
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
 input,
 select {
   width: 100%;
