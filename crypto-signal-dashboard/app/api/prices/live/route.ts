@@ -117,14 +117,18 @@ async function fetchCoinbasePrices(): Promise<PricePayload | null> {
 
   for (const symbol of SYMBOLS) {
     const product = coinbaseProducts[symbol];
-    const response = await fetch(`https://api.coinbase.com/v2/prices/${product}/spot`, {
+    // Use Coinbase Exchange ticker so the box prices align more closely with TradingView COINBASE:* symbols.
+    const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, {
       cache: "no-store",
+      headers: {
+        "Accept": "application/json",
+      },
     });
     if (!response.ok) return null;
     const raw = await response.json();
-    const amount = Number(raw?.data?.amount);
-    if (!Number.isFinite(amount) || amount <= 0) return null;
-    prices[symbol] = amount;
+    const price = Number(raw?.price);
+    if (!Number.isFinite(price) || price <= 0) return null;
+    prices[symbol] = price;
   }
 
   return {
@@ -135,28 +139,15 @@ async function fetchCoinbasePrices(): Promise<PricePayload | null> {
 }
 
 export async function GET() {
-  const primary = await fetchChaosEdgePrices().catch(() => null);
-  if (primary) {
-    return new Response(JSON.stringify(primary), {
+  // Align box prices with the visible TradingView COINBASE chart by using Coinbase Exchange only.
+  const coinbase = await fetchCoinbasePrices().catch(() => null);
+  if (coinbase) {
+    return new Response(JSON.stringify(coinbase), {
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  const backup = await fetchChainlinkPrices().catch(() => null);
-  if (backup) {
-    return new Response(JSON.stringify(backup), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  const tertiary = await fetchCoinbasePrices().catch(() => null);
-  if (tertiary) {
-    return new Response(JSON.stringify(tertiary), {
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-
-  return new Response(JSON.stringify({ error: "No live price source available" }), {
+  return new Response(JSON.stringify({ error: "Coinbase price source unavailable" }), {
     status: 503,
     headers: { "Content-Type": "application/json" },
   });
