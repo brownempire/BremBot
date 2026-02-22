@@ -292,17 +292,27 @@ function DashboardPage() {
       return;
     }
 
-    try {
-      setPortfolioStatus("Syncing wallet balances...");
+    setPortfolioStatus("Syncing wallet balances...");
 
-      const [lamports, tokenAccounts] = await Promise.all([
-        connection.getBalance(wallet.publicKey),
-        connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
-          programId: TOKEN_PROGRAM_ID,
-        }),
-      ]);
+    const [balanceResult, tokenAccountsResult] = await Promise.allSettled([
+      connection.getBalance(wallet.publicKey),
+      connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+        programId: TOKEN_PROGRAM_ID,
+      }),
+    ]);
 
-      const holdings = tokenAccounts.value
+    let solLoaded = false;
+    let tokensLoaded = false;
+
+    if (balanceResult.status === "fulfilled") {
+      setSolBalance(balanceResult.value / 1_000_000_000);
+      solLoaded = true;
+    } else {
+      setSolBalance(null);
+    }
+
+    if (tokenAccountsResult.status === "fulfilled") {
+      const holdings = tokenAccountsResult.value.value
         .map((accountInfo) => {
           const parsed = accountInfo.account.data.parsed.info;
           const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
@@ -314,13 +324,21 @@ function DashboardPage() {
         .filter((holding) => holding.amount > 0)
         .sort((a, b) => b.amount - a.amount)
         .slice(0, 6);
-
-      setSolBalance(lamports / 1_000_000_000);
       setWalletTokens(holdings);
-      setPortfolioStatus("Wallet synced");
-    } catch {
-      setPortfolioStatus("Failed to sync wallet balances");
+      tokensLoaded = true;
+    } else {
+      setWalletTokens([]);
     }
+
+    if (solLoaded && tokensLoaded) {
+      setPortfolioStatus("Wallet synced");
+      return;
+    }
+    if (solLoaded && !tokensLoaded) {
+      setPortfolioStatus("SOL balance synced (token accounts unavailable)");
+      return;
+    }
+    setPortfolioStatus("Failed to sync wallet balances");
   }
 
   useEffect(() => {
