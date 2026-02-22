@@ -1,81 +1,12 @@
-type AppSymbol = "SOL/USD" | "ETH/USD" | "BTC/USD";
-
 type PricePayload = {
-  source: "chaos_edge" | "coinbase";
-  prices: Record<AppSymbol, number>;
+  source: "coinbase";
+  markets: Record<string, { price: number; change24hPercent: number }>;
   timestamp: number;
 };
+async function fetchCoinbasePrices(products: string[]): Promise<PricePayload | null> {
+  const markets: Record<string, { price: number; change24hPercent: number }> = {};
 
-const SYMBOLS: AppSymbol[] = ["SOL/USD", "ETH/USD", "BTC/USD"];
-
-const CHAOS_BASE_URL = process.env.CHAOS_EDGE_BASE_URL ?? "https://api.edge-inference.chaoslabs.xyz";
-const CHAOS_API_KEY = process.env.CHAOS_EDGE_API_KEY;
-
-const CHAOS_FEEDS: Record<AppSymbol, string | undefined> = {
-  "SOL/USD": process.env.CHAOS_EDGE_FEED_SOL_USD,
-  "ETH/USD": process.env.CHAOS_EDGE_FEED_ETH_USD,
-  "BTC/USD": process.env.CHAOS_EDGE_FEED_BTC_USD,
-};
-
-async function fetchChaosEdgePrices(): Promise<PricePayload | null> {
-  const feedIds = SYMBOLS.map((symbol) => CHAOS_FEEDS[symbol]).filter(Boolean) as string[];
-  if (!CHAOS_API_KEY || feedIds.length !== SYMBOLS.length) return null;
-
-  const url = `${CHAOS_BASE_URL}/prices/batch?feedIds=${feedIds.join(",")}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${CHAOS_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) return null;
-
-  const raw = await response.json();
-  const items: Array<{ feedId?: string; price?: number | string }> = Array.isArray(raw)
-    ? raw
-    : Array.isArray(raw?.prices)
-      ? raw.prices
-      : [];
-
-  const feedToSymbol = new Map<string, AppSymbol>();
-  SYMBOLS.forEach((symbol) => {
-    const feedId = CHAOS_FEEDS[symbol];
-    if (feedId) feedToSymbol.set(feedId, symbol);
-  });
-
-  const prices: Partial<Record<AppSymbol, number>> = {};
-  for (const item of items) {
-    const symbol = item.feedId ? feedToSymbol.get(item.feedId) : undefined;
-    if (!symbol) continue;
-    const value = Number(item.price);
-    if (Number.isFinite(value) && value > 0) {
-      prices[symbol] = value;
-    }
-  }
-
-  if (!SYMBOLS.every((symbol) => typeof prices[symbol] === "number")) return null;
-
-  return {
-    source: "chaos_edge",
-    prices: prices as Record<AppSymbol, number>,
-    timestamp: Date.now(),
-  };
-}
-
-async function fetchCoinbasePrices(): Promise<PricePayload | null> {
-  const coinbaseProducts: Record<AppSymbol, string> = {
-    "SOL/USD": "SOL-USD",
-    "ETH/USD": "ETH-USD",
-    "BTC/USD": "BTC-USD",
-  };
-
-  const prices: Partial<Record<AppSymbol, number>> = {};
-
-  for (const symbol of SYMBOLS) {
-    const product = coinbaseProducts[symbol];
-    // Use Coinbase Exchange ticker so the box prices align more closely with TradingView COINBASE:* symbols.
+  for (const product of products) {
     const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, {
       cache: "no-store",
       headers: {
@@ -85,21 +16,38 @@ async function fetchCoinbasePrices(): Promise<PricePayload | null> {
     if (!response.ok) return null;
     const raw = await response.json();
     const price = Number(raw?.price);
+    const open24h = Number(raw?.open ?? raw?.open_24h);
     if (!Number.isFinite(price) || price <= 0) return null;
-    prices[symbol] = price;
+    const change24hPercent =
+      Number.isFinite(open24h) && open24h > 0 ? ((price - open24h) / open24h) * 100 : 0;
+    markets[product] = { price, change24hPercent };
   }
 
   return {
     source: "coinbase",
-    prices: prices as Record<AppSymbol, number>,
+    markets,
     timestamp: Date.now(),
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  const productsParam = url.searchParams.get("products");
+  const products = (productsParam ? productsParam.split(",") : ["SOL-USD", "ETH-USD", "BTC-USD"])
+    .map((product) => product.trim().toUpperCase())
+    .filter((product) => /^[A-Z0-9]+-[A-Z0-9]+$/.test(product))
+    .slice(0, 6);
+
+  if (products.length === 0) {
+    return new Response(JSON.stringify({ error: "No valid products requested" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   // Signal generation is calibrated against the visible TradingView COINBASE chart.
   // Use Coinbase directly here so chart + price boxes + signal engine share the same market source.
-  const coinbase = await fetchCoinbasePrices().catch(() => null);
+  const coinbase = await fetchCoinbasePrices(products).catch(() => null);
   if (coinbase) {
     return new Response(JSON.stringify(coinbase), {
       headers: { "Content-Type": "application/json" },

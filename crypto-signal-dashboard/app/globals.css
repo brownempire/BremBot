@@ -90,6 +90,7 @@ header {
 .price-card {
   text-align: left;
   transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  cursor: pointer;
 }
 
 .price-card:hover {
@@ -100,6 +101,33 @@ header {
 .price-card.active {
   border-color: rgba(101, 217, 255, 0.6);
   box-shadow: 0 0 0 1px rgba(101, 217, 255, 0.35), 0 20px 45px var(--shadow);
+}
+
+.price-card-head {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 8px;
+}
+
+.price-pair-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.price-pair-button:hover {
+  color: var(--accent);
+}
+
+.price-pair-picker {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .panel {

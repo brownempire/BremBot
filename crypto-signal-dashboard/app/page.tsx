@@ -12,11 +12,29 @@ import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { getMockNews } from "@/lib/news/mock";
-import { formatUsd, percentChange } from "@/lib/utils";
+import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-const SYMBOLS = ["SOL/USD", "ETH/USD", "BTC/USD"] as const;
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
+
+type TrackedMarket = {
+  id: string;
+  pair: string;
+  coinbaseProduct: string;
+  tvSymbol: string;
+};
+
+type MarketOption = {
+  pair: string;
+  coinbaseProduct: string;
+  tvSymbol: string;
+};
+
+const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
+  { id: "slot-sol", pair: "SOL/USD", coinbaseProduct: "SOL-USD", tvSymbol: "COINBASE:SOLUSD" },
+  { id: "slot-eth", pair: "ETH/USD", coinbaseProduct: "ETH-USD", tvSymbol: "COINBASE:ETHUSD" },
+  { id: "slot-btc", pair: "BTC/USD", coinbaseProduct: "BTC-USD", tvSymbol: "COINBASE:BTCUSD" },
+];
 
 const DEFAULT_PARAMS: UserParams = {
   trendWindow: 30,
@@ -57,15 +75,6 @@ function formatFeedSource(status: string) {
   return map[status] ?? status;
 }
 
-function toTradingViewSymbol(pair: typeof SYMBOLS[number]) {
-  const map: Record<typeof SYMBOLS[number], string> = {
-    "SOL/USD": "COINBASE:SOLUSD",
-    "ETH/USD": "COINBASE:ETHUSD",
-    "BTC/USD": "COINBASE:BTCUSD",
-  };
-  return map[pair];
-}
-
 function tradesStorageKey(walletAddress: string) {
   return `brembot.recent-trades.${walletAddress}`;
 }
@@ -74,13 +83,17 @@ function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
 
+  const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
+  const [dayChange24h, setDayChange24h] = useState<Record<string, number>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [paramsSaveStatus, setParamsSaveStatus] = useState("Using defaults");
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
-  const [selectedChartPair, setSelectedChartPair] = useState<typeof SYMBOLS[number]>("SOL/USD");
+  const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
+  const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
+  const [editingMarketSlotId, setEditingMarketSlotId] = useState<string | null>(null);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
@@ -95,19 +108,31 @@ function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
     let simulateInterval: ReturnType<typeof setInterval> | null = null;
-    const simulatedFeed = createSimulatedFeed([...SYMBOLS]);
+    const simulatedFeed = createSimulatedFeed(trackedMarkets.map((market) => market.pair));
 
     const appendPrices = (
-      prices: Partial<Record<typeof SYMBOLS[number], number>>,
+      pricesBySlot: Partial<Record<string, number>>,
+      changes24hBySlot: Partial<Record<string, number>>,
       now: number
     ) => {
       setPriceHistory((prev) => {
         const next = { ...prev };
-        SYMBOLS.forEach((symbol) => {
-          const price = Number(prices[symbol]);
+        trackedMarkets.forEach((market) => {
+          const price = Number(pricesBySlot[market.id]);
           if (!Number.isFinite(price) || price <= 0) return;
-          const existing = next[symbol] ?? [];
-          next[symbol] = [...existing, { t: now, v: price }].slice(-5400);
+          const existing = next[market.id] ?? [];
+          next[market.id] = [...existing, { t: now, v: price }].slice(-5400);
+        });
+        return next;
+      });
+
+      setDayChange24h((prev) => {
+        const next = { ...prev };
+        trackedMarkets.forEach((market) => {
+          const value = changes24hBySlot[market.id];
+          if (typeof value === "number" && Number.isFinite(value)) {
+            next[market.id] = value;
+          }
         });
         return next;
       });
@@ -118,12 +143,14 @@ function DashboardPage() {
       setPriceFeedStatus("simulated");
       simulateInterval = setInterval(() => {
         const updates = simulatedFeed();
-        const prices: Partial<Record<typeof SYMBOLS[number], number>> = {};
+        const pricesBySlot: Partial<Record<string, number>> = {};
         updates.forEach((update) => {
+          const slot = trackedMarkets.find((market) => market.pair === update.symbol);
+          if (!slot) return;
           const point = update.points[0];
-          if (point) prices[update.symbol as typeof SYMBOLS[number]] = point.v;
+          if (point) pricesBySlot[slot.id] = point.v;
         });
-        appendPrices(prices, Date.now());
+        appendPrices(pricesBySlot, {}, Date.now());
       }, 1000);
     };
 
@@ -135,21 +162,37 @@ function DashboardPage() {
 
     const pollLivePrices = async () => {
       try {
-        const response = await fetch("/api/prices/live", { cache: "no-store" });
+        const products = trackedMarkets.map((market) => market.coinbaseProduct).join(",");
+        const response = await fetch(`/api/prices/live?products=${encodeURIComponent(products)}`, {
+          cache: "no-store",
+        });
         const payload = await response.json();
-        if (!response.ok || !payload?.prices) {
+        if (!response.ok || !payload?.markets) {
           if (!cancelled) startSimulationFallback();
           return;
         }
 
         const now = Number(payload.timestamp) || Date.now();
         const source = String(payload.source ?? "unknown");
-        const prices = payload.prices as Partial<Record<typeof SYMBOLS[number], number>>;
+        const markets = payload.markets as Record<
+          string,
+          { price?: number; change24hPercent?: number }
+        >;
+        const pricesBySlot: Partial<Record<string, number>> = {};
+        const changes24hBySlot: Partial<Record<string, number>> = {};
+        trackedMarkets.forEach((market) => {
+          const entry = markets[market.coinbaseProduct];
+          if (!entry) return;
+          if (typeof entry.price === "number") pricesBySlot[market.id] = entry.price;
+          if (typeof entry.change24hPercent === "number") {
+            changes24hBySlot[market.id] = entry.change24hPercent;
+          }
+        });
 
         if (cancelled) return;
         stopSimulationFallback();
         setPriceFeedStatus(source);
-        appendPrices(prices, now);
+        appendPrices(pricesBySlot, changes24hBySlot, now);
       } catch {
         if (!cancelled) startSimulationFallback();
       }
@@ -165,7 +208,7 @@ function DashboardPage() {
       clearInterval(interval);
       if (simulateInterval) clearInterval(simulateInterval);
     };
-  }, []);
+  }, [trackedMarkets]);
 
   useEffect(() => {
     const latestNews = getMockNews();
@@ -173,8 +216,8 @@ function DashboardPage() {
 
     setSignals((prev) => {
       let next = [...prev];
-      SYMBOLS.forEach((symbol) => {
-        const points = priceHistory[symbol] ?? [];
+      trackedMarkets.forEach((market) => {
+        const points = priceHistory[market.id] ?? [];
         if (points.length === 0) return;
         const now = points[points.length - 1].t;
         const recentPoints = points.filter(
@@ -184,17 +227,17 @@ function DashboardPage() {
         if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
-          symbol,
+          symbol: market.pair,
           points: recentPoints,
           params,
           newsScore: newsScore * params.newsBias,
-          lastSignalAt: lastSignalAt[symbol],
+          lastSignalAt: lastSignalAt[market.id],
         });
 
         if (newSignals.length > 0) {
           setLastSignalAt((prevTimes) => ({
             ...prevTimes,
-            [symbol]: now,
+            [market.id]: now,
           }));
 
           newSignals.forEach((signal) => {
@@ -222,7 +265,7 @@ function DashboardPage() {
 
       return next;
     });
-  }, [lastSignalAt, params, priceHistory, pushEnabled]);
+  }, [lastSignalAt, params, priceHistory, pushEnabled, trackedMarkets]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -260,6 +303,24 @@ function DashboardPage() {
     } catch {
       setParamsSaveStatus("Failed to load saved preset");
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/markets/coinbase", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (cancelled) return;
+        const options = Array.isArray(payload?.options) ? (payload.options as MarketOption[]) : [];
+        if (options.length > 0) {
+          setMarketOptions(options);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -350,13 +411,45 @@ function DashboardPage() {
 
   const latestNews = useMemo(() => getMockNews(), [priceHistory]);
 
-  const cards = SYMBOLS.map((symbol) => {
-    const points = priceHistory[symbol] ?? [];
+  const selectedChartMarket =
+    trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
+
+  const cards = trackedMarkets.map((market) => {
+    const points = priceHistory[market.id] ?? [];
     const current = points[points.length - 1]?.v ?? 0;
-    const previous = points[points.length - 10]?.v ?? current;
-    const change = percentChange(current, previous);
-    return { symbol, current, change };
+    const change24h = dayChange24h[market.id] ?? 0;
+    return { ...market, current, change24h };
   });
+
+  const selectableMarketOptions = useMemo(() => {
+    const currentProducts = new Set(trackedMarkets.map((market) => market.coinbaseProduct));
+    return marketOptions.filter(
+      (option) => !currentProducts.has(option.coinbaseProduct) || option.coinbaseProduct ===
+        trackedMarkets.find((market) => market.id === editingMarketSlotId)?.coinbaseProduct
+    );
+  }, [editingMarketSlotId, marketOptions, trackedMarkets]);
+
+  function updateTrackedMarket(slotId: string, nextProduct: string) {
+    const option = marketOptions.find((item) => item.coinbaseProduct === nextProduct);
+    if (!option) return;
+    const previousPair = trackedMarkets.find((market) => market.id === slotId)?.pair;
+
+    setTrackedMarkets((prev) =>
+      prev.map((market) => (market.id === slotId ? { ...market, ...option } : market))
+    );
+    setPriceHistory((prev) => ({ ...prev, [slotId]: [] }));
+    setDayChange24h((prev) => ({ ...prev, [slotId]: 0 }));
+    setLastSignalAt((prev) => {
+      const next = { ...prev };
+      delete next[slotId];
+      return next;
+    });
+    if (previousPair) {
+      setSignals((prev) => prev.filter((signal) => signal.symbol !== previousPair));
+    }
+    setSelectedChartSlotId(slotId);
+    setEditingMarketSlotId(null);
+  }
 
   async function enablePush() {
     if (!pushReady) return;
@@ -507,19 +600,52 @@ function DashboardPage() {
 
         <div className="grid">
           {cards.map((card) => (
-            <button
-              key={card.symbol}
-              type="button"
-              className={`panel price-card ${selectedChartPair === card.symbol ? "active" : ""}`}
-              onClick={() => setSelectedChartPair(card.symbol)}
+            <div
+              key={card.id}
+              className={`panel price-card ${selectedChartSlotId === card.id ? "active" : ""}`}
+              onClick={() => setSelectedChartSlotId(card.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedChartSlotId(card.id);
+                }
+              }}
+              role="button"
+              tabIndex={0}
             >
-              <h3>{card.symbol}</h3>
+              <div className="price-card-head">
+                <button
+                  type="button"
+                  className="price-pair-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setEditingMarketSlotId((prev) => (prev === card.id ? null : card.id));
+                  }}
+                >
+                  {card.pair}
+                </button>
+              </div>
+              {editingMarketSlotId === card.id ? (
+                <div className="price-pair-picker" onClick={(event) => event.stopPropagation()}>
+                  <select
+                    value={card.coinbaseProduct}
+                    onChange={(event) => updateTrackedMarket(card.id, event.target.value)}
+                  >
+                    {selectableMarketOptions.map((option) => (
+                      <option key={option.coinbaseProduct} value={option.coinbaseProduct}>
+                        {option.pair}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="subtext">TradingView-compatible Coinbase symbols</div>
+                </div>
+              ) : null}
               <div className="price">{formatUsd(card.current)}</div>
               <div className="subtext">
-                10s change {card.change >= 0 ? "+" : ""}
-                {card.change.toFixed(2)}%
+                24h change {card.change24h >= 0 ? "+" : ""}
+                {card.change24h.toFixed(2)}%
               </div>
-            </button>
+            </div>
           ))}
         </div>
       </header>
@@ -527,10 +653,10 @@ function DashboardPage() {
       <section className="panel chart-panel" style={{ marginBottom: 22 }}>
         <h3>TradingView Chart</h3>
         <div className="subtext" style={{ marginBottom: 10 }}>
-          Live market chart aligned with signal scanning. Selected: {selectedChartPair}
+          Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
         </div>
         <div className="tradingview-wrap">
-          <TradingViewChart symbol={toTradingViewSymbol(selectedChartPair)} />
+          <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
         </div>
       </section>
 
