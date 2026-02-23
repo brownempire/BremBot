@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -577,7 +578,14 @@ function DashboardPage() {
       <header>
         <div className="header-row">
           <div>
-            <div className="title">PulseSignal Desk</div>
+            <Image
+              className="brand-logo"
+              src="/bremlogic-logo.png"
+              alt="BremLogic"
+              width={900}
+              height={220}
+              priority
+            />
             <div className="subtext">
               Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
             </div>

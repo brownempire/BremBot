@@ -28,10 +28,15 @@ body {
   margin: 0;
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   color: var(--text);
+  background-color: #000;
   background: radial-gradient(1200px 600px at 10% -10%, rgba(101, 217, 255, 0.12), transparent 60%),
     radial-gradient(900px 500px at 90% 10%, rgba(255, 164, 92, 0.14), transparent 55%),
     linear-gradient(160deg, var(--bg), var(--bg-2));
   min-height: 100vh;
+}
+
+html {
+  background-color: #000;
 }
 
 a {
@@ -64,6 +69,13 @@ header {
   font-family: "Space Grotesk", system-ui, sans-serif;
   font-size: 32px;
   letter-spacing: -0.02em;
+}
+
+.brand-logo {
+  width: min(520px, 100%);
+  height: auto;
+  display: block;
+  margin-bottom: 6px;
 }
 
 .badges {
