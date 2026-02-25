@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
@@ -15,6 +16,7 @@ import { getMockNews } from "@/lib/news/mock";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 
 type TrackedMarket = {
@@ -353,10 +355,13 @@ function DashboardPage() {
 
     setPortfolioStatus("Syncing wallet balances...");
 
-    const [balanceResult, tokenAccountsResult] = await Promise.allSettled([
-      connection.getBalance(wallet.publicKey),
+    const [balanceResult, splTokenAccountsResult, token2022AccountsResult] = await Promise.allSettled([
+      connection.getBalance(wallet.publicKey, "confirmed"),
       connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
         programId: TOKEN_PROGRAM_ID,
+      }),
+      connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+        programId: TOKEN_2022_PROGRAM_ID,
       }),
     ]);
 
@@ -367,27 +372,49 @@ function DashboardPage() {
       setSolBalance(balanceResult.value / 1_000_000_000);
       solLoaded = true;
     } else {
-      setSolBalance(null);
+      try {
+        const accountInfo = await connection.getAccountInfo(wallet.publicKey, "confirmed");
+        if (accountInfo) {
+          setSolBalance(accountInfo.lamports / 1_000_000_000);
+          solLoaded = true;
+        } else {
+          setSolBalance(null);
+        }
+      } catch {
+        setSolBalance(null);
+      }
     }
 
-    if (tokenAccountsResult.status === "fulfilled") {
-      const holdings = tokenAccountsResult.value.value
-        .map((accountInfo) => {
-          const parsed = accountInfo.account.data.parsed.info;
-          const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
-          return {
-            mint: String(parsed.mint),
-            amount,
-          } satisfies WalletTokenHolding;
-        })
-        .filter((holding) => holding.amount > 0)
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 6);
-      setWalletTokens(holdings);
+    const holdingsByMint = new Map<string, WalletTokenHolding>();
+    const tokenResults = [splTokenAccountsResult, token2022AccountsResult];
+    tokenResults.forEach((result) => {
+      if (result.status !== "fulfilled") {
+        return;
+      }
       tokensLoaded = true;
-    } else {
-      setWalletTokens([]);
-    }
+      result.value.value.forEach((accountInfo) => {
+        const parsedInfo = accountInfo.account.data.parsed?.info;
+        const mint = String(parsedInfo?.mint ?? "");
+        const uiAmount = Number(parsedInfo?.tokenAmount?.uiAmount ?? 0);
+        const uiAmountString = Number(parsedInfo?.tokenAmount?.uiAmountString ?? 0);
+        const amount = Number.isFinite(uiAmount) && uiAmount > 0 ? uiAmount : uiAmountString;
+
+        if (!mint || !Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+
+        const existing = holdingsByMint.get(mint);
+        holdingsByMint.set(mint, {
+          mint,
+          amount: (existing?.amount ?? 0) + amount,
+        });
+      });
+    });
+
+    const holdings = [...holdingsByMint.values()]
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6);
+    setWalletTokens(holdings);
 
     if (solLoaded && tokensLoaded) {
       setPortfolioStatus("Wallet synced");
@@ -395,6 +422,10 @@ function DashboardPage() {
     }
     if (solLoaded && !tokensLoaded) {
       setPortfolioStatus("SOL balance synced (token accounts unavailable)");
+      return;
+    }
+    if (!solLoaded && tokensLoaded) {
+      setPortfolioStatus("Token balances synced (SOL balance unavailable)");
       return;
     }
     setPortfolioStatus("Failed to sync wallet balances");
@@ -577,7 +608,14 @@ function DashboardPage() {
       <header>
         <div className="header-row">
           <div>
-            <div className="title">PulseSignal Desk</div>
+            <Image
+              className="brand-logo"
+              src="/bremlogic-logo.png"
+              alt="BremLogic"
+              width={1038}
+              height={338}
+              priority
+            />
             <div className="subtext">
               Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
             </div>
