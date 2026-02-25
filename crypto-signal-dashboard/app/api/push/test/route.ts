@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   }
 
   const payload = JSON.stringify({
-    title: "PulseSignal",
+    title: "BremLogic",
     body: "Test push notification from your signal desk.",
     url: "/",
   });
