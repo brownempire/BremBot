@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   const body = await request.json();
 
   const payload = JSON.stringify({
-    title: body?.title ?? "PulseSignal",
+    title: body?.title ?? "BremLogic",
     body: body?.body ?? "A new signal was triggered.",
     url: body?.url ?? "/",
   });
