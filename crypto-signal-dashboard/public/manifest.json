@@ -1,7 +1,7 @@
 {
   "name": "BremLogic Signal Desk",
   "short_name": "BremLogic",
-  "description": "Real-time crypto trading signal dashboard.",
+  "description": "Welcome to BremLogic. Real-time trading signals with wallet-linked execution via Jupiter Plugin plus interactive charts from TradingView.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
