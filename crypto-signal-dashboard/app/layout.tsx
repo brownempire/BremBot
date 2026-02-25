@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "BremLogic — Crypto Signals",
-  description: "Real-time crypto trading signal dashboard.",
+  description:
+    "Welcome to BremLogic. Real-time trading signals with wallet-linked execution via Jupiter Plugin plus interactive charts from TradingView.",
   manifest: "/manifest.json",
   icons: {
     icon: [
