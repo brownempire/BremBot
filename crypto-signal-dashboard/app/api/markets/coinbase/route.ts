@@ -19,15 +19,20 @@ function toTvCoinbaseSymbol(product: string) {
   return `COINBASE:${product.replace("-", "")}`;
 }
 
+const DEFAULT_OPTIONS: MarketOption[] = [
+  { coinbaseProduct: "SOL-USD", pair: "SOL/USD", tvSymbol: "COINBASE:SOLUSD" },
+  { coinbaseProduct: "ETH-USD", pair: "ETH/USD", tvSymbol: "COINBASE:ETHUSD" },
+  { coinbaseProduct: "BTC-USD", pair: "BTC/USD", tvSymbol: "COINBASE:BTCUSD" },
+];
+
 export async function GET() {
   const response = await fetch("https://api.exchange.coinbase.com/products", {
     cache: "no-store",
     headers: { Accept: "application/json" },
-  });
+  }).catch(() => null);
 
-  if (!response.ok) {
-    return new Response(JSON.stringify({ error: "Coinbase products unavailable" }), {
-      status: 503,
+  if (!response?.ok) {
+    return new Response(JSON.stringify({ options: DEFAULT_OPTIONS, source: "fallback" }), {
       headers: { "Content-Type": "application/json" },
     });
   }
@@ -46,7 +51,7 @@ export async function GET() {
     .sort((a, b) => a.pair.localeCompare(b.pair))
     .slice(0, 500);
 
-  return new Response(JSON.stringify({ options }), {
+  return new Response(JSON.stringify({ options: options.length > 0 ? options : DEFAULT_OPTIONS, source: "coinbase" }), {
     headers: { "Content-Type": "application/json" },
   });
 }

@@ -12,7 +12,7 @@ import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
-import { getMockNews } from "@/lib/news/mock";
+import { getMockNews, type NewsItem } from "@/lib/news/mock";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -73,6 +73,7 @@ function formatFeedSource(status: string) {
     simulated: "Simulated",
     chaos_edge: "Chaos Edge",
     coinbase: "Coinbase",
+    coingecko: "CoinGecko",
   };
   return map[status] ?? status;
 }
@@ -95,6 +96,7 @@ function DashboardPage() {
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
+  const [newsItems, setNewsItems] = useState<NewsItem[]>(getMockNews());
   const [editingMarketSlotId, setEditingMarketSlotId] = useState<string | null>(null);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
@@ -124,6 +126,15 @@ function DashboardPage() {
           if (!Number.isFinite(price) || price <= 0) return;
           const existing = next[market.id] ?? [];
           next[market.id] = [...existing, { t: now, v: price }].slice(-5400);
+
+          if (changes24hBySlot[market.id] === undefined && next[market.id].length > 1) {
+            const history = next[market.id];
+            const current = history[history.length - 1]?.v ?? 0;
+            const dayAgo = history.find((point) => now - point.t >= 24 * 60 * 60 * 1000) ?? history[0];
+            if (dayAgo && dayAgo.v > 0) {
+              changes24hBySlot[market.id] = ((current - dayAgo.v) / dayAgo.v) * 100;
+            }
+          }
         });
         return next;
       });
@@ -213,8 +224,8 @@ function DashboardPage() {
   }, [trackedMarkets]);
 
   useEffect(() => {
-    const latestNews = getMockNews();
-    const newsScore = latestNews.reduce((sum, item) => sum + item.sentiment, 0) / latestNews.length;
+    const newsScore = newsItems.reduce((sum, item) => sum + item.sentiment, 0) /
+      Math.max(newsItems.length, 1);
 
     setSignals((prev) => {
       let next = [...prev];
@@ -225,7 +236,7 @@ function DashboardPage() {
         const recentPoints = points.filter(
           (point) => now - point.t <= params.trendWindow * 60 * 1000
         );
-        const minimumDataPoints = params.trendWindow * 45;
+        const minimumDataPoints = Math.max(90, params.trendWindow * 8);
         if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
@@ -258,6 +269,7 @@ function DashboardPage() {
                   title: `Signal: ${signal.symbol}`,
                   body: signal.summary,
                   url: "/",
+                  subscription,
                 }),
               }).catch(() => undefined);
             }
@@ -267,7 +279,7 @@ function DashboardPage() {
 
       return next;
     });
-  }, [lastSignalAt, params, priceHistory, pushEnabled, trackedMarkets]);
+  }, [lastSignalAt, newsItems, params, priceHistory, pushEnabled, subscription, trackedMarkets]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -287,6 +299,30 @@ function DashboardPage() {
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pollNews = async () => {
+      try {
+        const response = await fetch("/api/news/trending", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload?.items) || cancelled) return;
+        setNewsItems(payload.items as NewsItem[]);
+      } catch {
+        if (!cancelled) setNewsItems(getMockNews());
+      }
+    };
+
+    pollNews().catch(() => undefined);
+    const interval = setInterval(() => {
+      pollNews().catch(() => undefined);
+    }, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -356,7 +392,7 @@ function DashboardPage() {
     setPortfolioStatus("Syncing wallet balances...");
 
     const [balanceResult, splTokenAccountsResult, token2022AccountsResult] = await Promise.allSettled([
-      connection.getBalance(wallet.publicKey, "confirmed"),
+      connection.getBalance(wallet.publicKey, "processed"),
       connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
         programId: TOKEN_PROGRAM_ID,
       }),
@@ -373,7 +409,7 @@ function DashboardPage() {
       solLoaded = true;
     } else {
       try {
-        const accountInfo = await connection.getAccountInfo(wallet.publicKey, "confirmed");
+        const accountInfo = await connection.getAccountInfo(wallet.publicKey, "finalized");
         if (accountInfo) {
           setSolBalance(accountInfo.lamports / 1_000_000_000);
           solLoaded = true;
@@ -440,7 +476,7 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [wallet.connected, wallet.publicKey?.toBase58()]);
 
-  const latestNews = useMemo(() => getMockNews(), [priceHistory]);
+  const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
@@ -712,7 +748,7 @@ function DashboardPage() {
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect Phantom or Solflare to trade."}
+              : "Connect Phantom, Solflare, or Backpack/Jupiter-compatible wallets to trade."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
