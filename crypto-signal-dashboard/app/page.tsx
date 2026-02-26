@@ -373,16 +373,16 @@ function DashboardPage() {
 
     if (tokenAccountsResult.status === "fulfilled") {
       const holdings = tokenAccountsResult.value.value
-        .map((accountInfo) => {
-          const parsed = accountInfo.account.data.parsed.info;
-          const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
-          return {
-            mint: String(parsed.mint),
-            amount,
-          } satisfies WalletTokenHolding;
-        })
-        .filter((holding) => holding.amount > 0)
-        .sort((a, b) => b.amount - a.amount)
+        .map((accountInfo: any) => {
+            const parsed = accountInfo.account.data.parsed.info;
+            const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
+            return {
+              mint: String(parsed.mint),
+              amount,
+            } satisfies WalletTokenHolding;
+          })
+          .filter((holding: WalletTokenHolding) => holding.amount > 0)
+          .sort((a: WalletTokenHolding, b: WalletTokenHolding) => b.amount - a.amount)
         .slice(0, 6);
       setWalletTokens(holdings);
       tokensLoaded = true;
