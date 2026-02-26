@@ -476,6 +476,7 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
 
+const latestNews = useMemo(() => getMockNews(), []);
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
