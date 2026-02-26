@@ -1,5 +1,13 @@
 # BremBot Command Reference (Git + App Workflow)
 
+## 0) Establish GitHub remote + verify connection (exact script)
+
+```bash
+git remote add origin https://github.com/brownempire/BremBot.git
+git remote -v
+git ls-remote --heads origin
+```
+
 A practical, saveable reference for daily use on branch-based development across devices.
 
 ## 1) Daily Git health check (refresh + verify)

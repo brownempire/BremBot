@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -83,6 +83,7 @@ function tradesStorageKey(walletAddress: string) {
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const walletAddress = wallet.publicKey?.toBase58() ?? null;
 
   const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
@@ -325,7 +326,6 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    const walletAddress = wallet.publicKey?.toBase58();
     if (!walletAddress) {
       setRecentTrades([]);
       return;
@@ -342,9 +342,9 @@ function DashboardPage() {
     } catch {
       setRecentTrades([]);
     }
-  }, [wallet.publicKey?.toBase58()]);
+  }, [walletAddress]);
 
-  async function refreshWalletPortfolio() {
+  const refreshWalletPortfolio = useCallback(async () => {
     if (!wallet.connected || !wallet.publicKey) {
       setSolBalance(null);
       setWalletTokens([]);
@@ -399,7 +399,7 @@ function DashboardPage() {
       return;
     }
     setPortfolioStatus("Failed to sync wallet balances");
-  }
+  }, [connection, wallet.connected, wallet.publicKey]);
 
   useEffect(() => {
     refreshWalletPortfolio().catch(() => undefined);
@@ -408,9 +408,9 @@ function DashboardPage() {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [wallet.connected, wallet.publicKey?.toBase58()]);
+  }, [refreshWalletPortfolio]);
 
-  const latestNews = useMemo(() => getMockNews(), [priceHistory]);
+  const latestNews = useMemo(() => getMockNews(), []);
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
