@@ -141,6 +141,30 @@ git rebase origin/main
 
 ---
 
+
+## One-command helper script
+
+Use the helper script to run the safe flow in one command:
+
+```bash
+cd /workspace/BremBot
+scripts/safe-sync-and-push.sh -m "your commit message"
+```
+
+Optional flags:
+
+```bash
+# Skip frontend build check
+scripts/safe-sync-and-push.sh -m "your commit message" --skip-build
+
+# Rebase on a different base ref
+scripts/safe-sync-and-push.sh -m "your commit message" --base origin/main
+```
+
+The script validates origin connectivity, fetches/rebases, runs build (unless skipped), stages all changes, commits if needed, then pushes the current branch.
+
+---
+
 ## Fast “pre-push sanity” block (copy/paste)
 
 ```bash
