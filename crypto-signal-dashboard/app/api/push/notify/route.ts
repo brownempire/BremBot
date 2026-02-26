@@ -1,7 +1,7 @@
 import webpush from "web-push";
 import { listSubscriptions } from "@/lib/push/store";
 
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? "mailto:dev@example.com";
 
@@ -22,7 +22,10 @@ export async function POST(request: Request) {
     url: body?.url ?? "/",
   });
 
-  const subs = listSubscriptions();
+  const directSub = body?.subscription && body.subscription.endpoint
+    ? [body.subscription as PushSubscriptionJSON]
+    : [];
+  const subs = directSub.length > 0 ? directSub : listSubscriptions();
   const results = await Promise.all(
     subs.map(async (sub) => {
       try {
