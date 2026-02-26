@@ -476,7 +476,6 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
 
-const latestNews = useMemo(() => getMockNews(), []);
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
@@ -749,7 +748,7 @@ const latestNews = useMemo(() => getMockNews(), []);
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect Phantom, Solflare, or Backpack/Jupiter-compatible wallets to trade."}
+              : "Connect Phantom or Solflare to trade."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">

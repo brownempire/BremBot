@@ -5,7 +5,6 @@ import { clusterApiUrl } from "@solana/web3.js";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
-import { BackpackWalletAdapter } from "@solana/wallet-adapter-backpack";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -16,7 +15,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
   );
 
   const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter(), new BackpackWalletAdapter()],
+    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
     []
   );
 
