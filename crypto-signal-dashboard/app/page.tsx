@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useConnection, useWallet, UnifiedWalletButton } from "@jup-ag/wallet-adapter";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -778,17 +777,17 @@ function DashboardPage() {
         <div className="panel">
           <h3>Wallet Connect</h3>
           <div className="wallet-controls">
-            <WalletMultiButton key={wallet.publicKey?.toBase58() ?? "wallet-multi-button"} />
-            <WalletModalButton className="wallet-adapter-button wallet-change">
-              Select Wallet
-            </WalletModalButton>
+            <UnifiedWalletButton buttonClassName="wallet-adapter-button" currentUserClassName="wallet-adapter-button" />
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
             {wallet.connected ? <button onClick={disconnectWallet}>Disconnect</button> : null}
+          </div>
+          <div className="subtext" style={{ marginTop: 8 }}>
+            Wallet options are provided through Jupiter Unified Wallet (including Jupiter, Solflare, and Phantom where supported).
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect Phantom or Solflare to trade."}
+              : "Connect a Jupiter-supported wallet to trade."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">

@@ -2,9 +2,8 @@
 
 import { PropsWithChildren, useMemo } from "react";
 import { clusterApiUrl } from "@solana/web3.js";
-import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
-import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { PhantomWalletAdapter, SolflareWalletAdapter } from "@solana/wallet-adapter-wallets";
+import { UnifiedWalletProvider } from "@jup-ag/wallet-adapter";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -19,11 +18,27 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
     []
   );
 
+  const walletMetadata = useMemo(
+    () => ({
+      name: "BremLogic",
+      description: "BremLogic wallet connection",
+      url: "https://www.bremlogic.com",
+      iconUrls: ["https://www.bremlogic.com/icon-192.png"],
+    }),
+    []
+  );
+
   return (
-    <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>{children}</WalletModalProvider>
-      </WalletProvider>
-    </ConnectionProvider>
+    <UnifiedWalletProvider
+      wallets={wallets}
+      config={{
+        autoConnect: true,
+        env: "mainnet-beta",
+        metadata: walletMetadata,
+        theme: "jupiter",
+      }}
+    >
+      {children}
+    </UnifiedWalletProvider>
   );
 }
