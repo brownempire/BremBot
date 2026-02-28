@@ -283,7 +283,15 @@ function DashboardPage() {
   }, [lastSignalAt, newsItems, params, priceHistory, pushEnabled, subscription, trackedMarkets]);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+    if (!window.isSecureContext) {
+      setPushStatus("Push requires HTTPS (or localhost)");
+      return;
+    }
+
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setPushStatus("Push is not supported on this browser/device");
+      return;
+    }
 
     navigator.serviceWorker
       .register("/sw.js")
@@ -390,6 +398,21 @@ function DashboardPage() {
     }
 
     setPortfolioStatus("Syncing wallet balances...");
+
+    try {
+      const response = await fetch(`/api/wallet/balances?address=${wallet.publicKey.toBase58()}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => null);
+      if (response.ok && payload) {
+        setSolBalance(typeof payload.solBalance === "number" ? payload.solBalance : null);
+        setWalletTokens(Array.isArray(payload.tokens) ? (payload.tokens as WalletTokenHolding[]) : []);
+        setPortfolioStatus(typeof payload.status === "string" ? payload.status : "Wallet synced");
+        return;
+      }
+    } catch {
+      // fallback to direct client RPC calls below
+    }
 
     const [balanceResult, splTokenAccountsResult, token2022AccountsResult] = await Promise.allSettled([
       connection.getBalance(wallet.publicKey, "processed"),
@@ -563,8 +586,8 @@ function DashboardPage() {
       setSubscription(subscriptionJson);
       setPushStatus("Push enabled");
       setPushEnabled(true);
-    } catch {
-      setPushStatus("Push subscribe failed");
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : "Push subscribe failed");
     }
   }
 
@@ -575,17 +598,21 @@ function DashboardPage() {
     }
 
     setPushStatus("Sending test...");
-    const response = await fetch("/api/push/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      setPushStatus(payload?.error ?? "Push test failed");
-      return;
+    try {
+      const response = await fetch("/api/push/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setPushStatus(payload?.error ?? "Push test failed");
+        return;
+      }
+      setPushStatus("Test push sent");
+    } catch {
+      setPushStatus("Push test failed");
     }
-    setPushStatus("Test push sent");
   }
 
   async function disconnectWallet() {

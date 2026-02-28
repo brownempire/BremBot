@@ -26,6 +26,12 @@ export async function POST(request: Request) {
     ? [body.subscription as PushSubscriptionJSON]
     : [];
   const subs = directSub.length > 0 ? directSub : listSubscriptions();
+  if (subs.length === 0) {
+    return new Response(JSON.stringify({ error: "No push subscriptions found. Enable push first." }), {
+      status: 400,
+    });
+  }
+
   const results = await Promise.all(
     subs.map(async (sub) => {
       try {
@@ -37,5 +43,13 @@ export async function POST(request: Request) {
     })
   );
 
-  return new Response(JSON.stringify({ ok: true, results }));
+  const sent = results.filter((result) => result.ok).length;
+  if (sent === 0) {
+    return new Response(
+      JSON.stringify({ error: "Failed to send push to active subscription(s).", results }),
+      { status: 500 }
+    );
+  }
+
+  return new Response(JSON.stringify({ ok: true, sent, results }));
 }
