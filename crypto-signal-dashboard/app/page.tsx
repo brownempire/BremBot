@@ -49,6 +49,11 @@ const DEFAULT_PARAMS: UserParams = {
 type WalletTokenHolding = {
   mint: string;
   amount: number;
+  symbol?: string;
+  name?: string;
+  logoURI?: string | null;
+  usdPrice?: number | null;
+  usdValue?: number | null;
 };
 
 type StoredTradeRecord = JupiterTradeRecord & {
@@ -107,6 +112,8 @@ function DashboardPage() {
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
+  const [totalBalanceUsd, setTotalBalanceUsd] = useState<number | null>(null);
+  const [solValueUsd, setSolValueUsd] = useState<number | null>(null);
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
 
@@ -393,6 +400,8 @@ function DashboardPage() {
     if (!wallet.connected || !wallet.publicKey) {
       setSolBalance(null);
       setWalletTokens([]);
+      setTotalBalanceUsd(null);
+      setSolValueUsd(null);
       setPortfolioStatus("Wallet not connected");
       return;
     }
@@ -407,6 +416,8 @@ function DashboardPage() {
       if (response.ok && payload) {
         setSolBalance(typeof payload.solBalance === "number" ? payload.solBalance : null);
         setWalletTokens(Array.isArray(payload.tokens) ? (payload.tokens as WalletTokenHolding[]) : []);
+        setTotalBalanceUsd(typeof payload.totalBalanceUsd === "number" ? payload.totalBalanceUsd : null);
+        setSolValueUsd(typeof payload.solValueUsd === "number" ? payload.solValueUsd : null);
         setPortfolioStatus(typeof payload.status === "string" ? payload.status : "Wallet synced");
         return;
       }
@@ -474,6 +485,8 @@ function DashboardPage() {
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 6);
     setWalletTokens(holdings);
+    setTotalBalanceUsd(null);
+    setSolValueUsd(null);
 
     if (solLoaded && tokensLoaded) {
       setPortfolioStatus("Wallet synced");
@@ -779,14 +792,36 @@ function DashboardPage() {
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
+            <div className="holding-row total-row">
+              <span>Total Balance</span>
+              <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
+            </div>
             <div className="holding-row">
-              <span>SOL</span>
-              <strong>{solBalance === null ? "-" : solBalance.toFixed(4)}</strong>
+              <span className="token-meta">
+                <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png" alt="Solana" className="token-icon" />
+                <span>
+                  <strong>SOL</strong>
+                  <small>Solana</small>
+                </span>
+              </span>
+              <strong>
+                {solBalance === null ? "-" : solBalance.toFixed(4)}
+                <small>{solValueUsd === null ? "" : ` (${formatUsd(solValueUsd)})`}</small>
+              </strong>
             </div>
             {walletTokens.map((token) => (
               <div key={token.mint} className="holding-row">
-                <span>{shortAddress(token.mint)}</span>
-                <strong>{token.amount.toFixed(4)}</strong>
+                <span className="token-meta">
+                  {token.logoURI ? <img src={token.logoURI} alt={token.symbol ?? token.name ?? token.mint} className="token-icon" /> : null}
+                  <span>
+                    <strong>{token.symbol ?? shortAddress(token.mint)}</strong>
+                    <small>{token.name ?? token.mint}</small>
+                  </span>
+                </span>
+                <strong>
+                  {token.amount.toFixed(4)}
+                  <small>{token.usdValue ? ` (${formatUsd(token.usdValue)})` : ""}</small>
+                </strong>
               </div>
             ))}
           </div>

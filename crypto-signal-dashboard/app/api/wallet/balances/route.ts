@@ -2,19 +2,70 @@ import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SOL_ICON = "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png";
+
+type TokenDetails = {
+  mint: string;
+  amount: number;
+  symbol: string;
+  name: string;
+  logoURI: string | null;
+  usdPrice: number | null;
+  usdValue: number | null;
+};
 
 function getRpcEndpoint() {
-  return process.env.SOLANA_RPC_URL ??
-    process.env.NEXT_PUBLIC_SOLANA_RPC_URL ??
-    clusterApiUrl("mainnet-beta");
+  return process.env.SOLANA_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl("mainnet-beta");
+}
+
+async function fetchTokenProfile(mint: string) {
+  try {
+    const response = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    return {
+      symbol: String(payload?.symbol ?? "TOKEN"),
+      name: String(payload?.name ?? "Unknown Token"),
+      logoURI: typeof payload?.logoURI === "string" ? payload.logoURI : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchUsdPrices(mints: string[]) {
+  const priceByMint = new Map<string, number>();
+  if (mints.length === 0) return priceByMint;
+
+  try {
+    const response = await fetch(
+      `https://price.jup.ag/v4/price?ids=${encodeURIComponent(["SOL", ...mints].join(","))}`,
+      { cache: "no-store" }
+    );
+    if (!response.ok) return priceByMint;
+    const payload = await response.json();
+    const data = payload?.data ?? {};
+
+    const solPrice = Number(data?.SOL?.price ?? 0);
+    if (Number.isFinite(solPrice) && solPrice > 0) priceByMint.set("SOL", solPrice);
+
+    mints.forEach((mint) => {
+      const price = Number(data?.[mint]?.price ?? 0);
+      if (Number.isFinite(price) && price > 0) priceByMint.set(mint, price);
+    });
+  } catch {
+    return priceByMint;
+  }
+
+  return priceByMint;
 }
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const address = searchParams.get("address");
-  if (!address) {
-    return new Response(JSON.stringify({ error: "Missing address" }), { status: 400 });
-  }
+  if (!address) return new Response(JSON.stringify({ error: "Missing address" }), { status: 400 });
 
   let owner: PublicKey;
   try {
@@ -61,19 +112,54 @@ export async function GET(request: Request) {
       });
     });
 
-    const tokens = [...holdingsByMint.entries()]
+    const topEntries = [...holdingsByMint.entries()]
       .map(([mint, amount]) => ({ mint, amount }))
       .sort((a, b) => b.amount - a.amount)
-      .slice(0, 6);
+      .slice(0, 12);
+
+    const mintList = topEntries.map((entry) => entry.mint);
+    const [prices, profiles] = await Promise.all([
+      fetchUsdPrices(mintList),
+      Promise.all(mintList.map((mint) => fetchTokenProfile(mint))),
+    ]);
+
+    const tokens: TokenDetails[] = topEntries.slice(0, 8).map((entry, idx) => {
+      const profile = profiles[idx];
+      const usdPrice = prices.get(entry.mint) ?? null;
+      const usdValue = usdPrice !== null ? entry.amount * usdPrice : null;
+      return {
+        mint: entry.mint,
+        amount: entry.amount,
+        symbol: profile?.symbol ?? `Token ${entry.mint.slice(0, 4)}`,
+        name: profile?.name ?? entry.mint,
+        logoURI: profile?.logoURI ?? null,
+        usdPrice,
+        usdValue,
+      };
+    });
+
+    const solPriceUsd = prices.get("SOL") ?? null;
+    const solValueUsd = solBalance !== null && solPriceUsd !== null ? solBalance * solPriceUsd : null;
+    const tokenTotalUsd = tokens.reduce((sum, token) => sum + (token.usdValue ?? 0), 0);
+    const totalBalanceUsd = (solValueUsd ?? 0) + tokenTotalUsd;
 
     let status = "Failed to sync wallet balances";
     if (solBalance !== null && tokenSourceAvailable) status = "Wallet synced";
     else if (solBalance !== null) status = "SOL balance synced (token accounts unavailable)";
     else if (tokenSourceAvailable) status = "Token balances synced (SOL balance unavailable)";
 
-    return new Response(JSON.stringify({ solBalance, tokens, status }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        solBalance,
+        solPriceUsd,
+        solValueUsd,
+        totalBalanceUsd,
+        tokens,
+        status,
+        solMeta: { symbol: "SOL", name: "Solana", logoURI: SOL_ICON },
+      }),
+      { headers: { "Content-Type": "application/json" } }
+    );
   } catch {
     return new Response(JSON.stringify({ error: "Wallet sync failed" }), { status: 500 });
   }

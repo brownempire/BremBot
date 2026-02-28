@@ -360,6 +360,41 @@ button:disabled {
   background: rgba(13, 17, 25, 0.7);
 }
 
+.holding-row strong {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.holding-row small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.total-row {
+  border-color: rgba(130, 180, 255, 0.35);
+}
+
+.token-meta {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.token-meta > span {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.token-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.12);
+}
+
 @media (max-width: 720px) {
   .header-alert-slot {
     width: 100%;
