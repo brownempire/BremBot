@@ -1,11 +1,16 @@
 "use client";
 
 import { PropsWithChildren, useMemo } from "react";
-import { UnifiedWalletProvider } from "@jup-ag/wallet-adapter";
+import { HARDCODED_WALLET_STANDARDS, UnifiedWalletProvider } from "@jup-ag/wallet-adapter";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function SolanaWalletProvider({ children }: PropsWithChildren) {
+  const jupiterWalletOption = useMemo(
+    () => HARDCODED_WALLET_STANDARDS.filter((wallet) => wallet.id === "Jupiter Mobile"),
+    []
+  );
+
   const walletMetadata = useMemo(
     () => ({
       name: "BremLogic",
@@ -24,7 +29,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         env: "mainnet-beta",
         metadata: walletMetadata,
         theme: "jupiter",
-        hardcodedWallets: [],
+        hardcodedWallets: jupiterWalletOption,
       }}
     >
       {children}

@@ -782,12 +782,12 @@ function DashboardPage() {
             {wallet.connected ? <button onClick={disconnectWallet}>Disconnect</button> : null}
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet connection now uses Jupiter Unified Wallet with in-app wallets only (no external website redirect list).
+            Wallet connection uses Jupiter Unified Wallet and keeps Jupiter Mobile available as a connect option.
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect an in-app Jupiter wallet session to trade."}
+              : "Connect a Jupiter-compatible wallet session to trade."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
