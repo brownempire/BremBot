@@ -646,7 +646,7 @@ function DashboardPage() {
           <div>
             <Image
               className="brand-logo"
-              src="/bremlogic-logo.png"
+              src="/header-photo.png"
               alt="BremLogic"
               width={1038}
               height={338}
