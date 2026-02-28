@@ -14,11 +14,21 @@ type TokenDetails = {
   usdValue: number | null;
 };
 
+type TokenProfile = {
+  symbol: string;
+  name: string;
+  logoURI: string | null;
+};
+
 function getRpcEndpoint() {
   return process.env.SOLANA_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl("mainnet-beta");
 }
 
-async function fetchTokenProfile(mint: string) {
+function shortAddress(address: string) {
+  return `${address.slice(0, 4)}..${address.slice(-4)}`;
+}
+
+async function fetchTokenProfileFromJupiter(mint: string): Promise<TokenProfile | null> {
   try {
     const response = await fetch(`https://lite-api.jup.ag/tokens/v1/token/${mint}`, {
       cache: "no-store",
@@ -26,8 +36,8 @@ async function fetchTokenProfile(mint: string) {
     if (!response.ok) return null;
     const payload = await response.json();
     return {
-      symbol: String(payload?.symbol ?? "TOKEN"),
-      name: String(payload?.name ?? "Unknown Token"),
+      symbol: String(payload?.symbol ?? "").trim(),
+      name: String(payload?.name ?? "").trim(),
       logoURI: typeof payload?.logoURI === "string" ? payload.logoURI : null,
     };
   } catch {
@@ -35,29 +45,93 @@ async function fetchTokenProfile(mint: string) {
   }
 }
 
+async function fetchTokenProfileFromDexScreener(mint: string): Promise<TokenProfile | null> {
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const pair = Array.isArray(payload?.pairs) ? payload.pairs[0] : null;
+    const base = pair?.baseToken;
+    const quote = pair?.quoteToken;
+    const candidate = base?.address === mint ? base : quote?.address === mint ? quote : base;
+    if (!candidate) return null;
+
+    return {
+      symbol: String(candidate.symbol ?? "").trim(),
+      name: String(candidate.name ?? "").trim(),
+      logoURI: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchTokenProfile(mint: string): Promise<TokenProfile | null> {
+  const [jupiter, dex] = await Promise.all([
+    fetchTokenProfileFromJupiter(mint),
+    fetchTokenProfileFromDexScreener(mint),
+  ]);
+
+  const symbol = jupiter?.symbol || dex?.symbol || shortAddress(mint);
+  const name = jupiter?.name || dex?.name || shortAddress(mint);
+  const logoURI = jupiter?.logoURI ?? null;
+  return { symbol, name, logoURI };
+}
+
+async function fetchSolPriceUsd() {
+  try {
+    const response = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd",
+      { cache: "no-store" }
+    );
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const value = Number(payload?.solana?.usd ?? 0);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchUsdPrices(mints: string[]) {
   const priceByMint = new Map<string, number>();
-  if (mints.length === 0) return priceByMint;
 
   try {
     const response = await fetch(
-      `https://price.jup.ag/v4/price?ids=${encodeURIComponent(["SOL", ...mints].join(","))}`,
+      `https://price.jup.ag/v6/price?ids=${encodeURIComponent(mints.join(","))}`,
       { cache: "no-store" }
     );
-    if (!response.ok) return priceByMint;
-    const payload = await response.json();
-    const data = payload?.data ?? {};
-
-    const solPrice = Number(data?.SOL?.price ?? 0);
-    if (Number.isFinite(solPrice) && solPrice > 0) priceByMint.set("SOL", solPrice);
-
-    mints.forEach((mint) => {
-      const price = Number(data?.[mint]?.price ?? 0);
-      if (Number.isFinite(price) && price > 0) priceByMint.set(mint, price);
-    });
+    if (response.ok) {
+      const payload = await response.json();
+      const data = payload?.data ?? {};
+      mints.forEach((mint) => {
+        const price = Number(data?.[mint]?.price ?? 0);
+        if (Number.isFinite(price) && price > 0) priceByMint.set(mint, price);
+      });
+    }
   } catch {
-    return priceByMint;
+    // noop
   }
+
+  const unresolved = mints.filter((mint) => !priceByMint.has(mint));
+  await Promise.all(
+    unresolved.map(async (mint) => {
+      try {
+        const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const payload = await response.json();
+        const pair = Array.isArray(payload?.pairs) ? payload.pairs[0] : null;
+        const priceUsd = Number(pair?.priceUsd ?? 0);
+        if (Number.isFinite(priceUsd) && priceUsd > 0) priceByMint.set(mint, priceUsd);
+      } catch {
+        // noop
+      }
+    })
+  );
 
   return priceByMint;
 }
@@ -118,9 +192,10 @@ export async function GET(request: Request) {
       .slice(0, 12);
 
     const mintList = topEntries.map((entry) => entry.mint);
-    const [prices, profiles] = await Promise.all([
+    const [prices, profiles, solPriceUsd] = await Promise.all([
       fetchUsdPrices(mintList),
       Promise.all(mintList.map((mint) => fetchTokenProfile(mint))),
+      fetchSolPriceUsd(),
     ]);
 
     const tokens: TokenDetails[] = topEntries.slice(0, 8).map((entry, idx) => {
@@ -130,15 +205,14 @@ export async function GET(request: Request) {
       return {
         mint: entry.mint,
         amount: entry.amount,
-        symbol: profile?.symbol ?? `Token ${entry.mint.slice(0, 4)}`,
-        name: profile?.name ?? entry.mint,
+        symbol: profile?.symbol || shortAddress(entry.mint),
+        name: profile?.name || shortAddress(entry.mint),
         logoURI: profile?.logoURI ?? null,
         usdPrice,
         usdValue,
       };
     });
 
-    const solPriceUsd = prices.get("SOL") ?? null;
     const solValueUsd = solBalance !== null && solPriceUsd !== null ? solBalance * solPriceUsd : null;
     const tokenTotalUsd = tokens.reduce((sum, token) => sum + (token.usdValue ?? 0), 0);
     const totalBalanceUsd = (solValueUsd ?? 0) + tokenTotalUsd;

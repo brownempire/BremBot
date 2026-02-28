@@ -796,32 +796,32 @@ function DashboardPage() {
               <span>Total Balance</span>
               <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
             </div>
-            <div className="holding-row">
+            <div className="holding-row token-row">
               <span className="token-meta">
                 <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png" alt="Solana" className="token-icon" />
-                <span>
-                  <strong>SOL</strong>
-                  <small>Solana</small>
+                <span className="token-lines">
+                  <span className="token-line token-top">Solana</span>
+                  <span className="token-line token-bottom">SOL</span>
                 </span>
               </span>
-              <strong>
-                {solBalance === null ? "-" : solBalance.toFixed(4)}
-                <small>{solValueUsd === null ? "" : ` (${formatUsd(solValueUsd)})`}</small>
-              </strong>
+              <span className="token-values">
+                <span className="token-line token-top">{solValueUsd === null ? "-" : formatUsd(solValueUsd)}</span>
+                <span className="token-line token-bottom">{solBalance === null ? "-" : solBalance.toFixed(4)}</span>
+              </span>
             </div>
             {walletTokens.map((token) => (
-              <div key={token.mint} className="holding-row">
+              <div key={token.mint} className="holding-row token-row">
                 <span className="token-meta">
                   {token.logoURI ? <img src={token.logoURI} alt={token.symbol ?? token.name ?? token.mint} className="token-icon" /> : null}
-                  <span>
-                    <strong>{token.symbol ?? shortAddress(token.mint)}</strong>
-                    <small>{token.name ?? token.mint}</small>
+                  <span className="token-lines">
+                    <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
+                    <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
                   </span>
                 </span>
-                <strong>
-                  {token.amount.toFixed(4)}
-                  <small>{token.usdValue ? ` (${formatUsd(token.usdValue)})` : ""}</small>
-                </strong>
+                <span className="token-values">
+                  <span className="token-line token-top">{token.usdValue !== null && token.usdValue !== undefined ? formatUsd(token.usdValue) : "-"}</span>
+                  <span className="token-line token-bottom">{token.amount.toFixed(4)}</span>
+                </span>
               </div>
             ))}
           </div>

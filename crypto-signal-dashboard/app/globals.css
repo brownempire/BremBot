@@ -360,16 +360,6 @@ button:disabled {
   background: rgba(13, 17, 25, 0.7);
 }
 
-.holding-row strong {
-  display: inline-flex;
-  gap: 6px;
-  align-items: baseline;
-}
-
-.holding-row small {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
 
 .total-row {
   border-color: rgba(130, 180, 255, 0.35);
@@ -381,10 +371,36 @@ button:disabled {
   align-items: center;
 }
 
-.token-meta > span {
+
+.token-row {
+  align-items: center;
+}
+
+.token-lines,
+.token-values {
   display: inline-flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.token-values {
+  text-align: right;
+  min-width: 120px;
+}
+
+.token-line {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.token-top {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.token-bottom {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .token-icon {
