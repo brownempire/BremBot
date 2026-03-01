@@ -17,6 +17,7 @@ import { formatUsd } from "@/lib/utils";
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
+const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
 
 type TrackedMarket = {
   id: string;
@@ -96,6 +97,7 @@ function DashboardPage() {
   const [dayChange24h, setDayChange24h] = useState<Record<string, number>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [paramsSaveStatus, setParamsSaveStatus] = useState("Using defaults");
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
@@ -355,6 +357,16 @@ function DashboardPage() {
       setParamsSaveStatus("Saved preset loaded");
     } catch {
       setParamsSaveStatus("Failed to load saved preset");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AUTO_TRADE_STORAGE_KEY);
+      if (!raw) return;
+      setAutoTradeEnabled(raw === "true");
+    } catch {
+      setAutoTradeEnabled(false);
     }
   }, []);
 
@@ -655,6 +667,18 @@ function DashboardPage() {
     setParamsSaveStatus("Reset to defaults");
   }
 
+  function toggleAutoTrade() {
+    setAutoTradeEnabled((previous) => {
+      const next = !previous;
+      try {
+        window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }
+
   function handleTradeSuccess(trade: JupiterTradeRecord) {
     const walletAddress = trade.walletAddress ?? wallet.publicKey?.toBase58();
     if (!walletAddress) return;
@@ -830,6 +854,15 @@ function DashboardPage() {
           <h3>Signal Parameters</h3>
           <div className="controls params-toolbar">
             <div className="subtext">{paramsSaveStatus}</div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoTradeEnabled}
+              className={`auto-trade-toggle ${autoTradeEnabled ? "on" : "off"}`}
+              onClick={toggleAutoTrade}
+            >
+              Auto-trade: {autoTradeEnabled ? "On" : "Off"}
+            </button>
             <button type="button" onClick={saveSignalParams}>Save</button>
             <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
           </div>
