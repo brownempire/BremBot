@@ -23,7 +23,7 @@ git rev-parse --is-inside-work-tree && git branch --show-current
 git remote -v
 
 # If remote is missing, add it (replace URL if needed)
-# git remote add origin https://github.com/<OWNER>/BremBot.git
+# git remote add origin git@github.com:<OWNER>/BremBot.git
 
 # Confirm you can reach GitHub refs
 git ls-remote --heads origin

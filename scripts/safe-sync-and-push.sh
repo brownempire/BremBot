@@ -16,7 +16,6 @@ What it does:
 Notes:
   - If there are no file changes, commit step is skipped.
   - First push for a branch sets upstream automatically.
-  - For HTTPS remotes in non-interactive environments, set GITHUB_TOKEN to enable authenticated git operations.
 USAGE
 }
 
@@ -70,15 +69,8 @@ if [[ -z "$CURRENT_BRANCH" ]]; then
   exit 1
 fi
 
-ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-GIT_AUTH_ARGS=()
-if [[ -n "${GITHUB_TOKEN:-}" && "$ORIGIN_URL" =~ ^https:// ]]; then
-  AUTH_B64="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-  GIT_AUTH_ARGS=(-c "http.extraheader=AUTHORIZATION: basic $AUTH_B64")
-fi
-
 git_auth() {
-  git "${GIT_AUTH_ARGS[@]}" "$@"
+  git "$@"
 }
 
 echo "==> Repo: $REPO_ROOT"
