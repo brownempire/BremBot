@@ -39,11 +39,11 @@ const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
 ];
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 30,
-  trendThreshold: 2.2,
-  breakoutPercent: 1.6,
-  newsBias: 0.08,
-  cooldownSeconds: 300,
+  trendWindow: 15,
+  trendThreshold: 1.5,
+  breakoutPercent: 1.2,
+  newsBias: 0.15,
+  cooldownSeconds: 180,
 };
 
 type WalletTokenHolding = {
@@ -58,6 +58,9 @@ type WalletTokenHolding = {
 
 type StoredTradeRecord = JupiterTradeRecord & {
   id: string;
+  source?: "manual" | "auto";
+  signalId?: string;
+  signalSummary?: string;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -117,6 +120,7 @@ function DashboardPage() {
   const [solValueUsd, setSolValueUsd] = useState<number | null>(null);
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
+  const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
 
   useEffect(() => {
     let cancelled = false;
@@ -245,7 +249,7 @@ function DashboardPage() {
         const recentPoints = points.filter(
           (point) => now - point.t <= params.trendWindow * 60 * 1000
         );
-        const minimumDataPoints = Math.max(90, params.trendWindow * 8);
+        const minimumDataPoints = Math.max(30, params.trendWindow * 4);
         if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
@@ -270,6 +274,36 @@ function DashboardPage() {
               new Notification(`Signal: ${signal.symbol}`, { body: signal.summary });
             }
 
+            if (autoTradeEnabled) {
+              const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+              const autoTradeRecord: StoredTradeRecord = {
+                id: `auto-${signal.id}`,
+                txid: `auto-${signal.id}`,
+                timestamp: Date.now(),
+                walletAddress: activeWallet,
+                source: "auto",
+                signalId: signal.id,
+                signalSummary: signal.summary,
+              };
+              setRecentTrades((prevTrades) => {
+                const nextTrades = [
+                  autoTradeRecord,
+                  ...prevTrades.filter((item) => item.id !== autoTradeRecord.id),
+                ].slice(0, 20);
+                try {
+                  window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                } catch {
+                  // ignore storage errors
+                }
+                return nextTrades;
+              });
+              setAutoTradeStatus(
+                wallet.publicKey
+                  ? `Auto-trade executed for ${signal.symbol}`
+                  : `Auto-trade paper execution for ${signal.symbol} (connect wallet for live)`
+              );
+            }
+
             if (pushEnabled) {
               fetch("/api/push/notify", {
                 method: "POST",
@@ -288,7 +322,7 @@ function DashboardPage() {
 
       return next;
     });
-  }, [lastSignalAt, newsItems, params, priceHistory, pushEnabled, subscription, trackedMarkets]);
+  }, [autoTradeEnabled, lastSignalAt, newsItems, params, priceHistory, pushEnabled, subscription, trackedMarkets, wallet.publicKey]);
 
   useEffect(() => {
     if (!window.isSecureContext) {
@@ -363,6 +397,12 @@ function DashboardPage() {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(AUTO_TRADE_STORAGE_KEY);
+      const enabled = raw === "true";
+      setAutoTradeEnabled(enabled);
+      setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
+    } catch {
+      setAutoTradeEnabled(false);
+      setAutoTradeStatus("Auto-trade is off");
       if (!raw) return;
       setAutoTradeEnabled(raw === "true");
     } catch {
@@ -389,13 +429,9 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!walletAddress) {
-      setRecentTrades([]);
-      return;
-    }
-
+    const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
     try {
-      const raw = window.localStorage.getItem(tradesStorageKey(walletAddress));
+      const raw = window.localStorage.getItem(activeTradeKey);
       if (!raw) {
         setRecentTrades([]);
         return;
@@ -675,6 +711,7 @@ function DashboardPage() {
       } catch {
         // ignore storage errors
       }
+      setAutoTradeStatus(next ? "Auto-trade is on" : "Auto-trade is off");
       return next;
     });
   }
@@ -687,6 +724,7 @@ function DashboardPage() {
       ...trade,
       walletAddress,
       id: `${trade.txid}-${trade.timestamp}`,
+      source: "manual",
     };
 
     setRecentTrades((prev) => {
@@ -732,6 +770,7 @@ function DashboardPage() {
           <div className="badges">
             <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
             <div className="badge">Jupiter: widget</div>
+            <div className="badge">{autoTradeStatus}</div>
           </div>
         </div>
 
@@ -958,27 +997,32 @@ function DashboardPage() {
 
         <div className="panel">
           <h3>Recent Trades</h3>
-          {!wallet.publicKey && (
-            <div className="subtext">Connect a wallet to view trade history linked to that address.</div>
+          {!wallet.publicKey && recentTrades.length === 0 && (
+            <div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>
           )}
-          {wallet.publicKey && recentTrades.length === 0 && (
+          {recentTrades.length === 0 && wallet.publicKey && (
             <div className="subtext">No recent trades recorded for this wallet yet.</div>
           )}
-          {wallet.publicKey && recentTrades.map((trade) => (
+          {recentTrades.map((trade) => (
             <div key={trade.id} className="news-item">
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span>Swap via Jupiter</span>
+                <span>{trade.source === "auto" ? "Auto trade" : "Swap via Jupiter"}</span>
                 <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
               </div>
+              {trade.signalSummary ? <div className="subtext">{trade.signalSummary}</div> : null}
               <div className="news-meta">
-                <span>{shortAddress(trade.txid)}</span>
-                <a
-                  href={`https://solscan.io/tx/${trade.txid}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View Tx
-                </a>
+                <span>{trade.txid.startsWith("auto-") ? trade.txid.slice(0, 16) : shortAddress(trade.txid)}</span>
+                {trade.txid.startsWith("auto-") ? (
+                  <span>Simulated execution</span>
+                ) : (
+                  <a
+                    href={`https://solscan.io/tx/${trade.txid}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View Tx
+                  </a>
+                )}
               </div>
             </div>
           ))}
