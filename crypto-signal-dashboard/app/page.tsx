@@ -219,7 +219,7 @@ function DashboardPage() {
         stopSimulationFallback();
         setPriceFeedStatus(source);
         appendPrices(pricesBySlot, changes24hBySlot, now);
-      } catch {
+      } catch (_error) {
         if (!cancelled) startSimulationFallback();
       }
     };
@@ -292,6 +292,7 @@ function DashboardPage() {
                 ].slice(0, 20);
                 try {
                   window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                } catch (_error) {
                 } catch {
                   // ignore storage errors
                 }
@@ -360,7 +361,7 @@ function DashboardPage() {
         const payload = await response.json();
         if (!response.ok || !Array.isArray(payload?.items) || cancelled) return;
         setNewsItems(payload.items as NewsItem[]);
-      } catch {
+      } catch (_error) {
         if (!cancelled) setNewsItems(getMockNews());
       }
     };
@@ -389,7 +390,7 @@ function DashboardPage() {
         cooldownSeconds: Number(parsed.cooldownSeconds ?? DEFAULT_PARAMS.cooldownSeconds),
       });
       setParamsSaveStatus("Saved preset loaded");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Failed to load saved preset");
     }
   }, []);
@@ -400,6 +401,9 @@ function DashboardPage() {
       const enabled = raw === "true";
       setAutoTradeEnabled(enabled);
       setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
+    } catch (_error) {
+      setAutoTradeEnabled(false);
+      setAutoTradeStatus("Auto-trade is off");
     } catch {
       setAutoTradeEnabled(false);
       setAutoTradeStatus("Auto-trade is off");
@@ -438,7 +442,7 @@ function DashboardPage() {
       }
       const parsed = JSON.parse(raw) as StoredTradeRecord[];
       setRecentTrades(Array.isArray(parsed) ? parsed : []);
-    } catch {
+    } catch (_error) {
       setRecentTrades([]);
     }
   }, [walletAddress]);
@@ -468,7 +472,7 @@ function DashboardPage() {
         setPortfolioStatus(typeof payload.status === "string" ? payload.status : "Wallet synced");
         return;
       }
-    } catch {
+    } catch (_error) {
       // fallback to direct client RPC calls below
     }
 
@@ -497,7 +501,7 @@ function DashboardPage() {
         } else {
           setSolBalance(null);
         }
-      } catch {
+      } catch (_error) {
         setSolBalance(null);
       }
     }
@@ -670,7 +674,7 @@ function DashboardPage() {
         return;
       }
       setPushStatus("Test push sent");
-    } catch {
+    } catch (_error) {
       setPushStatus("Push test failed");
     }
   }
@@ -679,7 +683,7 @@ function DashboardPage() {
     try {
       await wallet.disconnect();
       setPortfolioStatus("Wallet disconnected");
-    } catch {
+    } catch (_error) {
       setPortfolioStatus("Wallet disconnect failed");
     }
   }
@@ -688,7 +692,7 @@ function DashboardPage() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
       setParamsSaveStatus("Saved");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Save failed");
     }
   }
@@ -697,7 +701,7 @@ function DashboardPage() {
     setParams(DEFAULT_PARAMS);
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
-    } catch {
+    } catch (_error) {
       // ignore storage errors
     }
     setParamsSaveStatus("Reset to defaults");
@@ -708,6 +712,7 @@ function DashboardPage() {
       const next = !previous;
       try {
         window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
+      } catch (_error) {
       } catch {
         // ignore storage errors
       }
@@ -731,7 +736,7 @@ function DashboardPage() {
       const next = [entry, ...prev.filter((item) => item.txid !== entry.txid)].slice(0, 20);
       try {
         window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(next));
-      } catch {
+      } catch (_error) {
         // ignore storage errors
       }
       return next;
