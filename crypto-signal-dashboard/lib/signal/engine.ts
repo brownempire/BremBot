@@ -63,6 +63,10 @@ export function detectSignals({
   const recent = points.slice(Math.max(0, points.length - Math.max(30, Math.floor(points.length / 3))));
   const avg = recent.reduce((sum, point) => sum + point.v, 0) / recent.length;
   const breakoutChange = percentChange(points[points.length - 1].v, avg);
+  const shortWindow = points.slice(Math.max(0, points.length - Math.min(45, Math.max(12, Math.floor(points.length / 6)))));
+  const shortMomentum = shortWindow.length > 1
+    ? percentChange(shortWindow[shortWindow.length - 1].v, shortWindow[0].v)
+    : 0;
 
   const signals: Signal[] = [];
 
@@ -86,6 +90,16 @@ export function detectSignals({
       direction: breakoutChange >= 0 ? "bullish" : "bearish",
       confidence: scoreConfidence(Math.abs(breakoutChange), params.breakoutPercent),
       summary: `Price action breakout of ${breakoutChange.toFixed(2)}% vs recent avg.`,
+      timestamp: now,
+    });
+  } else if (Math.abs(shortMomentum) >= params.breakoutPercent * 0.6) {
+    signals.push({
+      id: `${symbol}-breakout-${now}`,
+      symbol,
+      type: "breakout",
+      direction: shortMomentum >= 0 ? "bullish" : "bearish",
+      confidence: scoreConfidence(Math.abs(shortMomentum), Math.max(params.breakoutPercent * 0.6, 0.1)),
+      summary: `Short-term momentum move of ${shortMomentum.toFixed(2)}% in the recent window.`,
       timestamp: now,
     });
   }
