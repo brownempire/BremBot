@@ -860,7 +860,14 @@ function DashboardPage() {
             </div>
             <div className="holding-row token-row">
               <span className="token-meta">
-                <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png" alt="Solana" className="token-icon" />
+                <Image
+                  src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png"
+                  alt="Solana"
+                  className="token-icon"
+                  width={20}
+                  height={20}
+                  unoptimized
+                />
                 <span className="token-lines">
                   <span className="token-line token-top">Solana</span>
                   <span className="token-line token-bottom">SOL</span>
@@ -874,7 +881,16 @@ function DashboardPage() {
             {walletTokens.map((token) => (
               <div key={token.mint} className="holding-row token-row">
                 <span className="token-meta">
-                  {token.logoURI ? <img src={token.logoURI} alt={token.symbol ?? token.name ?? token.mint} className="token-icon" /> : null}
+                  {token.logoURI ? (
+                    <Image
+                      src={token.logoURI}
+                      alt={token.symbol ?? token.name ?? token.mint}
+                      className="token-icon"
+                      width={20}
+                      height={20}
+                      unoptimized
+                    />
+                  ) : null}
                   <span className="token-lines">
                     <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
                     <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
