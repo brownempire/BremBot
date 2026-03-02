@@ -403,6 +403,10 @@ function DashboardPage() {
     } catch {
       setAutoTradeEnabled(false);
       setAutoTradeStatus("Auto-trade is off");
+      if (!raw) return;
+      setAutoTradeEnabled(raw === "true");
+    } catch {
+      setAutoTradeEnabled(false);
     }
   }, []);
 
