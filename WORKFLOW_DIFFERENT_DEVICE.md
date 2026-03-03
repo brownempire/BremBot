@@ -23,7 +23,9 @@ git rev-parse --is-inside-work-tree && git branch --show-current
 git remote -v
 
 # If remote is missing, add it (replace URL if needed)
-# git remote add origin git@github.com:<OWNER>/BremBot.git
+# git remote add origin https://github.com/brownempire/BremBot.git
+# (or SSH if your device can reach github.com:22)
+# git remote add origin git@github.com:brownempire/BremBot.git
 
 # Confirm you can reach GitHub refs
 git ls-remote --heads origin
@@ -149,6 +151,9 @@ Use the helper script to run the safe flow in one command:
 ```bash
 cd /workspace/BremBot
 scripts/safe-sync-and-push.sh -m "your commit message"
+
+# Optional if origin is missing/custom
+scripts/safe-sync-and-push.sh -m "your commit message" --origin-url https://github.com/brownempire/BremBot.git
 ```
 
 Optional flags:

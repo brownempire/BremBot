@@ -3,7 +3,9 @@
 ## 0) Establish GitHub remote + verify connection (exact script)
 
 ```bash
-git remote add origin git@github.com:brownempire/BremBot.git
+git remote add origin https://github.com/brownempire/BremBot.git
+# If SSH networking/auth is available instead:
+# git remote set-url origin git@github.com:brownempire/BremBot.git
 git remote -v
 git ls-remote --heads origin
 ```
