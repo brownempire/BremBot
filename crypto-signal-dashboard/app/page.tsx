@@ -219,7 +219,7 @@ function DashboardPage() {
         stopSimulationFallback();
         setPriceFeedStatus(source);
         appendPrices(pricesBySlot, changes24hBySlot, now);
-      } catch {
+      } catch (_error) {
         if (!cancelled) startSimulationFallback();
       }
     };
@@ -292,6 +292,7 @@ function DashboardPage() {
                 ].slice(0, 20);
                 try {
                   window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                } catch (_error) {
                 } catch {
                   // ignore storage errors
                 }
@@ -360,7 +361,7 @@ function DashboardPage() {
         const payload = await response.json();
         if (!response.ok || !Array.isArray(payload?.items) || cancelled) return;
         setNewsItems(payload.items as NewsItem[]);
-      } catch {
+      } catch (_error) {
         if (!cancelled) setNewsItems(getMockNews());
       }
     };
@@ -389,7 +390,7 @@ function DashboardPage() {
         cooldownSeconds: Number(parsed.cooldownSeconds ?? DEFAULT_PARAMS.cooldownSeconds),
       });
       setParamsSaveStatus("Saved preset loaded");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Failed to load saved preset");
     }
   }, []);
@@ -400,13 +401,12 @@ function DashboardPage() {
       const enabled = raw === "true";
       setAutoTradeEnabled(enabled);
       setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
+    } catch (_error) {
+      setAutoTradeEnabled(false);
+      setAutoTradeStatus("Auto-trade is off");
     } catch {
       setAutoTradeEnabled(false);
       setAutoTradeStatus("Auto-trade is off");
-      if (!raw) return;
-      setAutoTradeEnabled(raw === "true");
-    } catch {
-      setAutoTradeEnabled(false);
     }
   }, []);
 
@@ -438,7 +438,7 @@ function DashboardPage() {
       }
       const parsed = JSON.parse(raw) as StoredTradeRecord[];
       setRecentTrades(Array.isArray(parsed) ? parsed : []);
-    } catch {
+    } catch (_error) {
       setRecentTrades([]);
     }
   }, [walletAddress]);
@@ -468,7 +468,7 @@ function DashboardPage() {
         setPortfolioStatus(typeof payload.status === "string" ? payload.status : "Wallet synced");
         return;
       }
-    } catch {
+    } catch (_error) {
       // fallback to direct client RPC calls below
     }
 
@@ -497,7 +497,7 @@ function DashboardPage() {
         } else {
           setSolBalance(null);
         }
-      } catch {
+      } catch (_error) {
         setSolBalance(null);
       }
     }
@@ -670,7 +670,7 @@ function DashboardPage() {
         return;
       }
       setPushStatus("Test push sent");
-    } catch {
+    } catch (_error) {
       setPushStatus("Push test failed");
     }
   }
@@ -679,7 +679,7 @@ function DashboardPage() {
     try {
       await wallet.disconnect();
       setPortfolioStatus("Wallet disconnected");
-    } catch {
+    } catch (_error) {
       setPortfolioStatus("Wallet disconnect failed");
     }
   }
@@ -688,7 +688,7 @@ function DashboardPage() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
       setParamsSaveStatus("Saved");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Save failed");
     }
   }
@@ -697,7 +697,7 @@ function DashboardPage() {
     setParams(DEFAULT_PARAMS);
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
-    } catch {
+    } catch (_error) {
       // ignore storage errors
     }
     setParamsSaveStatus("Reset to defaults");
@@ -708,6 +708,7 @@ function DashboardPage() {
       const next = !previous;
       try {
         window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
+      } catch (_error) {
       } catch {
         // ignore storage errors
       }
@@ -731,7 +732,7 @@ function DashboardPage() {
       const next = [entry, ...prev.filter((item) => item.txid !== entry.txid)].slice(0, 20);
       try {
         window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(next));
-      } catch {
+      } catch (_error) {
         // ignore storage errors
       }
       return next;
@@ -860,7 +861,14 @@ function DashboardPage() {
             </div>
             <div className="holding-row token-row">
               <span className="token-meta">
-                <img src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png" alt="Solana" className="token-icon" />
+                <Image
+                  src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png"
+                  alt="Solana"
+                  className="token-icon"
+                  width={20}
+                  height={20}
+                  unoptimized
+                />
                 <span className="token-lines">
                   <span className="token-line token-top">Solana</span>
                   <span className="token-line token-bottom">SOL</span>
@@ -874,7 +882,16 @@ function DashboardPage() {
             {walletTokens.map((token) => (
               <div key={token.mint} className="holding-row token-row">
                 <span className="token-meta">
-                  {token.logoURI ? <img src={token.logoURI} alt={token.symbol ?? token.name ?? token.mint} className="token-icon" /> : null}
+                  {token.logoURI ? (
+                    <Image
+                      src={token.logoURI}
+                      alt={token.symbol ?? token.name ?? token.mint}
+                      className="token-icon"
+                      width={20}
+                      height={20}
+                      unoptimized
+                    />
+                  ) : null}
                   <span className="token-lines">
                     <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
                     <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
