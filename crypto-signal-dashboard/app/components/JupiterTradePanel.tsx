@@ -18,9 +18,13 @@ export type JupiterTradeRecord = {
 
 type JupiterTradePanelProps = {
   onTradeSuccess?: (trade: JupiterTradeRecord) => void;
+  defaultInputMint?: string;
 };
 
-export function JupiterTradePanel({ onTradeSuccess }: JupiterTradePanelProps) {
+export function JupiterTradePanel({
+  onTradeSuccess,
+  defaultInputMint = "So11111111111111111111111111111111111111112",
+}: JupiterTradePanelProps) {
   const wallet = useWallet();
   const initialized = useRef(false);
   const onTradeSuccessRef = useRef(onTradeSuccess);
@@ -50,7 +54,7 @@ export function JupiterTradePanel({ onTradeSuccess }: JupiterTradePanelProps) {
       },
       defaultExplorer: "Solscan",
       formProps: {
-        initialInputMint: "So11111111111111111111111111111111111111112",
+        initialInputMint: defaultInputMint,
       },
       onSuccess: ({ txid, quoteResponseMeta }) => {
         const quote = quoteResponseMeta?.quoteResponse;
@@ -72,15 +76,18 @@ export function JupiterTradePanel({ onTradeSuccess }: JupiterTradePanelProps) {
       close();
       initialized.current = false;
     };
-  }, [wallet]);
+  }, [defaultInputMint, wallet]);
 
   useEffect(() => {
     if (!initialized.current) return;
     syncProps({
       enableWalletPassthrough: true,
       passthroughWalletContextState: wallet,
+      formProps: {
+        initialInputMint: defaultInputMint,
+      },
     });
-  }, [wallet]);
+  }, [defaultInputMint, wallet]);
 
   return null;
 }

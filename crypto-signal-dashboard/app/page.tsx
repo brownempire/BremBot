@@ -18,6 +18,7 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
+const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 
 type TrackedMarket = {
   id: string;
@@ -44,6 +45,18 @@ const DEFAULT_PARAMS: UserParams = {
   breakoutPercent: 1.2,
   newsBias: 0.15,
   cooldownSeconds: 180,
+};
+
+type AutoTradeToken = "SOL" | "USDC";
+
+type AutoTradeSettings = {
+  walletPercent: number;
+  inputToken: AutoTradeToken;
+};
+
+const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
+  walletPercent: 10,
+  inputToken: "SOL",
 };
 
 type WalletTokenHolding = {
@@ -121,6 +134,7 @@ function DashboardPage() {
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
+  const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,7 +297,7 @@ function DashboardPage() {
                 walletAddress: activeWallet,
                 source: "auto",
                 signalId: signal.id,
-                signalSummary: signal.summary,
+                signalSummary: `${signal.summary} · ${autoTradeSettings.walletPercent}% of wallet in ${autoTradeSettings.inputToken}`,
               };
               setRecentTrades((prevTrades) => {
                 const nextTrades = [
@@ -299,8 +313,8 @@ function DashboardPage() {
               });
               setAutoTradeStatus(
                 wallet.publicKey
-                  ? `Auto-trade executed for ${signal.symbol}`
-                  : `Auto-trade paper execution for ${signal.symbol} (connect wallet for live)`
+                  ? `Auto-trade executed for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`
+                  : `Auto-trade paper execution for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken} (connect wallet for live)`
               );
             }
 
@@ -322,7 +336,19 @@ function DashboardPage() {
 
       return next;
     });
-  }, [autoTradeEnabled, lastSignalAt, newsItems, params, priceHistory, pushEnabled, subscription, trackedMarkets, wallet.publicKey]);
+  }, [
+    autoTradeEnabled,
+    autoTradeSettings.inputToken,
+    autoTradeSettings.walletPercent,
+    lastSignalAt,
+    newsItems,
+    params,
+    priceHistory,
+    pushEnabled,
+    subscription,
+    trackedMarkets,
+    wallet.publicKey,
+  ]);
 
   useEffect(() => {
     if (!window.isSecureContext) {
@@ -403,6 +429,22 @@ function DashboardPage() {
     } catch (_error) {
       setAutoTradeEnabled(false);
       setAutoTradeStatus("Auto-trade is off");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings>;
+      const nextPercent = Number(parsed.walletPercent);
+      const percent = Number.isFinite(nextPercent)
+        ? Math.min(100, Math.max(1, Math.round(nextPercent)))
+        : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+      const inputToken = parsed.inputToken === "USDC" ? "USDC" : "SOL";
+      setAutoTradeSettings({ walletPercent: percent, inputToken });
+    } catch (_error) {
+      setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     }
   }, []);
 
@@ -683,6 +725,7 @@ function DashboardPage() {
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
+      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(autoTradeSettings));
       setParamsSaveStatus("Saved");
     } catch (_error) {
       setParamsSaveStatus("Save failed");
@@ -691,8 +734,10 @@ function DashboardPage() {
 
   function resetSignalParams() {
     setParams(DEFAULT_PARAMS);
+    setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
+      window.localStorage.removeItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
     } catch (_error) {
       // ignore storage errors
     }
@@ -707,7 +752,11 @@ function DashboardPage() {
       } catch (_error) {
         // ignore storage errors
       }
-      setAutoTradeStatus(next ? "Auto-trade is on" : "Auto-trade is off");
+      setAutoTradeStatus(
+        next
+          ? `Auto-trade is on (${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken})`
+          : "Auto-trade is off"
+      );
       return next;
     });
   }
@@ -736,7 +785,14 @@ function DashboardPage() {
 
   return (
     <main>
-      <JupiterTradePanel onTradeSuccess={handleTradeSuccess} />
+      <JupiterTradePanel
+        onTradeSuccess={handleTradeSuccess}
+        defaultInputMint={
+          autoTradeSettings.inputToken === "USDC"
+            ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            : "So11111111111111111111111111111111111111112"
+        }
+      />
 
       <header>
         <div className="header-row">
@@ -982,6 +1038,52 @@ function DashboardPage() {
                   setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))
                 }
               />
+            </label>
+            <label>
+              Auto-trade wallet allocation (%)
+              <input
+                type="number"
+                value={autoTradeSettings.walletPercent}
+                min={1}
+                max={100}
+                step={1}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  const walletPercent = Number.isFinite(value)
+                    ? Math.min(100, Math.max(1, Math.round(value)))
+                    : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+                  setAutoTradeSettings((prev) => {
+                    const next = { ...prev, walletPercent };
+                    try {
+                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+                    } catch (_error) {
+                      // ignore storage errors
+                    }
+                    return next;
+                  });
+                }}
+              />
+            </label>
+            <label>
+              Auto-trade token
+              <select
+                value={autoTradeSettings.inputToken}
+                onChange={(event) => {
+                  const inputToken: AutoTradeToken = event.target.value === "USDC" ? "USDC" : "SOL";
+                  setAutoTradeSettings((prev) => {
+                    const next = { ...prev, inputToken };
+                    try {
+                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+                    } catch (_error) {
+                      // ignore storage errors
+                    }
+                    return next;
+                  });
+                }}
+              >
+                <option value="SOL">Solana (SOL)</option>
+                <option value="USDC">USDC</option>
+              </select>
             </label>
           </div>
         </div>
