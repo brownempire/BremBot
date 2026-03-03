@@ -8,14 +8,9 @@ import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function SolanaWalletProvider({ children }: PropsWithChildren) {
   const hardcodedWallets = useMemo(() => {
-    const jupiterWallet = {
-      id: "Jupiter Wallet",
-      name: "Jupiter Wallet",
-      url: "https://jup.ag",
-      icon: "https://jup.ag/favicon.ico",
-    };
-
-    return [jupiterWallet, ...HARDCODED_WALLET_STANDARDS];
+    const jupiterWallet = HARDCODED_WALLET_STANDARDS.find((wallet) => wallet.id === "Jupiter Mobile");
+    if (!jupiterWallet) return HARDCODED_WALLET_STANDARDS;
+    return [jupiterWallet, ...HARDCODED_WALLET_STANDARDS.filter((wallet) => wallet.id !== "Jupiter Mobile")];
   }, []);
 
   const walletMetadata = useMemo(
@@ -36,7 +31,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         env: "mainnet-beta",
         metadata: walletMetadata,
         theme: "jupiter",
-        walletPrecedence: ["Jupiter Wallet" as WalletName, "Phantom" as WalletName],
+        walletPrecedence: ["Jupiter Wallet" as WalletName],
         hardcodedWallets,
       }}
     >
