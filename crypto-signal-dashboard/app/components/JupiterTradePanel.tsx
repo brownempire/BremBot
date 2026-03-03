@@ -83,11 +83,8 @@ export function JupiterTradePanel({
     syncProps({
       enableWalletPassthrough: true,
       passthroughWalletContextState: wallet,
-      formProps: {
-        initialInputMint: defaultInputMint,
-      },
     });
-  }, [defaultInputMint, wallet]);
+  }, [wallet]);
 
   return null;
 }
