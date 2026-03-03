@@ -96,6 +96,10 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       if (keypair) setConnected(true);
     },
     disconnect: async () => {
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(LOCAL_WALLET_STORAGE_KEY);
+      }
+      setSecretKey(null);
       setConnected(false);
     },
     createWallet: async () => {

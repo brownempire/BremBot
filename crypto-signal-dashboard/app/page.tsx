@@ -143,6 +143,7 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
+  const [showDepositModal, setShowDepositModal] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -792,7 +793,18 @@ function DashboardPage() {
 
   async function disconnectInAppWallet() {
     await wallet.disconnect();
-    setPortfolioStatus("In-app wallet disconnected");
+    setShowDepositModal(false);
+    setPortfolioStatus("Wallet disconnected and removed from this device");
+  }
+
+  async function copyDepositAddress() {
+    if (!wallet.publicKey) return;
+    try {
+      await navigator.clipboard.writeText(wallet.publicKey.toBase58());
+      setPortfolioStatus("Deposit address copied to clipboard");
+    } catch (_error) {
+      setPortfolioStatus("Address copy failed");
+    }
   }
 
   function saveSignalParams() {
@@ -937,12 +949,12 @@ function DashboardPage() {
             {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
             <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
             {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+            {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
-            {!wallet.connected && wallet.hasWallet ? <button onClick={wallet.connect}>Connect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet keys are created and managed in-browser for this app session/device.
+            Wallet keys are stored in this browser until you disconnect (which removes them from this device).
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
@@ -1133,6 +1145,25 @@ function DashboardPage() {
           </div>
         </div>
       </section>
+
+      {showDepositModal && wallet.publicKey ? (
+        <div className="modal-backdrop" onClick={() => setShowDepositModal(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Deposit Funds</h3>
+            <div className="subtext">Send SOL or SPL tokens to this wallet.</div>
+            <img
+              className="deposit-qr"
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(wallet.publicKey.toBase58())}`}
+              alt="Deposit address QR code"
+            />
+            <code className="deposit-address">{wallet.publicKey.toBase58()}</code>
+            <div className="wallet-controls">
+              <button onClick={copyDepositAddress}>Copy Address</button>
+              <button className="secondary" onClick={() => setShowDepositModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">

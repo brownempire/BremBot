@@ -301,6 +301,47 @@ button:disabled {
   align-items: center;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(1, 6, 18, 0.72);
+  z-index: 70;
+  padding: 18px;
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(17, 23, 36, 0.96), rgba(10, 14, 26, 0.96));
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.deposit-qr {
+  width: 240px;
+  height: 240px;
+  border-radius: 10px;
+  margin: 6px auto;
+  background: #fff;
+  padding: 8px;
+}
+
+.deposit-address {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  background: rgba(13, 17, 25, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
 #target-container {
   min-height: 520px;
   border-radius: 12px;
