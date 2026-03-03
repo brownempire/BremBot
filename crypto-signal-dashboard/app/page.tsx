@@ -293,7 +293,6 @@ function DashboardPage() {
                 try {
                   window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
                 } catch (_error) {
-                } catch {
                   // ignore storage errors
                 }
                 return nextTrades;
@@ -402,9 +401,6 @@ function DashboardPage() {
       setAutoTradeEnabled(enabled);
       setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
     } catch (_error) {
-      setAutoTradeEnabled(false);
-      setAutoTradeStatus("Auto-trade is off");
-    } catch {
       setAutoTradeEnabled(false);
       setAutoTradeStatus("Auto-trade is off");
     }
@@ -709,7 +705,6 @@ function DashboardPage() {
       try {
         window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
       } catch (_error) {
-      } catch {
         // ignore storage errors
       }
       setAutoTradeStatus(next ? "Auto-trade is on" : "Auto-trade is off");
