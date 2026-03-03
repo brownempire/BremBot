@@ -20,6 +20,7 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
+const DEFAULT_WALLET_PASSWORD = "bremlogic";
 
 type TrackedMarket = {
   id: string;
@@ -310,34 +311,48 @@ function DashboardPage() {
                 const outputMint = directionalOutputMint === inputMint
                   ? (inputMint === SOL_MINT ? USDC_MINT : SOL_MINT)
                   : directionalOutputMint;
-                const activeWallet = wallet.publicKey.toBase58();
-                const queuedTradeRecord: StoredTradeRecord = {
-                  id: `auto-${signal.id}`,
-                  txid: `queued-${signal.id}`,
-                  timestamp: Date.now(),
-                  walletAddress: activeWallet,
-                  source: "auto",
-                  signalId: signal.id,
-                  inputMint,
-                  outputMint,
-                  signalSummary:
-                    `${signal.summary} · queued ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`,
-                };
-                setRecentTrades((prevTrades) => {
-                  const nextTrades = [
-                    queuedTradeRecord,
-                    ...prevTrades.filter((item) => item.id !== queuedTradeRecord.id),
-                  ].slice(0, 20);
-                  try {
-                    window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
-                  } catch (_error) {
-                    // ignore storage errors
-                  }
-                  return nextTrades;
-                });
-                setAutoTradeStatus(
-                  `Signal queued for ${signal.symbol} (${signal.direction}). Execute manually from your in-app wallet.`
-                );
+                const availableInput = autoTradeSettings.inputToken === "USDC"
+                  ? (walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0)
+                  : (solBalance ?? 0);
+                const tradeAmount = Number((availableInput * (autoTradeSettings.walletPercent / 100)).toFixed(6));
+                if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
+                  setAutoTradeStatus(`Signal detected for ${signal.symbol} but no ${autoTradeSettings.inputToken} balance is available`);
+                } else {
+                  setAutoTradeStatus(`Executing auto-trade for ${signal.symbol} (${tradeAmount} ${autoTradeSettings.inputToken})...`);
+                  wallet.executeSwap({
+                    inputMint,
+                    outputMint,
+                    uiAmount: tradeAmount,
+                  }).then((result) => {
+                    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+                    const autoTradeRecord: StoredTradeRecord = {
+                      id: `auto-${signal.id}-${Date.now()}`,
+                      txid: result.txid,
+                      timestamp: Date.now(),
+                      walletAddress: activeWallet,
+                      source: "auto",
+                      signalId: signal.id,
+                      inputMint: result.inputMint,
+                      outputMint: result.outputMint,
+                      inputAmount: result.inputAmount,
+                      outputAmount: result.outputAmount,
+                      signalSummary: `${signal.summary} · executed ${tradeAmount} ${autoTradeSettings.inputToken}`,
+                    };
+                    setRecentTrades((prevTrades) => {
+                      const nextTrades = [autoTradeRecord, ...prevTrades].slice(0, 20);
+                      try {
+                        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                      } catch (_error) {
+                        // ignore storage errors
+                      }
+                      return nextTrades;
+                    });
+                    setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                  }).catch((error: unknown) => {
+                    const message = error instanceof Error ? error.message : "swap failed";
+                    setAutoTradeStatus(`Auto-trade failed for ${signal.symbol}: ${message}`);
+                  });
+                }
               } else {
                 const activeWallet = "paper-auto";
                 const autoTradeRecord: StoredTradeRecord = {
@@ -396,7 +411,10 @@ function DashboardPage() {
     pushEnabled,
     subscription,
     trackedMarkets,
+    wallet.executeSwap,
     wallet.publicKey,
+    walletTokens,
+    solBalance,
   ]);
 
   useEffect(() => {
@@ -763,8 +781,12 @@ function DashboardPage() {
   }
 
   async function createInAppWallet() {
+    const passwordInput = window.prompt(
+      "Set wallet password (4-16 chars). Leave blank to use default 'bremlogic':",
+      DEFAULT_WALLET_PASSWORD
+    );
     try {
-      await wallet.createWallet();
+      await wallet.createWallet((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet created");
     } catch (_error) {
       setPortfolioStatus("Wallet creation failed");
@@ -774,8 +796,12 @@ function DashboardPage() {
   async function importInAppWallet() {
     const secretInput = window.prompt("Paste wallet secret key JSON array (64 numbers):");
     if (!secretInput) return;
+    const passwordInput = window.prompt(
+      "Enter wallet password (4-16 chars). Leave blank for default 'bremlogic':",
+      DEFAULT_WALLET_PASSWORD
+    );
     try {
-      await wallet.importWallet(secretInput);
+      await wallet.importWallet(secretInput, (passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet imported");
     } catch (_error) {
       setPortfolioStatus("Wallet import failed");
@@ -799,7 +825,43 @@ function DashboardPage() {
   async function disconnectInAppWallet() {
     await wallet.disconnect();
     setShowDepositModal(false);
+    setShowManualTradeModal(false);
     setPortfolioStatus("Wallet disconnected and removed from this device");
+  }
+
+  async function loginInAppWallet() {
+    const passwordInput = window.prompt("Enter wallet password:", DEFAULT_WALLET_PASSWORD);
+    if (passwordInput === null) return;
+    try {
+      await wallet.login((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setPortfolioStatus("Wallet unlocked");
+    } catch (_error) {
+      setPortfolioStatus("Wallet login failed");
+    }
+  }
+
+  async function changeWalletPassword() {
+    if (!wallet.connected) {
+      setPortfolioStatus("Connect wallet before changing password");
+      return;
+    }
+
+    const currentPassword = window.prompt("Enter current password:", DEFAULT_WALLET_PASSWORD);
+    if (currentPassword === null) return;
+    const nextPassword = window.prompt("Enter new password (4-16 chars):");
+    if (nextPassword === null) return;
+    const confirmText = window.prompt("Type CHANGE to confirm password update:");
+    if (confirmText !== "CHANGE") {
+      setPortfolioStatus("Password change cancelled");
+      return;
+    }
+
+    try {
+      await wallet.changePassword((currentPassword || DEFAULT_WALLET_PASSWORD).trim(), nextPassword.trim());
+      setPortfolioStatus("Wallet password updated");
+    } catch (_error) {
+      setPortfolioStatus("Password update failed");
+    }
   }
 
   async function copyDepositAddress() {
@@ -846,6 +908,66 @@ function DashboardPage() {
     setShowManualTradeModal(false);
     setManualTxid("");
     setManualAmount("0");
+  }
+
+  async function executeManualTrade() {
+    if (!wallet.publicKey) {
+      setPortfolioStatus("Connect wallet to execute real trades");
+      return;
+    }
+
+    const amount = Number(manualAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setPortfolioStatus("Enter a valid trade amount");
+      return;
+    }
+
+    const inputMint = manualInputToken === "USDC" ? USDC_MINT : SOL_MINT;
+    const outputMint = manualOutputToken === "USDC" ? USDC_MINT : SOL_MINT;
+    if (inputMint === outputMint) {
+      setPortfolioStatus("Input and output tokens must be different");
+      return;
+    }
+
+    setPortfolioStatus("Executing manual trade...");
+    try {
+      const result = await wallet.executeSwap({
+        inputMint,
+        outputMint,
+        uiAmount: amount,
+      });
+
+      const activeWallet = wallet.publicKey.toBase58();
+      const entry: StoredTradeRecord = {
+        id: `manual-${Date.now()}`,
+        txid: result.txid,
+        timestamp: Date.now(),
+        walletAddress: activeWallet,
+        source: "manual",
+        inputMint: result.inputMint,
+        outputMint: result.outputMint,
+        inputAmount: result.inputAmount,
+        outputAmount: result.outputAmount,
+        signalSummary: `Manual trade ${manualInputToken} -> ${manualOutputToken} (${amount})`,
+      };
+
+      setRecentTrades((prev) => {
+        const next = [entry, ...prev].slice(0, 20);
+        try {
+          window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(next));
+        } catch (_error) {
+          // ignore storage errors
+        }
+        return next;
+      });
+      setShowManualTradeModal(false);
+      setManualAmount("0");
+      setManualTxid("");
+      setPortfolioStatus("Manual trade executed");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "trade failed";
+      setPortfolioStatus(`Manual trade failed: ${message}`);
+    }
   }
 
   function saveSignalParams() {
@@ -991,6 +1113,8 @@ function DashboardPage() {
             <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
             {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
             {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
+            {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
+            {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
@@ -1209,7 +1333,7 @@ function DashboardPage() {
       {showManualTradeModal ? (
         <div className="modal-backdrop" onClick={() => setShowManualTradeModal(false)}>
           <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>Record Manual Trade</h3>
+            <h3>Manual Trade</h3>
             <div className="controls">
               <label>
                 Input Token
@@ -1236,16 +1360,17 @@ function DashboardPage() {
                 />
               </label>
               <label>
-                Tx Hash (optional)
+                Tx Hash (optional, for record-only mode)
                 <input
                   type="text"
                   value={manualTxid}
                   onChange={(event) => setManualTxid(event.target.value)}
-                  placeholder="Leave blank to record as manual entry"
+                  placeholder="Optional custom tx hash"
                 />
               </label>
             </div>
             <div className="wallet-controls">
+              <button onClick={executeManualTrade}>Execute Trade</button>
               <button onClick={recordManualTrade}>Save Trade</button>
               <button className="secondary" onClick={() => setShowManualTradeModal(false)}>Close</button>
             </div>
