@@ -2,6 +2,7 @@
 
 import { PropsWithChildren, useMemo } from "react";
 import { HARDCODED_WALLET_STANDARDS, UnifiedWalletProvider } from "@jup-ag/wallet-adapter";
+import type { WalletName } from "@solana/wallet-adapter-base";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -35,7 +36,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         env: "mainnet-beta",
         metadata: walletMetadata,
         theme: "jupiter",
-        walletPrecedence: ["Jupiter Wallet", "Phantom"],
+        walletPrecedence: ["Jupiter Wallet" as WalletName, "Phantom" as WalletName],
         hardcodedWallets,
       }}
     >
