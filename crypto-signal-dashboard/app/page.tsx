@@ -3,14 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet } from "@jup-ag/wallet-adapter";
+import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import {
-  JupiterTradePanel,
-  type JupiterTradeRecord,
-  type JupiterTradeRequest,
-} from "@/app/components/JupiterTradePanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -75,7 +70,14 @@ type WalletTokenHolding = {
   usdValue?: number | null;
 };
 
-type StoredTradeRecord = JupiterTradeRecord & {
+type StoredTradeRecord = {
+  txid: string;
+  timestamp: number;
+  walletAddress?: string;
+  inputMint?: string;
+  outputMint?: string;
+  inputAmount?: number;
+  outputAmount?: number;
   id: string;
   source?: "manual" | "auto";
   signalId?: string;
@@ -141,7 +143,6 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
-  const [autoTradeRequest, setAutoTradeRequest] = useState<JupiterTradeRequest | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -303,13 +304,33 @@ function DashboardPage() {
                 const outputMint = directionalOutputMint === inputMint
                   ? (inputMint === SOL_MINT ? USDC_MINT : SOL_MINT)
                   : directionalOutputMint;
-                setAutoTradeRequest({
-                  id: signal.id,
+                const activeWallet = wallet.publicKey.toBase58();
+                const queuedTradeRecord: StoredTradeRecord = {
+                  id: `auto-${signal.id}`,
+                  txid: `queued-${signal.id}`,
+                  timestamp: Date.now(),
+                  walletAddress: activeWallet,
+                  source: "auto",
+                  signalId: signal.id,
                   inputMint,
                   outputMint,
+                  signalSummary:
+                    `${signal.summary} · queued ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`,
+                };
+                setRecentTrades((prevTrades) => {
+                  const nextTrades = [
+                    queuedTradeRecord,
+                    ...prevTrades.filter((item) => item.id !== queuedTradeRecord.id),
+                  ].slice(0, 20);
+                  try {
+                    window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                  } catch (_error) {
+                    // ignore storage errors
+                  }
+                  return nextTrades;
                 });
                 setAutoTradeStatus(
-                  `Auto-trade initiated for ${signal.symbol} (${signal.direction}) using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`
+                  `Signal queued for ${signal.symbol} (${signal.direction}). Execute manually from your in-app wallet.`
                 );
               } else {
                 const activeWallet = "paper-auto";
@@ -735,6 +756,45 @@ function DashboardPage() {
     }
   }
 
+  async function createInAppWallet() {
+    try {
+      await wallet.createWallet();
+      setPortfolioStatus("In-app wallet created");
+    } catch (_error) {
+      setPortfolioStatus("Wallet creation failed");
+    }
+  }
+
+  async function importInAppWallet() {
+    const secretInput = window.prompt("Paste wallet secret key JSON array (64 numbers):");
+    if (!secretInput) return;
+    try {
+      await wallet.importWallet(secretInput);
+      setPortfolioStatus("In-app wallet imported");
+    } catch (_error) {
+      setPortfolioStatus("Wallet import failed");
+    }
+  }
+
+  async function exportInAppWallet() {
+    const exported = wallet.exportWallet();
+    if (!exported) {
+      setPortfolioStatus("No in-app wallet to export");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exported);
+      setPortfolioStatus("Wallet secret copied to clipboard");
+    } catch (_error) {
+      setPortfolioStatus("Copy failed - check browser clipboard permissions");
+    }
+  }
+
+  async function disconnectInAppWallet() {
+    await wallet.disconnect();
+    setPortfolioStatus("In-app wallet disconnected");
+  }
+
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
@@ -774,28 +834,6 @@ function DashboardPage() {
     });
   }
 
-  function handleTradeSuccess(trade: JupiterTradeRecord) {
-    const walletAddress = trade.walletAddress ?? wallet.publicKey?.toBase58();
-    if (!walletAddress) return;
-
-    const entry: StoredTradeRecord = {
-      ...trade,
-      walletAddress,
-      id: `${trade.txid}-${trade.timestamp}`,
-      source: "manual",
-    };
-
-    setRecentTrades((prev) => {
-      const next = [entry, ...prev.filter((item) => item.txid !== entry.txid)].slice(0, 20);
-      try {
-        window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(next));
-      } catch (_error) {
-        // ignore storage errors
-      }
-      return next;
-    });
-  }
-
   return (
     <main>
       <header>
@@ -810,7 +848,7 @@ function DashboardPage() {
               priority
             />
             <div className="subtext">
-              Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
+              Real-time crypto signals with on-app wallet controls and manual trade execution flow.
             </div>
           </div>
           <div className="header-alert-slot">
@@ -825,7 +863,7 @@ function DashboardPage() {
           </div>
           <div className="badges">
             <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-            <div className="badge">Jupiter: integrated</div>
+            <div className="badge">Wallet: in-app</div>
             <div className="badge">{autoTradeStatus}</div>
           </div>
         </div>
@@ -894,27 +932,22 @@ function DashboardPage() {
 
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
-          <h3>Jupiter Integrated Wallet</h3>
-          <JupiterTradePanel
-            onTradeSuccess={handleTradeSuccess}
-            tradeRequest={autoTradeRequest}
-            integratedTargetId="target-container"
-            defaultInputMint={
-              autoTradeSettings.inputToken === "USDC"
-                ? USDC_MINT
-                : SOL_MINT
-            }
-          />
+          <h3>In-App Wallet</h3>
           <div className="wallet-controls">
+            {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
+            <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
+            {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+            {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
+            {!wallet.connected && wallet.hasWallet ? <button onClick={wallet.connect}>Connect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet connect is handled by the integrated Jupiter Plugin below. Only Jupiter wallet is enabled.
+            Wallet keys are created and managed in-browser for this app session/device.
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Use the integrated Jupiter panel above to connect your wallet."}
+              : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
@@ -1132,7 +1165,7 @@ function DashboardPage() {
           {recentTrades.map((trade) => (
             <div key={trade.id} className="news-item">
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span>{trade.source === "auto" ? "Auto trade" : "Swap via Jupiter"}</span>
+                <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>
                 <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
               </div>
               {trade.signalSummary ? <div className="subtext">{trade.signalSummary}</div> : null}
