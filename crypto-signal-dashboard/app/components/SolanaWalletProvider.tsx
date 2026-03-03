@@ -2,15 +2,13 @@
 
 import { PropsWithChildren, useMemo } from "react";
 import { HARDCODED_WALLET_STANDARDS, UnifiedWalletProvider } from "@jup-ag/wallet-adapter";
-import type { WalletName } from "@solana/wallet-adapter-base";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function SolanaWalletProvider({ children }: PropsWithChildren) {
-  const hardcodedWallets = useMemo(() => {
+  const jupiterOnlyWallets = useMemo(() => {
     const jupiterWallet = HARDCODED_WALLET_STANDARDS.find((wallet) => wallet.id === "Jupiter Mobile");
-    if (!jupiterWallet) return HARDCODED_WALLET_STANDARDS;
-    return [jupiterWallet, ...HARDCODED_WALLET_STANDARDS.filter((wallet) => wallet.id !== "Jupiter Mobile")];
+    return jupiterWallet ? [jupiterWallet] : [];
   }, []);
 
   const walletMetadata = useMemo(
@@ -31,8 +29,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         env: "mainnet-beta",
         metadata: walletMetadata,
         theme: "jupiter",
-        walletPrecedence: ["Jupiter Wallet" as WalletName],
-        hardcodedWallets,
+        hardcodedWallets: jupiterOnlyWallets,
       }}
     >
       {children}

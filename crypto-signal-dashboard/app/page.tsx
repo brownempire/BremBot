@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet, UnifiedWalletButton } from "@jup-ag/wallet-adapter";
+import { useConnection, useWallet } from "@jup-ag/wallet-adapter";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -713,15 +713,6 @@ function DashboardPage() {
     }
   }
 
-  async function disconnectWallet() {
-    try {
-      await wallet.disconnect();
-      setPortfolioStatus("Wallet disconnected");
-    } catch (_error) {
-      setPortfolioStatus("Wallet disconnect failed");
-    }
-  }
-
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
@@ -890,19 +881,17 @@ function DashboardPage() {
 
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
-          <h3>Wallet Connect</h3>
+          <h3>Jupiter Integrated Wallet</h3>
           <div className="wallet-controls">
-            <UnifiedWalletButton buttonClassName="wallet-adapter-button" currentUserClassName="wallet-adapter-button" />
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
-            {wallet.connected ? <button onClick={disconnectWallet}>Disconnect</button> : null}
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet connection uses Jupiter Unified Wallet and keeps Jupiter Mobile available as a connect option.
+            Wallet connect is handled by the integrated Jupiter Plugin widget. Only Jupiter wallet is enabled.
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect a Jupiter-compatible wallet session to trade."}
+              : "Use the Jupiter widget (bottom-right) to connect your Jupiter wallet."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">
