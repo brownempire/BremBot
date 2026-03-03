@@ -776,15 +776,6 @@ function DashboardPage() {
 
   return (
     <main>
-      <JupiterTradePanel
-        onTradeSuccess={handleTradeSuccess}
-        defaultInputMint={
-          autoTradeSettings.inputToken === "USDC"
-            ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-            : "So11111111111111111111111111111111111111112"
-        }
-      />
-
       <header>
         <div className="header-row">
           <div>
@@ -812,7 +803,7 @@ function DashboardPage() {
           </div>
           <div className="badges">
             <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-            <div className="badge">Jupiter: widget</div>
+            <div className="badge">Jupiter: integrated</div>
             <div className="badge">{autoTradeStatus}</div>
           </div>
         </div>
@@ -882,16 +873,25 @@ function DashboardPage() {
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
           <h3>Jupiter Integrated Wallet</h3>
+          <JupiterTradePanel
+            onTradeSuccess={handleTradeSuccess}
+            integratedTargetId="target-container"
+            defaultInputMint={
+              autoTradeSettings.inputToken === "USDC"
+                ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                : "So11111111111111111111111111111111111111112"
+            }
+          />
           <div className="wallet-controls">
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet connect is handled by the integrated Jupiter Plugin widget. Only Jupiter wallet is enabled.
+            Wallet connect is handled by the integrated Jupiter Plugin below. Only Jupiter wallet is enabled.
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Use the Jupiter widget (bottom-right) to connect your Jupiter wallet."}
+              : "Use the integrated Jupiter panel above to connect your wallet."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-holdings">

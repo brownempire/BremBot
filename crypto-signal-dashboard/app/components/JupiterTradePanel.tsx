@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { close, init, syncProps } from "@jup-ag/plugin";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import "@jup-ag/plugin/css";
@@ -19,14 +18,15 @@ export type JupiterTradeRecord = {
 type JupiterTradePanelProps = {
   onTradeSuccess?: (trade: JupiterTradeRecord) => void;
   defaultInputMint?: string;
+  integratedTargetId?: string;
 };
 
 export function JupiterTradePanel({
   onTradeSuccess,
   defaultInputMint = "So11111111111111111111111111111111111111112",
+  integratedTargetId = "target-container",
 }: JupiterTradePanelProps) {
   const wallet = useWallet();
-  const initialized = useRef(false);
   const onTradeSuccessRef = useRef(onTradeSuccess);
 
   useEffect(() => {
@@ -34,57 +34,50 @@ export function JupiterTradePanel({
   }, [onTradeSuccess]);
 
   useEffect(() => {
-    if (initialized.current) return;
+    let cancelled = false;
+    if (typeof window === "undefined") return;
 
-    init({
-      displayMode: "widget",
-      widgetStyle: {
-        position: "bottom-right",
-        offset: {
-          x: 50,
-          y: 100,
-        },
-      },
-      enableWalletPassthrough: true,
-      passthroughWalletContextState: wallet,
-      onRequestConnectWallet: async () => {
-        if (!wallet.connected) {
-          await wallet.connect();
-        }
-      },
-      defaultExplorer: "Solscan",
-      formProps: {
-        initialInputMint: defaultInputMint,
-      },
-      onSuccess: ({ txid, quoteResponseMeta }) => {
-        const quote = quoteResponseMeta?.quoteResponse;
-        onTradeSuccessRef.current?.({
-          txid,
-          timestamp: Date.now(),
-          walletAddress: wallet.publicKey?.toBase58(),
-          inputMint: quote?.inputMint?.toString?.(),
-          outputMint: quote?.outputMint?.toString?.(),
-          inputAmount: Number(quote?.inAmount ?? 0),
-          outputAmount: Number(quote?.outAmount ?? 0),
-        });
-      },
-    }).catch(() => undefined);
-
-    initialized.current = true;
+    import("@jup-ag/plugin")
+      .then((mod) => {
+        if (cancelled) return;
+        mod.init({
+          displayMode: "integrated",
+          integratedTargetId,
+          defaultExplorer: "Solscan",
+          formProps: {
+            swapMode: "ExactInOrOut",
+            fixedMint: defaultInputMint,
+          },
+          branding: {
+            logoUri:
+              "https://raw.githubusercontent.com/brownempire/BremBot/refs/heads/main/crypto-signal-dashboard/app/favicon.ico",
+            name: "BremLogic",
+          },
+          onSuccess: ({ txid, quoteResponseMeta }) => {
+            const quote = quoteResponseMeta?.quoteResponse;
+            onTradeSuccessRef.current?.({
+              txid,
+              timestamp: Date.now(),
+              walletAddress: wallet.publicKey?.toBase58(),
+              inputMint: quote?.inputMint?.toString?.(),
+              outputMint: quote?.outputMint?.toString?.(),
+              inputAmount: Number(quote?.inAmount ?? 0),
+              outputAmount: Number(quote?.outAmount ?? 0),
+            });
+          },
+        }).catch(() => undefined);
+      })
+      .catch(() => undefined);
 
     return () => {
-      close();
-      initialized.current = false;
+      cancelled = true;
+      import("@jup-ag/plugin")
+        .then((mod) => {
+          mod.close();
+        })
+        .catch(() => undefined);
     };
-  }, [defaultInputMint, wallet]);
+  }, [defaultInputMint, integratedTargetId, wallet.publicKey]);
 
-  useEffect(() => {
-    if (!initialized.current) return;
-    syncProps({
-      enableWalletPassthrough: true,
-      passthroughWalletContextState: wallet,
-    });
-  }, [wallet]);
-
-  return null;
+  return <div id={integratedTargetId} />;
 }

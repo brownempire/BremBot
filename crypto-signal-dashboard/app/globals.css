@@ -301,6 +301,14 @@ button:disabled {
   align-items: center;
 }
 
+#target-container {
+  min-height: 520px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 25, 0.7);
+  padding: 8px;
+}
+
 .wallet-adapter-button {
   background: rgba(101, 217, 255, 0.15) !important;
   border: 1px solid rgba(101, 217, 255, 0.25) !important;
