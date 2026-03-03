@@ -1,6 +1,6 @@
 import { getMockNews, type NewsItem } from "@/lib/news/mock";
 
-type FeedItem = Pick<NewsItem, "source" | "headline" | "sentiment" | "timestamp">;
+type FeedItem = Pick<NewsItem, "source" | "headline" | "sentiment" | "timestamp" | "url">;
 
 function stripHtml(input: string) {
   return input
@@ -15,6 +15,7 @@ function parseRssItems(xml: string, source: string, limit = 4): FeedItem[] {
   return items.map((match, idx) => {
     const chunk = match[1] ?? "";
     const title = stripHtml(chunk.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? "Untitled");
+    const rawLink = stripHtml(chunk.match(/<link>([\s\S]*?)<\/link>/)?.[1] ?? "");
     const pubDate = chunk.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1];
     const lower = title.toLowerCase();
     const positiveWords = ["surge", "gain", "bull", "rally", "breakout", "approval", "inflow"];
@@ -29,6 +30,7 @@ function parseRssItems(xml: string, source: string, limit = 4): FeedItem[] {
       headline: title,
       sentiment,
       timestamp: pubDate ? Date.parse(pubDate) || Date.now() - idx * 60_000 : Date.now() - idx * 60_000,
+      url: rawLink.startsWith("http") ? rawLink : undefined,
     };
   });
 }

@@ -6,7 +6,11 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@jup-ag/wallet-adapter";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
+import {
+  JupiterTradePanel,
+  type JupiterTradeRecord,
+  type JupiterTradeRequest,
+} from "@/app/components/JupiterTradePanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -16,6 +20,8 @@ import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
@@ -44,7 +50,7 @@ const DEFAULT_PARAMS: UserParams = {
   trendThreshold: 1.5,
   breakoutPercent: 1.2,
   newsBias: 0.15,
-  cooldownSeconds: 180,
+  cooldownSeconds: 30,
 };
 
 type AutoTradeToken = "SOL" | "USDC";
@@ -135,6 +141,7 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
+  const [autoTradeRequest, setAutoTradeRequest] = useState<JupiterTradeRequest | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -263,7 +270,7 @@ function DashboardPage() {
         const recentPoints = points.filter(
           (point) => now - point.t <= params.trendWindow * 60 * 1000
         );
-        const minimumDataPoints = Math.max(30, params.trendWindow * 4);
+        const minimumDataPoints = Math.max(10, params.trendWindow * 2);
         if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
@@ -289,33 +296,48 @@ function DashboardPage() {
             }
 
             if (autoTradeEnabled) {
-              const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
-              const autoTradeRecord: StoredTradeRecord = {
-                id: `auto-${signal.id}`,
-                txid: `auto-${signal.id}`,
-                timestamp: Date.now(),
-                walletAddress: activeWallet,
-                source: "auto",
-                signalId: signal.id,
-                signalSummary: `${signal.summary} · ${autoTradeSettings.walletPercent}% of wallet in ${autoTradeSettings.inputToken}`,
-              };
-              setRecentTrades((prevTrades) => {
-                const nextTrades = [
-                  autoTradeRecord,
-                  ...prevTrades.filter((item) => item.id !== autoTradeRecord.id),
-                ].slice(0, 20);
-                try {
-                  window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
-                } catch (_error) {
-                  // ignore storage errors
-                }
-                return nextTrades;
-              });
-              setAutoTradeStatus(
-                wallet.publicKey
-                  ? `Auto-trade executed for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`
-                  : `Auto-trade paper execution for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken} (connect wallet for live)`
-              );
+              const inputMint = autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT;
+              const directionalOutputMint = signal.direction === "bullish" ? SOL_MINT : USDC_MINT;
+
+              if (wallet.publicKey) {
+                const outputMint = directionalOutputMint === inputMint
+                  ? (inputMint === SOL_MINT ? USDC_MINT : SOL_MINT)
+                  : directionalOutputMint;
+                setAutoTradeRequest({
+                  id: signal.id,
+                  inputMint,
+                  outputMint,
+                });
+                setAutoTradeStatus(
+                  `Auto-trade initiated for ${signal.symbol} (${signal.direction}) using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken}`
+                );
+              } else {
+                const activeWallet = "paper-auto";
+                const autoTradeRecord: StoredTradeRecord = {
+                  id: `auto-${signal.id}`,
+                  txid: `auto-${signal.id}`,
+                  timestamp: Date.now(),
+                  walletAddress: activeWallet,
+                  source: "auto",
+                  signalId: signal.id,
+                  signalSummary: `${signal.summary} · ${autoTradeSettings.walletPercent}% of wallet in ${autoTradeSettings.inputToken}`,
+                };
+                setRecentTrades((prevTrades) => {
+                  const nextTrades = [
+                    autoTradeRecord,
+                    ...prevTrades.filter((item) => item.id !== autoTradeRecord.id),
+                  ].slice(0, 20);
+                  try {
+                    window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                  } catch (_error) {
+                    // ignore storage errors
+                  }
+                  return nextTrades;
+                });
+                setAutoTradeStatus(
+                  `Auto-trade paper execution for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken} (connect wallet for live)`
+                );
+              }
             }
 
             if (pushEnabled) {
@@ -875,11 +897,12 @@ function DashboardPage() {
           <h3>Jupiter Integrated Wallet</h3>
           <JupiterTradePanel
             onTradeSuccess={handleTradeSuccess}
+            tradeRequest={autoTradeRequest}
             integratedTargetId="target-container"
             defaultInputMint={
               autoTradeSettings.inputToken === "USDC"
-                ? "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-                : "So11111111111111111111111111111111111111112"
+                ? USDC_MINT
+                : SOL_MINT
             }
           />
           <div className="wallet-controls">
@@ -1135,7 +1158,13 @@ function DashboardPage() {
           <h3>News Pulse</h3>
           {latestNews.map((item) => (
             <div key={item.id} className="news-item">
-              <div>{item.headline}</div>
+              <div>
+                {item.url ? (
+                  <a href={item.url} target="_blank" rel="noreferrer">
+                    {item.headline}
+                  </a>
+                ) : item.headline}
+              </div>
               <div className="news-meta">
                 <span>{item.source}</span>
                 <span>{item.sentiment >= 0 ? "Positive" : "Negative"}</span>
