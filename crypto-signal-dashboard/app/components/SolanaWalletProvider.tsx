@@ -6,10 +6,16 @@ import { HARDCODED_WALLET_STANDARDS, UnifiedWalletProvider } from "@jup-ag/walle
 import "@solana/wallet-adapter-react-ui/styles.css";
 
 export function SolanaWalletProvider({ children }: PropsWithChildren) {
-  const jupiterWalletOption = useMemo(
-    () => HARDCODED_WALLET_STANDARDS.filter((wallet) => wallet.id === "Jupiter Mobile"),
-    []
-  );
+  const hardcodedWallets = useMemo(() => {
+    const jupiterWallet = {
+      id: "Jupiter Wallet",
+      name: "Jupiter Wallet",
+      url: "https://jup.ag",
+      icon: "https://jup.ag/favicon.ico",
+    };
+
+    return [jupiterWallet, ...HARDCODED_WALLET_STANDARDS];
+  }, []);
 
   const walletMetadata = useMemo(
     () => ({
@@ -29,7 +35,8 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         env: "mainnet-beta",
         metadata: walletMetadata,
         theme: "jupiter",
-        hardcodedWallets: jupiterWalletOption,
+        walletPrecedence: ["Jupiter Wallet", "Phantom"],
+        hardcodedWallets,
       }}
     >
       {children}
