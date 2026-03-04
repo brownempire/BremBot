@@ -14,7 +14,7 @@ function setupWebPush() {
   webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY!, VAPID_PRIVATE_KEY!);
 }
 
-export function getTargetSubscriptions(subscription?: PushSubscriptionJSON | null) {
+export async function getTargetSubscriptions(subscription?: PushSubscriptionJSON | null) {
   if (subscription?.endpoint) return [subscription];
   return listSubscriptions();
 }
@@ -36,7 +36,7 @@ export async function sendPushPayload(
           ? Number((error as { statusCode?: number }).statusCode)
           : 0;
         if (statusCode === 404 || statusCode === 410) {
-          removeSubscription(String(sub.endpoint ?? ""));
+          await removeSubscription(String(sub.endpoint ?? ""));
         }
         return { endpoint: sub.endpoint, ok: false, statusCode };
       }

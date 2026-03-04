@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     url: body?.url ?? "/",
   };
 
-  const subs = getTargetSubscriptions(body?.subscription ?? null);
+  const subs = await getTargetSubscriptions(body?.subscription ?? null);
   if (subs.length === 0) {
     return new Response(JSON.stringify({ error: "No push subscriptions found. Enable push first." }), {
       status: 400,

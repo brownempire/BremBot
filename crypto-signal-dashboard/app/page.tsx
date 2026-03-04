@@ -1311,21 +1311,23 @@ function DashboardPage() {
             <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
           </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
-          {signals.map((signal) => (
-            <div
-              key={signal.id}
-              className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
-            >
-              <div>
+          <div className="signals-scroll">
+            {signals.map((signal) => (
+              <div
+                key={signal.id}
+                className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
+              >
                 <div>
-                  {signal.symbol} · {signal.type.toUpperCase()}
+                  <div>
+                    {signal.symbol} · {signal.type.toUpperCase()}
+                  </div>
+                  <div className="signal-meta">{signal.summary}</div>
+                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
                 </div>
-                <div className="signal-meta">{signal.summary}</div>
-                <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
+                <div>{Math.round(signal.confidence * 100)}%</div>
               </div>
-              <div>{Math.round(signal.confidence * 100)}%</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         <div className="panel">
@@ -1342,7 +1344,7 @@ function DashboardPage() {
             <div className="subtext">No recent trades recorded for this wallet yet.</div>
           )}
           <div className="recent-trades-scroll">
-          {recentTrades.slice(0, 5).map((trade) => (
+          {recentTrades.map((trade) => (
             <div key={trade.id} className="news-item">
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>

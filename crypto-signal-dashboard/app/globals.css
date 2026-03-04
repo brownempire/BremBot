@@ -350,8 +350,9 @@ button:disabled {
   padding: 8px;
 }
 
+.signals-scroll,
 .recent-trades-scroll {
-  max-height: 430px;
+  max-height: 360px;
   overflow-y: auto;
   padding-right: 4px;
 }

@@ -7,7 +7,7 @@ export async function POST(request: Request) {
     if (!endpoint) {
       return new Response(JSON.stringify({ error: "Missing endpoint" }), { status: 400 });
     }
-    const subs = removeSubscription(endpoint);
+    const subs = await removeSubscription(endpoint);
     return new Response(JSON.stringify({ ok: true, count: subs.length }));
   } catch {
     return new Response(JSON.stringify({ error: "Failed to parse request" }), { status: 400 });

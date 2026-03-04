@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { detectSignals, type UserParams } from "@/lib/signal/engine";
 import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
+import { getRedisClient } from "@/lib/server/redis";
 
 type ScanPoint = { t: number; v: number };
 type ScanMarketState = { lastSignalAt?: number; points: ScanPoint[] };
@@ -10,6 +11,7 @@ type ScanState = {
 };
 
 const STATE_PATH = process.env.PUSH_SIGNAL_STATE_FILE || "/tmp/brembot-signal-scan-state.json";
+const REDIS_SCAN_STATE_KEY = "brembot:push:signal-scan-state";
 const MAX_POINTS = 5400;
 const MAX_SENT_IDS = 80;
 
@@ -27,7 +29,7 @@ const TRACKED_MARKETS = [
   { id: "slot-btc", pair: "BTC/USD", coinbaseProduct: "BTC-USD" },
 ];
 
-function loadState(): ScanState {
+function loadStateFromFs(): ScanState {
   try {
     if (!fs.existsSync(STATE_PATH)) return { sentSignalIds: [], markets: {} };
     const raw = fs.readFileSync(STATE_PATH, "utf8");
@@ -43,12 +45,39 @@ function loadState(): ScanState {
   }
 }
 
-function saveState(state: ScanState) {
+function saveStateToFs(state: ScanState) {
   try {
     fs.writeFileSync(STATE_PATH, JSON.stringify(state), "utf8");
   } catch {
     // Ignore write failures to keep cron route non-fatal.
   }
+}
+
+async function loadState(): Promise<ScanState> {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) return loadStateFromFs();
+  const raw = await redis.get(REDIS_SCAN_STATE_KEY);
+  if (!raw) return { sentSignalIds: [], markets: {} };
+  try {
+    const parsed = JSON.parse(raw) as ScanState;
+    return {
+      sentSignalIds: Array.isArray(parsed?.sentSignalIds)
+        ? parsed.sentSignalIds.filter((id): id is string => typeof id === "string")
+        : [],
+      markets: parsed?.markets && typeof parsed.markets === "object" ? parsed.markets : {},
+    };
+  } catch {
+    return { sentSignalIds: [], markets: {} };
+  }
+}
+
+async function saveState(state: ScanState) {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) {
+    saveStateToFs(state);
+    return;
+  }
+  await redis.set(REDIS_SCAN_STATE_KEY, JSON.stringify(state));
 }
 
 async function fetchPrice(product: string) {
@@ -80,12 +109,12 @@ export async function GET(request: Request) {
     return new Response(JSON.stringify({ error: configError }), { status: 400 });
   }
 
-  const subscriptions = getTargetSubscriptions(null);
+  const subscriptions = await getTargetSubscriptions(null);
   if (subscriptions.length === 0) {
     return new Response(JSON.stringify({ ok: true, sent: 0, reason: "No subscriptions" }));
   }
 
-  const state = loadState();
+  const state = await loadState();
   const now = Date.now();
   const notifications: Array<{ title: string; body: string; url: string; signalId: string }> = [];
 
@@ -122,7 +151,7 @@ export async function GET(request: Request) {
     state.markets[market.id] = marketState;
   }
 
-  saveState(state);
+  await saveState(state);
   if (notifications.length === 0) {
     return new Response(JSON.stringify({ ok: true, sent: 0, reason: "No new signals" }));
   }
