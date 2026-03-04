@@ -87,6 +87,7 @@ type StoredTradeRecord = {
 };
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
+type WalletPnlPoint = { t: number; v: number };
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -152,6 +153,8 @@ function DashboardPage() {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
+  const [walletPnlPoints, setWalletPnlPoints] = useState<WalletPnlPoint[]>([]);
+  const [pnlStatus, setPnlStatus] = useState("Connect wallet to load PnL");
 
   useEffect(() => {
     let cancelled = false;
@@ -688,6 +691,49 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
 
+  useEffect(() => {
+    if (!walletAddress) {
+      setWalletPnlPoints([]);
+      setPnlStatus("Connect wallet to load PnL");
+      return;
+    }
+
+    let cancelled = false;
+    const loadPnl = async () => {
+      try {
+        const response = await fetch(`/api/wallet/pnl?address=${walletAddress}`, { cache: "no-store" });
+        const payload = await response.json().catch(() => null);
+        if (cancelled) return;
+        if (!response.ok || !Array.isArray(payload?.points)) {
+          setPnlStatus(payload?.error ?? "PnL sync failed");
+          return;
+        }
+
+        const points = payload.points
+          .map((point: { t?: number; v?: number }) => ({
+            t: Number(point?.t ?? 0),
+            v: Number(point?.v ?? 0),
+          }))
+          .filter((point: WalletPnlPoint) => Number.isFinite(point.t) && Number.isFinite(point.v));
+
+        setWalletPnlPoints(points);
+        setPnlStatus(points.length > 0 ? "PnL synced from on-chain transaction history" : "No transaction history found");
+      } catch (_error) {
+        if (!cancelled) setPnlStatus("PnL sync failed");
+      }
+    };
+
+    loadPnl().catch(() => undefined);
+    const interval = setInterval(() => {
+      loadPnl().catch(() => undefined);
+    }, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [walletAddress]);
+
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
@@ -702,44 +748,10 @@ function DashboardPage() {
     return { ...market, current, change24h };
   });
 
-  const solUsdPrice = useMemo(() => {
-    if (solBalance && solValueUsd && solBalance > 0) {
-      return solValueUsd / solBalance;
-    }
-    const solCard = cards.find((card) => card.pair === "SOL/USD");
-    return solCard?.current && solCard.current > 0 ? solCard.current : 0;
-  }, [cards, solBalance, solValueUsd]);
-
   const pnlTimeline = useMemo(() => {
-    const sortedTrades = [...recentTrades].sort((a, b) => a.timestamp - b.timestamp);
-    const points: Array<{ t: number; v: number }> = [];
-    let cumulative = 0;
-    const now = Date.now();
-
-    sortedTrades.forEach((trade) => {
-      const inputAmount = Number(trade.inputAmount ?? 0);
-      const outputAmount = Number(trade.outputAmount ?? 0);
-      if (!Number.isFinite(inputAmount) || !Number.isFinite(outputAmount)) return;
-      if (!trade.inputMint || !trade.outputMint) return;
-
-      const inputUsd = trade.inputMint === USDC_MINT ? 1 : trade.inputMint === SOL_MINT ? solUsdPrice : 0;
-      const outputUsd = trade.outputMint === USDC_MINT ? 1 : trade.outputMint === SOL_MINT ? solUsdPrice : 0;
-      if (inputUsd <= 0 || outputUsd <= 0) return;
-
-      const delta = outputAmount * outputUsd - inputAmount * inputUsd;
-      if (!Number.isFinite(delta)) return;
-      cumulative += delta;
-      points.push({ t: trade.timestamp, v: cumulative });
-    });
-
-    if (points.length === 0) {
-      return [{ t: now, v: 0 }];
-    }
-    if (points[points.length - 1].t < now) {
-      points.push({ t: now, v: cumulative });
-    }
-    return points;
-  }, [recentTrades, solUsdPrice]);
+    if (walletPnlPoints.length > 0) return walletPnlPoints;
+    return [{ t: Date.now(), v: 0 }];
+  }, [walletPnlPoints]);
 
   const pnlValues = useMemo(() => {
     const latest = pnlTimeline[pnlTimeline.length - 1];
@@ -1280,6 +1292,7 @@ function DashboardPage() {
         </div>
         <div className="panel">
           <h3>PnL</h3>
+          <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
           <div className="pnl-metrics">
             <div className="pnl-metric">
               <span>24hr</span>
