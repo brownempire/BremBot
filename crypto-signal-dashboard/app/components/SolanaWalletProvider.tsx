@@ -46,6 +46,7 @@ type AppWalletContextState = {
   exportWallet: () => string | null;
   changePassword: (currentPassword: string, nextPassword: string) => Promise<void>;
   executeSwap: (params: ExecuteSwapParams) => Promise<ExecuteSwapResult>;
+  passthroughWalletContextState: Record<string, unknown>;
 };
 
 type SolanaContextValue = {
@@ -212,6 +213,85 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
     }
   }, [secretKey]);
 
+  const passthroughWalletContextState = useMemo<Record<string, unknown>>(() => {
+    const adapter = keypair ? {
+      name: "BremLogic In-App Wallet",
+      url: "https://www.bremlogic.com",
+      icon: "",
+      publicKey: connected ? keypair.publicKey : null,
+      connecting: false,
+      connected: connected && !!keypair,
+      disconnect: async () => {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(LOCAL_WALLET_STORAGE_KEY);
+        }
+        setSecretKey(null);
+        setConnected(false);
+        setHasStoredWallet(false);
+      },
+      connect: async () => {
+        if (keypair) setConnected(true);
+      },
+      sendTransaction: async (transaction: unknown, conn: Connection, options?: { skipPreflight?: boolean; maxRetries?: number }) => {
+        if (!keypair) throw new Error("Wallet is not connected");
+        if (transaction instanceof VersionedTransaction) {
+          transaction.sign([keypair]);
+          return conn.sendRawTransaction(transaction.serialize(), {
+            skipPreflight: options?.skipPreflight ?? false,
+            maxRetries: options?.maxRetries ?? 3,
+          });
+        }
+        throw new Error("Unsupported transaction format");
+      },
+      signTransaction: async (transaction: unknown) => {
+        if (!keypair) throw new Error("Wallet is not connected");
+        if (transaction instanceof VersionedTransaction) {
+          transaction.sign([keypair]);
+          return transaction;
+        }
+        throw new Error("Unsupported transaction format");
+      },
+      signAllTransactions: async (transactions: unknown[]) => {
+        if (!keypair) throw new Error("Wallet is not connected");
+        return transactions.map((transaction) => {
+          if (transaction instanceof VersionedTransaction) {
+            transaction.sign([keypair]);
+            return transaction;
+          }
+          throw new Error("Unsupported transaction format");
+        });
+      },
+    } : null;
+
+    const wallet = adapter ? { adapter, readyState: "Installed" } : null;
+    return {
+      publicKey: connected && keypair ? keypair.publicKey : null,
+      wallets: wallet ? [wallet] : [],
+      wallet,
+      connect: async () => {
+        if (keypair) setConnected(true);
+      },
+      select: () => undefined,
+      connecting: false,
+      connected: connected && !!keypair,
+      disconnect: async () => {
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(LOCAL_WALLET_STORAGE_KEY);
+        }
+        setSecretKey(null);
+        setConnected(false);
+        setHasStoredWallet(false);
+      },
+      autoConnect: false,
+      disconnecting: false,
+      sendTransaction: adapter?.sendTransaction,
+      signTransaction: adapter?.signTransaction,
+      signAllTransactions: adapter?.signAllTransactions,
+      signMessage: undefined,
+      signIn: undefined,
+    };
+  }, [connected, keypair]);
+
   useEffect(() => {
     if (secretKey && !keypair) {
       if (typeof window !== "undefined") {
@@ -326,7 +406,8 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         outputAmount: Number(quote?.outAmount ?? 0) / (10 ** mintDecimals(outputMint)),
       };
     },
-  }), [connected, connection, hasStoredWallet, keypair]);
+    passthroughWalletContextState,
+  }), [connected, connection, hasStoredWallet, keypair, passthroughWalletContextState]);
 
   return (
     <SolanaContext.Provider value={{ connection, wallet }}>

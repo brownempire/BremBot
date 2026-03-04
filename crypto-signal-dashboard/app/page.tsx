@@ -146,12 +146,7 @@ function DashboardPage() {
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [showDepositModal, setShowDepositModal] = useState(false);
-  const [showManualTradeModal, setShowManualTradeModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
-  const [manualInputToken, setManualInputToken] = useState<AutoTradeToken>("SOL");
-  const [manualOutputToken, setManualOutputToken] = useState<AutoTradeToken>("USDC");
-  const [manualAmount, setManualAmount] = useState("0");
-  const [manualTxid, setManualTxid] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -829,7 +824,6 @@ function DashboardPage() {
   async function disconnectInAppWallet() {
     await wallet.disconnect();
     setShowDepositModal(false);
-    setShowManualTradeModal(false);
     setPortfolioStatus("Wallet disconnected and removed from this device");
   }
 
@@ -876,102 +870,6 @@ function DashboardPage() {
       setPortfolioStatus("Deposit address copied to clipboard");
     } catch (_error) {
       setPortfolioStatus("Address copy failed");
-    }
-  }
-
-  function recordManualTrade() {
-    const inputMint = manualInputToken === "USDC" ? USDC_MINT : SOL_MINT;
-    const outputMint = manualOutputToken === "USDC" ? USDC_MINT : SOL_MINT;
-    const timestamp = Date.now();
-    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
-    const txid = manualTxid.trim() || `manual-${timestamp}`;
-    const amount = Number(manualAmount);
-    const safeAmount = Number.isFinite(amount) && amount > 0 ? amount : undefined;
-
-    const entry: StoredTradeRecord = {
-      id: `manual-${timestamp}`,
-      txid,
-      timestamp,
-      walletAddress: activeWallet,
-      source: "manual",
-      inputMint,
-      outputMint,
-      inputAmount: safeAmount,
-      signalSummary: `Manual trade ${manualInputToken} -> ${manualOutputToken}${safeAmount ? ` (${safeAmount})` : ""}`,
-    };
-
-    setRecentTrades((prev) => {
-      const next = [entry, ...prev].slice(0, 20);
-      try {
-        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(next));
-      } catch (_error) {
-        // ignore storage errors
-      }
-      return next;
-    });
-
-    setShowManualTradeModal(false);
-    setManualTxid("");
-    setManualAmount("0");
-  }
-
-  async function executeManualTrade() {
-    if (!wallet.publicKey) {
-      setPortfolioStatus("Connect wallet to execute real trades");
-      return;
-    }
-
-    const amount = Number(manualAmount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setPortfolioStatus("Enter a valid trade amount");
-      return;
-    }
-
-    const inputMint = manualInputToken === "USDC" ? USDC_MINT : SOL_MINT;
-    const outputMint = manualOutputToken === "USDC" ? USDC_MINT : SOL_MINT;
-    if (inputMint === outputMint) {
-      setPortfolioStatus("Input and output tokens must be different");
-      return;
-    }
-
-    setPortfolioStatus("Executing manual trade...");
-    try {
-      const result = await wallet.executeSwap({
-        inputMint,
-        outputMint,
-        uiAmount: amount,
-      });
-
-      const activeWallet = wallet.publicKey.toBase58();
-      const entry: StoredTradeRecord = {
-        id: `manual-${Date.now()}`,
-        txid: result.txid,
-        timestamp: Date.now(),
-        walletAddress: activeWallet,
-        source: "manual",
-        inputMint: result.inputMint,
-        outputMint: result.outputMint,
-        inputAmount: result.inputAmount,
-        outputAmount: result.outputAmount,
-        signalSummary: `Manual trade ${manualInputToken} -> ${manualOutputToken} (${amount})`,
-      };
-
-      setRecentTrades((prev) => {
-        const next = [entry, ...prev].slice(0, 20);
-        try {
-          window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(next));
-        } catch (_error) {
-          // ignore storage errors
-        }
-        return next;
-      });
-      setShowManualTradeModal(false);
-      setManualAmount("0");
-      setManualTxid("");
-      setPortfolioStatus("Manual trade executed");
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "trade failed";
-      setPortfolioStatus(`Manual trade failed: ${message}`);
     }
   }
 
@@ -1157,6 +1055,8 @@ function DashboardPage() {
               <JupiterPluginPanel
                 targetId="jupiter-plugin-container"
                 fixedMint={autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT}
+                passthroughWalletContextState={wallet.passthroughWalletContextState}
+                onRequestConnectWallet={loginInAppWallet}
               />
             </div>
           ) : null}
@@ -1363,54 +1263,6 @@ function DashboardPage() {
         </div>
       ) : null}
 
-      {showManualTradeModal ? (
-        <div className="modal-backdrop" onClick={() => setShowManualTradeModal(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
-            <h3>Manual Trade</h3>
-            <div className="controls">
-              <label>
-                Input Token
-                <select value={manualInputToken} onChange={(event) => setManualInputToken(event.target.value === "USDC" ? "USDC" : "SOL")}>
-                  <option value="SOL">SOL</option>
-                  <option value="USDC">USDC</option>
-                </select>
-              </label>
-              <label>
-                Output Token
-                <select value={manualOutputToken} onChange={(event) => setManualOutputToken(event.target.value === "USDC" ? "USDC" : "SOL")}>
-                  <option value="USDC">USDC</option>
-                  <option value="SOL">SOL</option>
-                </select>
-              </label>
-              <label>
-                Amount (optional)
-                <input
-                  type="number"
-                  min={0}
-                  step={0.0001}
-                  value={manualAmount}
-                  onChange={(event) => setManualAmount(event.target.value)}
-                />
-              </label>
-              <label>
-                Tx Hash (optional, for record-only mode)
-                <input
-                  type="text"
-                  value={manualTxid}
-                  onChange={(event) => setManualTxid(event.target.value)}
-                  placeholder="Optional custom tx hash"
-                />
-              </label>
-            </div>
-            <div className="wallet-controls">
-              <button onClick={executeManualTrade}>Execute Trade</button>
-              <button onClick={recordManualTrade}>Save Trade</button>
-              <button className="secondary" onClick={() => setShowManualTradeModal(false)}>Close</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -1439,7 +1291,6 @@ function DashboardPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <h3>Recent Trades</h3>
             <div className="wallet-controls">
-              <button className="secondary" onClick={() => setShowManualTradeModal(true)}>Manual Trade</button>
               <button className="secondary" onClick={clearRecentTrades}>Clear Trades</button>
             </div>
           </div>

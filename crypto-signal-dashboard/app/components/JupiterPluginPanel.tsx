@@ -7,9 +7,16 @@ import "@jup-ag/plugin/css";
 type JupiterPluginPanelProps = {
   targetId: string;
   fixedMint: string;
+  passthroughWalletContextState?: unknown;
+  onRequestConnectWallet?: () => void | Promise<void>;
 };
 
-export function JupiterPluginPanel({ targetId, fixedMint }: JupiterPluginPanelProps) {
+export function JupiterPluginPanel({
+  targetId,
+  fixedMint,
+  passthroughWalletContextState,
+  onRequestConnectWallet,
+}: JupiterPluginPanelProps) {
   useEffect(() => {
     let cancelled = false;
     if (typeof window === "undefined") return;
@@ -20,6 +27,9 @@ export function JupiterPluginPanel({ targetId, fixedMint }: JupiterPluginPanelPr
         mod.init({
           displayMode: "integrated",
           integratedTargetId: targetId,
+          enableWalletPassthrough: true,
+          passthroughWalletContextState: passthroughWalletContextState as never,
+          onRequestConnectWallet,
           defaultExplorer: "Solscan",
           formProps: {
             swapMode: "ExactInOrOut",
@@ -40,7 +50,19 @@ export function JupiterPluginPanel({ targetId, fixedMint }: JupiterPluginPanelPr
         .then((mod) => mod.close())
         .catch(() => undefined);
     };
-  }, [fixedMint, targetId]);
+  }, [fixedMint, onRequestConnectWallet, passthroughWalletContextState, targetId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    import("@jup-ag/plugin")
+      .then((mod) => {
+        mod.syncProps({
+          enableWalletPassthrough: true,
+          passthroughWalletContextState: passthroughWalletContextState as never,
+        });
+      })
+      .catch(() => undefined);
+  }, [passthroughWalletContextState]);
 
   return <div id={targetId} />;
 }
