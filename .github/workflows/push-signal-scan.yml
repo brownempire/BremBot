@@ -3,7 +3,7 @@ name: Push Signal Scan
 on:
   schedule:
     # GitHub Actions supports minimum 5-minute cron cadence.
-    - cron: "*/.1 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
