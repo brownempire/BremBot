@@ -469,6 +469,63 @@ button:disabled {
   padding: 14px;
 }
 
+.dashboard-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.dashboard-panel {
+  position: relative;
+  min-width: 320px;
+  min-height: 260px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.dashboard-panel.dragging {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.dashboard-panel-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.drag-handle {
+  cursor: grab;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.dashboard-panel-content {
+  height: calc(100% - 34px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.resize-handle {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(101, 217, 255, 0.4);
+  background:
+    linear-gradient(135deg, transparent 48%, rgba(101, 217, 255, 0.7) 49%, rgba(101, 217, 255, 0.7) 56%, transparent 57%),
+    rgba(13, 17, 25, 0.95);
+  cursor: nwse-resize;
+  padding: 0;
+}
+
 .tradingview-wrap {
   height: 520px;
   border-radius: 12px;
@@ -591,6 +648,15 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
+  .dashboard-layout {
+    gap: 10px;
+  }
+
+  .dashboard-panel {
+    width: 100% !important;
+    min-height: 280px;
+  }
+
   .header-alert-slot {
     width: 100%;
   }

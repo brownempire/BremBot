@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
@@ -115,6 +115,12 @@ type StoredTradeRecord = {
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
+type DashboardSectionId = "chart" | "wallet" | "pnl" | "params" | "signals" | "trades" | "news";
+type DashboardSectionLayout = {
+  id: DashboardSectionId;
+  width: number;
+  height: number;
+};
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -142,6 +148,17 @@ function formatFeedSource(status: string) {
 function tradesStorageKey(walletAddress: string) {
   return `brembot.recent-trades.${walletAddress}`;
 }
+
+const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
+const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
+  { id: "chart", width: 980, height: 610 },
+  { id: "wallet", width: 520, height: 680 },
+  { id: "pnl", width: 520, height: 460 },
+  { id: "params", width: 520, height: 700 },
+  { id: "signals", width: 440, height: 470 },
+  { id: "trades", width: 440, height: 470 },
+  { id: "news", width: 440, height: 470 },
+];
 
 function getAutoTradeTokenOption(symbol: AutoTradeToken) {
   return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
@@ -187,6 +204,15 @@ function DashboardPage() {
   const [walletPnlPoints, setWalletPnlPoints] = useState<WalletPnlPoint[]>([]);
   const [pnlStatus, setPnlStatus] = useState("Connect wallet to load PnL");
   const [pnlBaseline, setPnlBaseline] = useState<number | null>(null);
+  const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
+  const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
+  const resizeStateRef = useRef<{
+    id: DashboardSectionId;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -1195,6 +1221,363 @@ function DashboardPage() {
     setParamsSaveStatus("Reset to defaults");
   }
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DASHBOARD_LAYOUT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as DashboardSectionLayout[];
+      if (!Array.isArray(parsed)) return;
+      const normalized = DEFAULT_DASHBOARD_LAYOUT.map((defaults) => {
+        const existing = parsed.find((item) => item?.id === defaults.id);
+        return {
+          id: defaults.id,
+          width: Number.isFinite(existing?.width) ? Math.max(320, Number(existing?.width)) : defaults.width,
+          height: Number.isFinite(existing?.height) ? Math.max(260, Number(existing?.height)) : defaults.height,
+        };
+      });
+      setDashboardLayout(normalized);
+    } catch {
+      setDashboardLayout(DEFAULT_DASHBOARD_LAYOUT);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DASHBOARD_LAYOUT_STORAGE_KEY, JSON.stringify(dashboardLayout));
+    } catch {
+      // ignore storage errors
+    }
+  }, [dashboardLayout]);
+
+  function getSectionLayout(id: DashboardSectionId) {
+    return dashboardLayout.find((section) => section.id === id) ??
+      DEFAULT_DASHBOARD_LAYOUT.find((section) => section.id === id) ??
+      { id, width: 520, height: 400 };
+  }
+
+  function reorderDashboardSections(sourceId: DashboardSectionId, targetId: DashboardSectionId) {
+    if (sourceId === targetId) return;
+    setDashboardLayout((previous) => {
+      const next = [...previous];
+      const sourceIndex = next.findIndex((section) => section.id === sourceId);
+      const targetIndex = next.findIndex((section) => section.id === targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return previous;
+      const [moved] = next.splice(sourceIndex, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function startResizeSection(id: DashboardSectionId, event: ReactPointerEvent<HTMLButtonElement>) {
+    const layout = getSectionLayout(id);
+    resizeStateRef.current = {
+      id,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: layout.width,
+      startHeight: layout.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function resizeSection(event: ReactPointerEvent<HTMLButtonElement>) {
+    const state = resizeStateRef.current;
+    if (!state) return;
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    const width = Math.max(320, Math.round(state.startWidth + deltaX));
+    const height = Math.max(260, Math.round(state.startHeight + deltaY));
+    setDashboardLayout((previous) =>
+      previous.map((section) => (section.id === state.id ? { ...section, width, height } : section))
+    );
+  }
+
+  function stopResizeSection() {
+    resizeStateRef.current = null;
+  }
+
+  function renderDashboardSection(id: DashboardSectionId) {
+    if (id === "chart") {
+      return (
+        <>
+          <h3>TradingView Chart</h3>
+          <div className="subtext" style={{ marginBottom: 10 }}>
+            Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
+          </div>
+          <div className="tradingview-wrap">
+            <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
+          </div>
+        </>
+      );
+    }
+
+    if (id === "wallet") {
+      return (
+        <>
+          <h3>In-App Wallet</h3>
+          <div className="wallet-controls">
+            {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
+            <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
+            {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+            {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
+            {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
+            {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
+            {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
+            <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
+          </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button className="secondary" onClick={() => setShowJupiterPlugin((prev) => !prev)}>
+              {showJupiterPlugin ? "Hide Jupiter Plugin" : "Show Jupiter Plugin"}
+            </button>
+          </div>
+          <div className="subtext" style={{ marginTop: 8 }}>
+            Wallet keys are stored in this browser until you disconnect (which removes them from this device).
+          </div>
+          <div className="subtext" style={{ marginTop: 10 }}>
+            {wallet.publicKey
+              ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
+              : "Create or import an in-app wallet to start tracking balances and queueing trades."}
+          </div>
+          <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
+          {showJupiterPlugin ? (
+            <div style={{ marginTop: 10 }}>
+              <JupiterPluginPanel
+                targetId="jupiter-plugin-container"
+                fixedMint={activeAutoTradeToken?.mint ?? SOL_MINT}
+                passthroughWalletContextState={wallet.passthroughWalletContextState}
+                onRequestConnectWallet={loginInAppWallet}
+              />
+            </div>
+          ) : null}
+          <div className="wallet-holdings">
+            <div className="holding-row total-row">
+              <span>Total Balance</span>
+              <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
+            </div>
+            <div className="holding-row token-row">
+              <span className="token-meta">
+                <Image
+                  src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png"
+                  alt="Solana"
+                  className="token-icon"
+                  width={20}
+                  height={20}
+                  unoptimized
+                />
+                <span className="token-lines">
+                  <span className="token-line token-top">Solana</span>
+                  <span className="token-line token-bottom">SOL</span>
+                </span>
+              </span>
+              <span className="token-values">
+                <span className="token-line token-top">{solValueUsd === null ? "-" : formatUsd(solValueUsd)}</span>
+                <span className="token-line token-bottom">{solBalance === null ? "-" : solBalance.toFixed(4)}</span>
+              </span>
+            </div>
+            {walletTokens.map((token) => (
+              <div key={token.mint} className="holding-row token-row">
+                <span className="token-meta">
+                  {token.logoURI ? (
+                    <Image
+                      src={token.logoURI}
+                      alt={token.symbol ?? token.name ?? token.mint}
+                      className="token-icon"
+                      width={20}
+                      height={20}
+                      unoptimized
+                    />
+                  ) : null}
+                  <span className="token-lines">
+                    <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
+                    <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
+                  </span>
+                </span>
+                <span className="token-values">
+                  <span className="token-line token-top">{token.usdValue !== null && token.usdValue !== undefined ? formatUsd(token.usdValue) : "-"}</span>
+                  <span className="token-line token-bottom">{token.amount.toFixed(4)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+
+    if (id === "pnl") {
+      return (
+        <>
+          <h3>PnL</h3>
+          <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
+          <div className="pnl-metrics">
+            <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
+            <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong></div>
+            <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong></div>
+            <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
+          </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
+            <button type="button" className={pnlRange === "7d" ? "" : "secondary"} onClick={() => setPnlRange("7d")}>7D</button>
+            <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
+            <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
+          </div>
+          <div className="pnl-chart-wrap">
+            <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
+              <polyline points={pnlChartPolyline} fill="none" stroke="var(--accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </>
+      );
+    }
+
+    if (id === "params") {
+      return (
+        <>
+          <h3>Signal Parameters</h3>
+          <div className="controls params-toolbar">
+            <div className="subtext">{paramsSaveStatus}</div>
+            <button type="button" onClick={saveSignalParams}>Save</button>
+            <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
+          </div>
+          <div className="controls">
+            <label>
+              Receive Signals For
+              <button type="button" className="secondary" style={{ marginTop: 8 }} onClick={() => setEditingSignalTarget((prev) => !prev)}>
+                {selectedSignalMarket?.pair ?? "Select Market"}
+              </button>
+              {editingSignalTarget ? (
+                <select style={{ marginTop: 8 }} value={selectedSignalMarket?.coinbaseProduct ?? ""} onChange={(event) => { updateTrackedMarket(receiveSignalsForSlotId, event.target.value); setEditingSignalTarget(false); }}>
+                  {marketOptions.map((option) => (<option key={option.coinbaseProduct} value={option.coinbaseProduct}>{option.pair}</option>))}
+                </select>
+              ) : null}
+            </label>
+            <label>Trend window (min)<input type="number" value={params.trendWindow} min={1} max={180} step={1} onChange={(event) => setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))} /></label>
+            <label>Trend threshold %<input type="number" value={params.trendThreshold} min={0.1} max={10} step={0.1} onChange={(event) => setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))} /></label>
+            <label>Breakout %<input type="number" value={params.breakoutPercent} min={0.8} max={8} step={0.2} onChange={(event) => setParams((prev) => ({ ...prev, breakoutPercent: Number(event.target.value) }))} /></label>
+            <label>News bias (0-1)<input type="number" value={params.newsBias} min={0} max={1} step={0.05} onChange={(event) => setParams((prev) => ({ ...prev, newsBias: Number(event.target.value) }))} /></label>
+            <label>Cooldown (sec)<input type="number" value={params.cooldownSeconds} min={5} max={900} step={5} onChange={(event) => setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))} /></label>
+            <label>
+              Auto-trade wallet allocation (%)
+              <input
+                type="number"
+                value={autoTradeSettings.walletPercent}
+                min={1}
+                max={100}
+                step={1}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  const walletPercent = Number.isFinite(value) ? Math.min(100, Math.max(1, Math.round(value))) : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+                  const next = { ...autoTradeSettings, walletPercent };
+                  persistAutoTradeSettings(next);
+                }}
+              />
+            </label>
+          </div>
+          <div className="auto-trade-selector-wrap">
+            <div className="auto-trade-selector-header">
+              <strong>Auto-Trade Selector</strong>
+              <span className="subtext">Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.</span>
+            </div>
+            <div className="auto-trade-selector-grid">
+              {autoTradeSettings.slots.map((slot) => (
+                <div key={slot.id} className="auto-trade-slot">
+                  <label>
+                    Token
+                    <select value={slot.token} onChange={(event) => updateAutoTradeSlotToken(slot.id, event.target.value as AutoTradeToken)}>
+                      {AUTO_TRADE_TOKEN_OPTIONS.map((option) => (<option key={option.symbol} value={option.symbol}>{option.label}</option>))}
+                    </select>
+                  </label>
+                  <label className="auto-trade-slot-toggle">
+                    <span className="subtext">Auto-trade</span>
+                    <input type="checkbox" checked={autoTradeSettings.activeSlotId === slot.id} onChange={(event) => toggleAutoTradeSlot(slot.id, event.target.checked)} />
+                    <span>{autoTradeSettings.activeSlotId === slot.id ? "On" : "Off"}</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+            {showAutoTradeSelectorWarning ? (
+              <div className="auto-trade-selector-modal" role="alertdialog" aria-modal="true">
+                <div className="auto-trade-selector-modal-card">
+                  <strong>Only One Token Allowed For Auto-Trade At A Time</strong>
+                  <button type="button" style={{ marginTop: 10 }} onClick={() => setShowAutoTradeSelectorWarning(false)}>OK</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </>
+      );
+    }
+
+    if (id === "signals") {
+      return (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h3>Live Signals</h3>
+            <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
+          </div>
+          {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
+          <div className="signals-scroll">
+            {signals.map((signal) => (
+              <div key={signal.id} className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}>
+                <div>
+                  <div>{signal.symbol} · {signal.type.toUpperCase()}</div>
+                  <div className="signal-meta">{signal.summary}</div>
+                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
+                </div>
+                <div>{Math.round(signal.confidence * 100)}%</div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+
+    if (id === "trades") {
+      return (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h3>Recent Trades</h3>
+            <div className="wallet-controls"><button className="secondary" onClick={clearRecentTrades}>Clear Trades</button></div>
+          </div>
+          {!wallet.publicKey && recentTrades.length === 0 && (<div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>)}
+          {recentTrades.length === 0 && wallet.publicKey && (<div className="subtext">No recent trades recorded for this wallet yet.</div>)}
+          <div className="recent-trades-scroll">
+            {recentTrades.map((trade) => (
+              <div key={trade.id} className="news-item">
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>
+                  <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
+                </div>
+                {trade.signalSummary ? <div className="subtext">{trade.signalSummary}</div> : null}
+                <div className="news-meta">
+                  <span>{trade.txid.startsWith("auto-") || trade.txid.startsWith("manual-") ? trade.txid.slice(0, 20) : shortAddress(trade.txid)}</span>
+                  {trade.txid.startsWith("auto-") ? (
+                    <span>Simulated execution</span>
+                  ) : trade.txid.startsWith("manual-") ? (
+                    <span>Manual entry</span>
+                  ) : (
+                    <a href={`https://solscan.io/tx/${trade.txid}`} target="_blank" rel="noreferrer">View Tx</a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <h3>News Pulse</h3>
+        {latestNews.map((item) => (
+          <div key={item.id} className="news-item">
+            <div>{item.url ? (<a href={item.url} target="_blank" rel="noreferrer">{item.headline}</a>) : item.headline}</div>
+            <div className="news-meta"><span>{item.source}</span><span>{item.sentiment >= 0 ? "Positive" : "Negative"}</span></div>
+          </div>
+        ))}
+      </>
+    );
+  }
+
   return (
     <main>
       <header>
@@ -1291,317 +1674,44 @@ function DashboardPage() {
         </div>
       </header>
 
-      <section className="panel chart-panel" style={{ marginBottom: 22 }}>
-        <h3>TradingView Chart</h3>
-        <div className="subtext" style={{ marginBottom: 10 }}>
-          Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
-        </div>
-        <div className="tradingview-wrap">
-          <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
-        </div>
-      </section>
-
-      <section className="grid" style={{ marginBottom: 22 }}>
-        <div className="panel-stack">
-        <div className="panel">
-          <h3>In-App Wallet</h3>
-          <div className="wallet-controls">
-            {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
-            <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
-            {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
-            {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
-            {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
-            {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
-            {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
-            <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
-          </div>
-          <div className="wallet-controls" style={{ marginTop: 8 }}>
-            <button className="secondary" onClick={() => setShowJupiterPlugin((prev) => !prev)}>
-              {showJupiterPlugin ? "Hide Jupiter Plugin" : "Show Jupiter Plugin"}
-            </button>
-          </div>
-          <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet keys are stored in this browser until you disconnect (which removes them from this device).
-          </div>
-          <div className="subtext" style={{ marginTop: 10 }}>
-            {wallet.publicKey
-              ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Create or import an in-app wallet to start tracking balances and queueing trades."}
-          </div>
-          <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
-          {showJupiterPlugin ? (
-            <div style={{ marginTop: 10 }}>
-              <JupiterPluginPanel
-                targetId="jupiter-plugin-container"
-                fixedMint={activeAutoTradeToken?.mint ?? SOL_MINT}
-                passthroughWalletContextState={wallet.passthroughWalletContextState}
-                onRequestConnectWallet={loginInAppWallet}
-              />
-            </div>
-          ) : null}
-          <div className="wallet-holdings">
-            <div className="holding-row total-row">
-              <span>Total Balance</span>
-              <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
-            </div>
-            <div className="holding-row token-row">
-              <span className="token-meta">
-                <Image
-                  src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png"
-                  alt="Solana"
-                  className="token-icon"
-                  width={20}
-                  height={20}
-                  unoptimized
-                />
-                <span className="token-lines">
-                  <span className="token-line token-top">Solana</span>
-                  <span className="token-line token-bottom">SOL</span>
-                </span>
-              </span>
-              <span className="token-values">
-                <span className="token-line token-top">{solValueUsd === null ? "-" : formatUsd(solValueUsd)}</span>
-                <span className="token-line token-bottom">{solBalance === null ? "-" : solBalance.toFixed(4)}</span>
-              </span>
-            </div>
-            {walletTokens.map((token) => (
-              <div key={token.mint} className="holding-row token-row">
-                <span className="token-meta">
-                  {token.logoURI ? (
-                    <Image
-                      src={token.logoURI}
-                      alt={token.symbol ?? token.name ?? token.mint}
-                      className="token-icon"
-                      width={20}
-                      height={20}
-                      unoptimized
-                    />
-                  ) : null}
-                  <span className="token-lines">
-                    <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
-                    <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
-                  </span>
-                </span>
-                <span className="token-values">
-                  <span className="token-line token-top">{token.usdValue !== null && token.usdValue !== undefined ? formatUsd(token.usdValue) : "-"}</span>
-                  <span className="token-line token-bottom">{token.amount.toFixed(4)}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <h3>PnL</h3>
-          <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
-          <div className="pnl-metrics">
-            <div className="pnl-metric">
-              <span>24hr</span>
-              <strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong>
-            </div>
-            <div className="pnl-metric">
-              <span>7-day</span>
-              <strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong>
-            </div>
-            <div className="pnl-metric">
-              <span>30-day</span>
-              <strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong>
-            </div>
-            <div className="pnl-metric">
-              <span>YTD</span>
-              <strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong>
-            </div>
-          </div>
-          <div className="wallet-controls" style={{ marginTop: 8 }}>
-            <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
-            <button type="button" className={pnlRange === "7d" ? "" : "secondary"} onClick={() => setPnlRange("7d")}>7D</button>
-            <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
-            <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
-          </div>
-          <div className="pnl-chart-wrap">
-            <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
-              <polyline
-                points={pnlChartPolyline}
-                fill="none"
-                stroke="var(--accent)"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-        </div>
-        </div>
-
-        <div className="panel">
-          <h3>Signal Parameters</h3>
-          <div className="controls params-toolbar">
-            <div className="subtext">{paramsSaveStatus}</div>
-            <button type="button" onClick={saveSignalParams}>Save</button>
-            <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
-          </div>
-          <div className="controls">
-            <label>
-              Receive Signals For
+      <section className="dashboard-layout" style={{ marginBottom: 22 }}>
+        {dashboardLayout.map((section) => (
+          <article
+            key={section.id}
+            className={`panel dashboard-panel ${dragSectionId === section.id ? "dragging" : ""}`}
+            style={{ width: section.width, height: section.height }}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={() => {
+              if (dragSectionId) reorderDashboardSections(dragSectionId, section.id);
+              setDragSectionId(null);
+            }}
+          >
+            <div className="dashboard-panel-toolbar">
               <button
                 type="button"
-                className="secondary"
-                style={{ marginTop: 8 }}
-                onClick={() => setEditingSignalTarget((prev) => !prev)}
+                draggable
+                className="drag-handle"
+                title="Drag to reorder"
+                onDragStart={() => setDragSectionId(section.id)}
+                onDragEnd={() => setDragSectionId(null)}
               >
-                {selectedSignalMarket?.pair ?? "Select Market"}
+                Drag
               </button>
-              {editingSignalTarget ? (
-                <select
-                  style={{ marginTop: 8 }}
-                  value={selectedSignalMarket?.coinbaseProduct ?? ""}
-                  onChange={(event) => {
-                    updateTrackedMarket(receiveSignalsForSlotId, event.target.value);
-                    setEditingSignalTarget(false);
-                  }}
-                >
-                  {marketOptions.map((option) => (
-                    <option key={option.coinbaseProduct} value={option.coinbaseProduct}>
-                      {option.pair}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-            </label>
-            <label>
-              Trend window (min)
-              <input
-                type="number"
-                value={params.trendWindow}
-                min={1}
-                max={180}
-                step={1}
-                onChange={(event) =>
-                  setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))
-                }
-              />
-            </label>
-            <label>
-              Trend threshold %
-              <input
-                type="number"
-                value={params.trendThreshold}
-                min={0.1}
-                max={10}
-                step={0.1}
-                onChange={(event) =>
-                  setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))
-                }
-              />
-            </label>
-            <label>
-              Breakout %
-              <input
-                type="number"
-                value={params.breakoutPercent}
-                min={0.8}
-                max={8}
-                step={0.2}
-                onChange={(event) =>
-                  setParams((prev) => ({ ...prev, breakoutPercent: Number(event.target.value) }))
-                }
-              />
-            </label>
-            <label>
-              News bias (0-1)
-              <input
-                type="number"
-                value={params.newsBias}
-                min={0}
-                max={1}
-                step={0.05}
-                onChange={(event) =>
-                  setParams((prev) => ({ ...prev, newsBias: Number(event.target.value) }))
-                }
-              />
-            </label>
-            <label>
-              Cooldown (sec)
-              <input
-                type="number"
-                value={params.cooldownSeconds}
-                min={5}
-                max={900}
-                step={5}
-                onChange={(event) =>
-                  setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))
-                }
-              />
-            </label>
-            <label>
-              Auto-trade wallet allocation (%)
-              <input
-                type="number"
-                value={autoTradeSettings.walletPercent}
-                min={1}
-                max={100}
-                step={1}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  const walletPercent = Number.isFinite(value)
-                    ? Math.min(100, Math.max(1, Math.round(value)))
-                    : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
-                  const next = { ...autoTradeSettings, walletPercent };
-                  persistAutoTradeSettings(next);
-                }}
-              />
-            </label>
-          </div>
-          <div className="auto-trade-selector-wrap">
-            <div className="auto-trade-selector-header">
-              <strong>Auto-Trade Selector</strong>
-              <span className="subtext">
-                Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.
-              </span>
             </div>
-            <div className="auto-trade-selector-grid">
-              {autoTradeSettings.slots.map((slot) => (
-                <div key={slot.id} className="auto-trade-slot">
-                  <label>
-                    Token
-                    <select
-                      value={slot.token}
-                      onChange={(event) => updateAutoTradeSlotToken(slot.id, event.target.value as AutoTradeToken)}
-                    >
-                      {AUTO_TRADE_TOKEN_OPTIONS.map((option) => (
-                        <option key={option.symbol} value={option.symbol}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="auto-trade-slot-toggle">
-                    <span className="subtext">Auto-trade</span>
-                    <input
-                      type="checkbox"
-                      checked={autoTradeSettings.activeSlotId === slot.id}
-                      onChange={(event) => toggleAutoTradeSlot(slot.id, event.target.checked)}
-                    />
-                    <span>{autoTradeSettings.activeSlotId === slot.id ? "On" : "Off"}</span>
-                  </label>
-                </div>
-              ))}
+            <div className="dashboard-panel-content">
+              {renderDashboardSection(section.id)}
             </div>
-            {showAutoTradeSelectorWarning ? (
-              <div className="auto-trade-selector-modal" role="alertdialog" aria-modal="true">
-                <div className="auto-trade-selector-modal-card">
-                  <strong>Only One Token Allowed For Auto-Trade At A Time</strong>
-                  <button
-                    type="button"
-                    style={{ marginTop: 10 }}
-                    onClick={() => setShowAutoTradeSelectorWarning(false)}
-                  >
-                    OK
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
+            <button
+              type="button"
+              className="resize-handle"
+              title="Drag to resize"
+              onPointerDown={(event) => startResizeSection(section.id, event)}
+              onPointerMove={resizeSection}
+              onPointerUp={stopResizeSection}
+              onPointerCancel={stopResizeSection}
+            />
+          </article>
+        ))}
       </section>
 
       {showDepositModal && wallet.publicKey ? (
@@ -1622,98 +1732,6 @@ function DashboardPage() {
           </div>
         </div>
       ) : null}
-
-      <section className="grid" style={{ marginBottom: 22 }}>
-        <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <h3>Live Signals</h3>
-            <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
-          </div>
-          {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
-          <div className="signals-scroll">
-            {signals.map((signal) => (
-              <div
-                key={signal.id}
-                className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
-              >
-                <div>
-                  <div>
-                    {signal.symbol} · {signal.type.toUpperCase()}
-                  </div>
-                  <div className="signal-meta">{signal.summary}</div>
-                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
-                </div>
-                <div>{Math.round(signal.confidence * 100)}%</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="panel">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <h3>Recent Trades</h3>
-            <div className="wallet-controls">
-              <button className="secondary" onClick={clearRecentTrades}>Clear Trades</button>
-            </div>
-          </div>
-          {!wallet.publicKey && recentTrades.length === 0 && (
-            <div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>
-          )}
-          {recentTrades.length === 0 && wallet.publicKey && (
-            <div className="subtext">No recent trades recorded for this wallet yet.</div>
-          )}
-          <div className="recent-trades-scroll">
-          {recentTrades.map((trade) => (
-            <div key={trade.id} className="news-item">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>
-                <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
-              </div>
-              {trade.signalSummary ? <div className="subtext">{trade.signalSummary}</div> : null}
-              <div className="news-meta">
-                <span>
-                  {trade.txid.startsWith("auto-") || trade.txid.startsWith("manual-")
-                    ? trade.txid.slice(0, 20)
-                    : shortAddress(trade.txid)}
-                </span>
-                {trade.txid.startsWith("auto-") ? (
-                  <span>Simulated execution</span>
-                ) : trade.txid.startsWith("manual-") ? (
-                  <span>Manual entry</span>
-                ) : (
-                  <a
-                    href={`https://solscan.io/tx/${trade.txid}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    View Tx
-                  </a>
-                )}
-              </div>
-            </div>
-          ))}
-          </div>
-        </div>
-
-        <div className="panel">
-          <h3>News Pulse</h3>
-          {latestNews.map((item) => (
-            <div key={item.id} className="news-item">
-              <div>
-                {item.url ? (
-                  <a href={item.url} target="_blank" rel="noreferrer">
-                    {item.headline}
-                  </a>
-                ) : item.headline}
-              </div>
-              <div className="news-meta">
-                <span>{item.source}</span>
-                <span>{item.sentiment >= 0 ? "Positive" : "Negative"}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
 
       <div className="footer">
         Signals are informational only and not financial advice. Always verify on-chain details before placing live trades.

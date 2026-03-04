@@ -231,6 +231,20 @@ function isSolscanJupiterSwap(item: Record<string, unknown>) {
   return looksLikeSwap && looksLikeJupiter;
 }
 
+function isLikelyJupiterSwapTransaction(transaction: ParsedTransactionWithMeta) {
+  const metaLogs = transaction.meta?.logMessages ?? [];
+  const logHit = metaLogs.some((line) => line.toLowerCase().includes("jupiter"));
+  if (logHit) return true;
+
+  const instructions = transaction.transaction.message.instructions ?? [];
+  return instructions.some((instruction) => {
+    const maybeProgramId = "programId" in instruction ? String(instruction.programId ?? "") : "";
+    const maybeParsed = "parsed" in instruction ? String((instruction as { parsed?: unknown }).parsed ?? "") : "";
+    const text = `${maybeProgramId} ${maybeParsed}`.toLowerCase();
+    return text.includes("jup") || text.includes("jupiter");
+  });
+}
+
 async function fetchJupiterSignaturesFromSolscan(address: string, ytdCutoff: number, maxSignatures: number) {
   const signatures = new Set<string>();
   const headers = getSolscanHeaders();
@@ -332,10 +346,12 @@ export async function GET(request: Request) {
 
   try {
     const solscanSignatures = await fetchJupiterSignaturesFromSolscan(address, ytdCutoff, maxSignatures);
-    const signatures = solscanSignatures
-      ? [...solscanSignatures].slice(0, maxSignatures)
-      : await fetchSignaturesFromRpc(connection, owner, ytdCutoff, maxSignatures);
+    const useRpcFallback = !solscanSignatures || solscanSignatures.size === 0;
+    const signatures = useRpcFallback
+      ? await fetchSignaturesFromRpc(connection, owner, ytdCutoff, maxSignatures)
+      : [...solscanSignatures].slice(0, maxSignatures);
     const allowedSignatures = solscanSignatures ? new Set(signatures) : null;
+    const filterJupiterFromRpc = useRpcFallback;
 
     const transactions: ParsedTransactionWithMeta[] = [];
     for (let i = 0; i < signatures.length; i += 100) {
@@ -350,6 +366,7 @@ export async function GET(request: Request) {
           const primarySignature = tx.transaction.signatures[0];
           if (!allowedSignatures.has(primarySignature)) return;
         }
+        if (filterJupiterFromRpc && !isLikelyJupiterSwapTransaction(tx)) return;
         transactions.push(tx);
       });
     }
