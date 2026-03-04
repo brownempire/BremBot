@@ -197,28 +197,76 @@ header {
 }
 
 .params-toolbar {
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
   margin-top: 0;
   margin-bottom: 8px;
 }
 
-.auto-trade-toggle {
-  border-width: 1px;
-  border-style: solid;
-  min-width: 132px;
+.auto-trade-selector-wrap {
+  position: relative;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(13, 17, 25, 0.6);
 }
 
-.auto-trade-toggle.off {
-  border-color: rgba(255, 107, 107, 0.55);
-  background: rgba(255, 107, 107, 0.2);
-  color: #ffd1d1;
+.auto-trade-selector-header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
 }
 
-.auto-trade-toggle.on {
-  border-color: rgba(107, 255, 177, 0.65);
-  background: rgba(107, 255, 177, 0.22);
-  color: #cbffe4;
+.auto-trade-selector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.auto-trade-slot {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(13, 17, 25, 0.8);
+  display: grid;
+  gap: 8px;
+}
+
+.auto-trade-slot-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.auto-trade-slot-toggle input[type="checkbox"] {
+  width: 42px;
+  height: 20px;
+  accent-color: #47e6a1;
+}
+
+.auto-trade-selector-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(6, 11, 19, 0.74);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.auto-trade-selector-modal-card {
+  width: min(360px, 100%);
+  border: 1px solid rgba(255, 130, 130, 0.55);
+  border-radius: 12px;
+  background: rgba(22, 10, 10, 0.96);
+  color: #ffe5e5;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
 }
 
 input,

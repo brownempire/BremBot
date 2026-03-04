@@ -11,6 +11,10 @@ const MAX_PASSWORD_LENGTH = 16;
 const PBKDF2_ITERATIONS = 210000;
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const ETH_MINT = "7vfCXTUXx5WQXj6Yf8sTG6iM6Aq98J4A4P8M7P8yWfYw";
+const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
+const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+const BONK_MINT = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 
 type StoredWalletPayload = {
   version: 2;
@@ -171,7 +175,12 @@ function loadStoredWalletPayload(): StoredWalletPayload | null {
 }
 
 function mintDecimals(mint: string) {
-  return mint === USDC_MINT ? 6 : mint === SOL_MINT ? 9 : 9;
+  if (mint === USDC_MINT) return 6;
+  if (mint === SOL_MINT) return 9;
+  if (mint === ETH_MINT || mint === BTC_MINT) return 8;
+  if (mint === JUP_MINT) return 6;
+  if (mint === BONK_MINT) return 5;
+  return 9;
 }
 
 function uiToAtomicAmount(uiAmount: number, decimals: number) {

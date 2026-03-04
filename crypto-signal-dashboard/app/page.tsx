@@ -18,8 +18,9 @@ const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ
 const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const ETH_MINT = "7vfCXTUXx5WQXj6Yf8sTG6iM6Aq98J4A4P8M7P8yWfYw";
+const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
-const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 
@@ -50,16 +51,42 @@ const DEFAULT_PARAMS: UserParams = {
   cooldownSeconds: 60,
 };
 
-type AutoTradeToken = "SOL" | "USDC";
+type AutoTradeToken = "SOL" | "ETH" | "BTC" | "USDC" | "JUP" | "BONK";
+
+type AutoTradeTokenOption = {
+  symbol: AutoTradeToken;
+  label: string;
+  mint: string;
+};
+
+const AUTO_TRADE_TOKEN_OPTIONS: AutoTradeTokenOption[] = [
+  { symbol: "SOL", label: "Solana (SOL)", mint: SOL_MINT },
+  { symbol: "ETH", label: "Ethereum (ETH)", mint: ETH_MINT },
+  { symbol: "BTC", label: "Bitcoin (BTC)", mint: BTC_MINT },
+  { symbol: "USDC", label: "USDC", mint: USDC_MINT },
+  { symbol: "JUP", label: "Jupiter (JUP)", mint: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN" },
+  { symbol: "BONK", label: "Bonk (BONK)", mint: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" },
+];
+
+type AutoTradeSlot = {
+  id: string;
+  token: AutoTradeToken;
+};
 
 type AutoTradeSettings = {
   walletPercent: number;
-  inputToken: AutoTradeToken;
+  slots: AutoTradeSlot[];
+  activeSlotId: string | null;
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
-  inputToken: "SOL",
+  slots: [
+    { id: "auto-slot-1", token: "SOL" },
+    { id: "auto-slot-2", token: "ETH" },
+    { id: "auto-slot-3", token: "BTC" },
+  ],
+  activeSlotId: null,
 };
 
 type WalletTokenHolding = {
@@ -116,6 +143,10 @@ function tradesStorageKey(walletAddress: string) {
   return `brembot.recent-trades.${walletAddress}`;
 }
 
+function getAutoTradeTokenOption(symbol: AutoTradeToken) {
+  return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
+}
+
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -126,7 +157,6 @@ function DashboardPage() {
   const [dayChange24h, setDayChange24h] = useState<Record<string, number>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [paramsSaveStatus, setParamsSaveStatus] = useState("Using defaults");
-  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
@@ -150,12 +180,19 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
+  const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
   const [walletPnlPoints, setWalletPnlPoints] = useState<WalletPnlPoint[]>([]);
   const [pnlStatus, setPnlStatus] = useState("Connect wallet to load PnL");
   const [pnlBaseline, setPnlBaseline] = useState<number | null>(null);
+  const activeAutoTradeSlot = useMemo(
+    () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
+    [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
+  );
+  const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
+  const autoTradeEnabled = Boolean(activeAutoTradeToken);
 
   useEffect(() => {
     let cancelled = false;
@@ -315,22 +352,22 @@ function DashboardPage() {
               new Notification(`Signal: ${signal.symbol}`, { body: signal.summary });
             }
 
-            if (autoTradeEnabled) {
-              const inputMint = autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT;
-              const directionalOutputMint = signal.direction === "bullish" ? SOL_MINT : USDC_MINT;
-
+            if (autoTradeEnabled && activeAutoTradeToken) {
+              const assetSymbol = activeAutoTradeToken.symbol;
+              const assetMint = activeAutoTradeToken.mint;
+              const isBullSignal = signal.direction === "bullish";
+              const inputMint = isBullSignal ? USDC_MINT : assetMint;
+              const outputMint = isBullSignal ? assetMint : USDC_MINT;
               if (wallet.publicKey) {
-                const outputMint = directionalOutputMint === inputMint
-                  ? (inputMint === SOL_MINT ? USDC_MINT : SOL_MINT)
-                  : directionalOutputMint;
-                const availableInput = autoTradeSettings.inputToken === "USDC"
-                  ? (walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0)
-                  : (solBalance ?? 0);
+                const availableInput = inputMint === SOL_MINT
+                  ? (solBalance ?? 0)
+                  : (walletTokens.find((token) => token.mint === inputMint)?.amount ?? 0);
                 const tradeAmount = Number((availableInput * (autoTradeSettings.walletPercent / 100)).toFixed(6));
                 if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
-                  setAutoTradeStatus(`Signal detected for ${signal.symbol} but no ${autoTradeSettings.inputToken} balance is available`);
+                  setAutoTradeStatus(`Signal detected for ${signal.symbol} but no ${isBullSignal ? "USDC" : assetSymbol} balance is available`);
                 } else {
-                  setAutoTradeStatus(`Executing auto-trade for ${signal.symbol} (${tradeAmount} ${autoTradeSettings.inputToken})...`);
+                  const sideLabel = isBullSignal ? `buy ${assetSymbol}` : `sell ${assetSymbol}`;
+                  setAutoTradeStatus(`Executing auto-trade for ${signal.symbol}: ${sideLabel} (${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol})...`);
                   wallet.executeSwap({
                     inputMint,
                     outputMint,
@@ -348,7 +385,7 @@ function DashboardPage() {
                       outputMint: result.outputMint,
                       inputAmount: result.inputAmount,
                       outputAmount: result.outputAmount,
-                      signalSummary: `${signal.summary} · executed ${tradeAmount} ${autoTradeSettings.inputToken}`,
+                      signalSummary: `${signal.summary} · ${isBullSignal ? "buy" : "sell"} ${assetSymbol} · executed ${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol}`,
                     };
                     setRecentTrades((prevTrades) => {
                       const nextTrades = [autoTradeRecord, ...prevTrades].slice(0, 20);
@@ -386,7 +423,7 @@ function DashboardPage() {
                   walletAddress: activeWallet,
                   source: "auto",
                   signalId: signal.id,
-                  signalSummary: `${signal.summary} · ${autoTradeSettings.walletPercent}% of wallet in ${autoTradeSettings.inputToken}`,
+                  signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${autoTradeSettings.walletPercent}% allocation`,
                 };
                 setRecentTrades((prevTrades) => {
                   const nextTrades = [
@@ -401,7 +438,7 @@ function DashboardPage() {
                   return nextTrades;
                 });
                 setAutoTradeStatus(
-                  `Auto-trade paper execution for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken} (connect wallet for live)`
+                  `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${autoTradeSettings.walletPercent}% allocation; connect wallet for live)`
                 );
               }
             }
@@ -425,8 +462,8 @@ function DashboardPage() {
       return next;
     });
   }, [
+    activeAutoTradeToken,
     autoTradeEnabled,
-    autoTradeSettings.inputToken,
     autoTradeSettings.walletPercent,
     lastSignalAt,
     newsItems,
@@ -517,27 +554,45 @@ function DashboardPage() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(AUTO_TRADE_STORAGE_KEY);
-      const enabled = raw === "true";
-      setAutoTradeEnabled(enabled);
-      setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
-    } catch (_error) {
-      setAutoTradeEnabled(false);
-      setAutoTradeStatus("Auto-trade is off");
-    }
-  }, []);
-
-  useEffect(() => {
-    try {
       const raw = window.localStorage.getItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings>;
+      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings & { inputToken?: AutoTradeToken }>;
       const nextPercent = Number(parsed.walletPercent);
       const percent = Number.isFinite(nextPercent)
         ? Math.min(100, Math.max(1, Math.round(nextPercent)))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
-      const inputToken = parsed.inputToken === "USDC" ? "USDC" : "SOL";
-      setAutoTradeSettings({ walletPercent: percent, inputToken });
+      const parsedSlots = Array.isArray(parsed.slots)
+        ? parsed.slots
+          .map((slot) => {
+            if (!slot || typeof slot !== "object") return null;
+            const slotId = String((slot as { id?: string }).id ?? "");
+            const tokenRaw = String((slot as { token?: string }).token ?? "SOL");
+            const token = AUTO_TRADE_TOKEN_OPTIONS.some((option) => option.symbol === tokenRaw)
+              ? (tokenRaw as AutoTradeToken)
+              : "SOL";
+            return slotId ? { id: slotId, token } : null;
+          })
+          .filter((slot): slot is AutoTradeSlot => Boolean(slot))
+          .slice(0, 3)
+        : [];
+      const normalizedSlots = parsedSlots.length === 3
+        ? parsedSlots
+        : DEFAULT_AUTO_TRADE_SETTINGS.slots.map((slot, index) => ({
+          ...slot,
+          token: parsedSlots[index]?.token ?? slot.token,
+        }));
+      const legacyInputToken = parsed.inputToken;
+      const activeSlotId = typeof parsed.activeSlotId === "string"
+        ? normalizedSlots.some((slot) => slot.id === parsed.activeSlotId) ? parsed.activeSlotId : null
+        : legacyInputToken
+          ? normalizedSlots[0]?.id ?? null
+          : null;
+
+      setAutoTradeSettings({
+        walletPercent: percent,
+        slots: normalizedSlots,
+        activeSlotId,
+      });
     } catch (_error) {
       setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     }
@@ -560,6 +615,14 @@ function DashboardPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeAutoTradeToken) {
+      setAutoTradeStatus("Auto-trade is off");
+      return;
+    }
+    setAutoTradeStatus(`Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation)`);
+  }, [activeAutoTradeToken, autoTradeSettings.walletPercent]);
 
   useEffect(() => {
     const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
@@ -1068,6 +1131,47 @@ function DashboardPage() {
     setLastSignalAt({});
   }
 
+  function persistAutoTradeSettings(next: AutoTradeSettings) {
+    setAutoTradeSettings(next);
+    try {
+      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+    } catch (_error) {
+      // ignore storage errors
+    }
+  }
+
+  function updateAutoTradeSlotToken(slotId: string, token: AutoTradeToken) {
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      slots: autoTradeSettings.slots.map((slot) => (slot.id === slotId ? { ...slot, token } : slot)),
+    };
+    persistAutoTradeSettings(next);
+    if (next.activeSlotId === slotId) {
+      setAutoTradeStatus(`Auto-trade is on (${token}, ${next.walletPercent}% allocation)`);
+    }
+  }
+
+  function toggleAutoTradeSlot(slotId: string, enabled: boolean) {
+    if (enabled && autoTradeSettings.activeSlotId && autoTradeSettings.activeSlotId !== slotId) {
+      setShowAutoTradeSelectorWarning(true);
+      return;
+    }
+
+    const nextActiveSlotId = enabled ? slotId : null;
+    const slot = autoTradeSettings.slots.find((item) => item.id === slotId);
+    const token = slot ? getAutoTradeTokenOption(slot.token) : null;
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      activeSlotId: nextActiveSlotId,
+    };
+    persistAutoTradeSettings(next);
+    setAutoTradeStatus(
+      enabled && token
+        ? `Auto-trade is on (${token.symbol}, ${next.walletPercent}% allocation)`
+        : "Auto-trade is off"
+    );
+  }
+
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
@@ -1081,6 +1185,7 @@ function DashboardPage() {
   function resetSignalParams() {
     setParams(DEFAULT_PARAMS);
     setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
+    setAutoTradeStatus("Auto-trade is off");
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
       window.localStorage.removeItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
@@ -1088,23 +1193,6 @@ function DashboardPage() {
       // ignore storage errors
     }
     setParamsSaveStatus("Reset to defaults");
-  }
-
-  function toggleAutoTrade() {
-    setAutoTradeEnabled((previous) => {
-      const next = !previous;
-      try {
-        window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
-      } catch (_error) {
-        // ignore storage errors
-      }
-      setAutoTradeStatus(
-        next
-          ? `Auto-trade is on (${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken})`
-          : "Auto-trade is off"
-      );
-      return next;
-    });
   }
 
   return (
@@ -1245,7 +1333,7 @@ function DashboardPage() {
             <div style={{ marginTop: 10 }}>
               <JupiterPluginPanel
                 targetId="jupiter-plugin-container"
-                fixedMint={autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT}
+                fixedMint={activeAutoTradeToken?.mint ?? SOL_MINT}
                 passthroughWalletContextState={wallet.passthroughWalletContextState}
                 onRequestConnectWallet={loginInAppWallet}
               />
@@ -1348,15 +1436,6 @@ function DashboardPage() {
           <h3>Signal Parameters</h3>
           <div className="controls params-toolbar">
             <div className="subtext">{paramsSaveStatus}</div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoTradeEnabled}
-              className={`auto-trade-toggle ${autoTradeEnabled ? "on" : "off"}`}
-              onClick={toggleAutoTrade}
-            >
-              Auto-trade: {autoTradeEnabled ? "On" : "Off"}
-            </button>
             <button type="button" onClick={saveSignalParams}>Save</button>
             <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
           </div>
@@ -1393,9 +1472,9 @@ function DashboardPage() {
               <input
                 type="number"
                 value={params.trendWindow}
-                min={15}
+                min={1}
                 max={180}
-                step={5}
+                step={1}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))
                 }
@@ -1406,9 +1485,9 @@ function DashboardPage() {
               <input
                 type="number"
                 value={params.trendThreshold}
-                min={0.8}
+                min={0.1}
                 max={10}
-                step={0.2}
+                step={0.1}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))
                 }
@@ -1433,8 +1512,8 @@ function DashboardPage() {
                 type="number"
                 value={params.newsBias}
                 min={0}
-                max={0.4}
-                step={0.02}
+                max={1}
+                step={0.05}
                 onChange={(event) =>
                   setParams((prev) => ({ ...prev, newsBias: Number(event.target.value) }))
                 }
@@ -1466,39 +1545,61 @@ function DashboardPage() {
                   const walletPercent = Number.isFinite(value)
                     ? Math.min(100, Math.max(1, Math.round(value)))
                     : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
-                  setAutoTradeSettings((prev) => {
-                    const next = { ...prev, walletPercent };
-                    try {
-                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
-                    } catch (_error) {
-                      // ignore storage errors
-                    }
-                    return next;
-                  });
+                  const next = { ...autoTradeSettings, walletPercent };
+                  persistAutoTradeSettings(next);
                 }}
               />
             </label>
-            <label>
-              Auto-trade token
-              <select
-                value={autoTradeSettings.inputToken}
-                onChange={(event) => {
-                  const inputToken: AutoTradeToken = event.target.value === "USDC" ? "USDC" : "SOL";
-                  setAutoTradeSettings((prev) => {
-                    const next = { ...prev, inputToken };
-                    try {
-                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
-                    } catch (_error) {
-                      // ignore storage errors
-                    }
-                    return next;
-                  });
-                }}
-              >
-                <option value="SOL">Solana (SOL)</option>
-                <option value="USDC">USDC</option>
-              </select>
-            </label>
+          </div>
+          <div className="auto-trade-selector-wrap">
+            <div className="auto-trade-selector-header">
+              <strong>Auto-Trade Selector</strong>
+              <span className="subtext">
+                Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.
+              </span>
+            </div>
+            <div className="auto-trade-selector-grid">
+              {autoTradeSettings.slots.map((slot) => (
+                <div key={slot.id} className="auto-trade-slot">
+                  <label>
+                    Token
+                    <select
+                      value={slot.token}
+                      onChange={(event) => updateAutoTradeSlotToken(slot.id, event.target.value as AutoTradeToken)}
+                    >
+                      {AUTO_TRADE_TOKEN_OPTIONS.map((option) => (
+                        <option key={option.symbol} value={option.symbol}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="auto-trade-slot-toggle">
+                    <span className="subtext">Auto-trade</span>
+                    <input
+                      type="checkbox"
+                      checked={autoTradeSettings.activeSlotId === slot.id}
+                      onChange={(event) => toggleAutoTradeSlot(slot.id, event.target.checked)}
+                    />
+                    <span>{autoTradeSettings.activeSlotId === slot.id ? "On" : "Off"}</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+            {showAutoTradeSelectorWarning ? (
+              <div className="auto-trade-selector-modal" role="alertdialog" aria-modal="true">
+                <div className="auto-trade-selector-modal-card">
+                  <strong>Only One Token Allowed For Auto-Trade At A Time</strong>
+                  <button
+                    type="button"
+                    style={{ marginTop: 10 }}
+                    onClick={() => setShowAutoTradeSelectorWarning(false)}
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </section>
