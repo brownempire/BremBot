@@ -345,6 +345,18 @@ function DashboardPage() {
                       return nextTrades;
                     });
                     setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                    if (pushEnabled) {
+                      fetch("/api/push/notify", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          title: `Auto-trade executed: ${signal.symbol}`,
+                          body: `Tx: ${result.txid.slice(0, 12)}... · Tap to view on-chain.`,
+                          url: `https://solscan.io/tx/${result.txid}`,
+                          subscription,
+                        }),
+                      }).catch(() => undefined);
+                    }
                   }).catch((error: unknown) => {
                     const message = error instanceof Error ? error.message : "swap failed";
                     setAutoTradeStatus(`Auto-trade failed for ${signal.symbol}: ${message}`);
