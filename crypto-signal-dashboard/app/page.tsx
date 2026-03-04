@@ -44,10 +44,10 @@ const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
 
 const DEFAULT_PARAMS: UserParams = {
   trendWindow: 5,
-  trendThreshold: 1.0,
-  breakoutPercent: 0.9,
-  newsBias: 0.25,
-  cooldownSeconds: 120,
+  trendThreshold: 0.5,
+  breakoutPercent: 0.8,
+  newsBias: 0.5,
+  cooldownSeconds: 60,
 };
 
 type AutoTradeToken = "SOL" | "USDC";
@@ -58,7 +58,7 @@ type AutoTradeSettings = {
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
-  walletPercent: 10,
+  walletPercent: 25,
   inputToken: "SOL",
 };
 
