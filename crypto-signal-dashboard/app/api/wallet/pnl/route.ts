@@ -1,4 +1,5 @@
 import { Connection, PublicKey, clusterApiUrl, type ParsedTransactionWithMeta } from "@solana/web3.js";
+import { getRedisClient } from "@/lib/server/redis";
 
 type PnlPoint = {
   t: number;
@@ -7,6 +8,28 @@ type PnlPoint = {
 
 function getRpcEndpoint() {
   return process.env.SOLANA_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl("mainnet-beta");
+}
+
+async function readCachedPnl(address: string): Promise<PnlPoint[] | null> {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) return null;
+  const key = `brembot:pnl:${address}`;
+  const raw = await redis.get(key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { points?: PnlPoint[] };
+    if (!Array.isArray(parsed?.points)) return null;
+    return parsed.points.filter((point) => Number.isFinite(point?.t) && Number.isFinite(point?.v));
+  } catch {
+    return null;
+  }
+}
+
+async function writeCachedPnl(address: string, points: PnlPoint[]) {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) return;
+  const key = `brembot:pnl:${address}`;
+  await redis.set(key, JSON.stringify({ points }), { EX: 90 });
 }
 
 async function fetchSolPriceUsd() {
@@ -118,6 +141,12 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const address = String(searchParams.get("address") ?? "").trim();
   if (!address) return new Response(JSON.stringify({ error: "Missing address" }), { status: 400 });
+  const cached = await readCachedPnl(address).catch(() => null);
+  if (cached && cached.length > 0) {
+    return new Response(JSON.stringify({ points: cached, cached: true }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   let owner: PublicKey;
   try {
@@ -129,7 +158,7 @@ export async function GET(request: Request) {
   const connection = new Connection(getRpcEndpoint(), "confirmed");
   const now = Date.now();
   const ytdCutoff = new Date(new Date().getFullYear(), 0, 1).getTime() / 1000;
-  const maxSignatures = 1000;
+  const maxSignatures = 300;
   const signatures: string[] = [];
   let before: string | undefined;
 
@@ -199,12 +228,20 @@ export async function GET(request: Request) {
     } else if (points[points.length - 1].t < now) {
       points.push({ t: now, v: cumulative });
     }
+    await writeCachedPnl(address, points);
 
     return new Response(JSON.stringify({ points }), {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error: unknown) {
+    const fallback = await readCachedPnl(address).catch(() => null);
+    if (fallback && fallback.length > 0) {
+      return new Response(JSON.stringify({ points: fallback, cached: true, degraded: true }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     const message = error instanceof Error ? error.message : "Failed to compute pnl";
-    return new Response(JSON.stringify({ error: message }), { status: 500 });
+    const status = message.includes("Too many requests") || message.includes("-32429") ? 429 : 500;
+    return new Response(JSON.stringify({ error: message }), { status });
   }
 }
