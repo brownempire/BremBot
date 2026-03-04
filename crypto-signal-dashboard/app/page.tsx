@@ -43,11 +43,11 @@ const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
 ];
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 15,
-  trendThreshold: 1.5,
-  breakoutPercent: 1.2,
-  newsBias: 0.15,
-  cooldownSeconds: 30,
+  trendWindow: 5,
+  trendThreshold: 1.0,
+  breakoutPercent: 0.9,
+  newsBias: 0.25,
+  cooldownSeconds: 120,
 };
 
 type AutoTradeToken = "SOL" | "USDC";
