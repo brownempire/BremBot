@@ -86,6 +86,8 @@ type StoredTradeRecord = {
   signalSummary?: string;
 };
 
+type PnlRange = "24h" | "7d" | "30d" | "ytd";
+
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -149,6 +151,7 @@ function DashboardPage() {
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
+  const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
 
   useEffect(() => {
     let cancelled = false;
@@ -699,6 +702,100 @@ function DashboardPage() {
     return { ...market, current, change24h };
   });
 
+  const solUsdPrice = useMemo(() => {
+    if (solBalance && solValueUsd && solBalance > 0) {
+      return solValueUsd / solBalance;
+    }
+    const solCard = cards.find((card) => card.pair === "SOL/USD");
+    return solCard?.current && solCard.current > 0 ? solCard.current : 0;
+  }, [cards, solBalance, solValueUsd]);
+
+  const pnlTimeline = useMemo(() => {
+    const sortedTrades = [...recentTrades].sort((a, b) => a.timestamp - b.timestamp);
+    const points: Array<{ t: number; v: number }> = [];
+    let cumulative = 0;
+    const now = Date.now();
+
+    sortedTrades.forEach((trade) => {
+      const inputAmount = Number(trade.inputAmount ?? 0);
+      const outputAmount = Number(trade.outputAmount ?? 0);
+      if (!Number.isFinite(inputAmount) || !Number.isFinite(outputAmount)) return;
+      if (!trade.inputMint || !trade.outputMint) return;
+
+      const inputUsd = trade.inputMint === USDC_MINT ? 1 : trade.inputMint === SOL_MINT ? solUsdPrice : 0;
+      const outputUsd = trade.outputMint === USDC_MINT ? 1 : trade.outputMint === SOL_MINT ? solUsdPrice : 0;
+      if (inputUsd <= 0 || outputUsd <= 0) return;
+
+      const delta = outputAmount * outputUsd - inputAmount * inputUsd;
+      if (!Number.isFinite(delta)) return;
+      cumulative += delta;
+      points.push({ t: trade.timestamp, v: cumulative });
+    });
+
+    if (points.length === 0) {
+      return [{ t: now, v: 0 }];
+    }
+    if (points[points.length - 1].t < now) {
+      points.push({ t: now, v: cumulative });
+    }
+    return points;
+  }, [recentTrades, solUsdPrice]);
+
+  const pnlValues = useMemo(() => {
+    const latest = pnlTimeline[pnlTimeline.length - 1];
+    const latestValue = latest?.v ?? 0;
+    const now = Date.now();
+    const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+
+    const calcSince = (cutoff: number) => {
+      const base = pnlTimeline.find((point) => point.t >= cutoff) ?? pnlTimeline[0];
+      return latestValue - (base?.v ?? 0);
+    };
+
+    return {
+      d24: calcSince(now - 24 * 60 * 60 * 1000),
+      d7: calcSince(now - 7 * 24 * 60 * 60 * 1000),
+      d30: calcSince(now - 30 * 24 * 60 * 60 * 1000),
+      ytd: calcSince(yearStart),
+    };
+  }, [pnlTimeline]);
+
+  const pnlChartPoints = useMemo(() => {
+    const now = Date.now();
+    const cutoff = pnlRange === "24h"
+      ? now - 24 * 60 * 60 * 1000
+      : pnlRange === "7d"
+        ? now - 7 * 24 * 60 * 60 * 1000
+        : pnlRange === "30d"
+          ? now - 30 * 24 * 60 * 60 * 1000
+          : new Date(new Date().getFullYear(), 0, 1).getTime();
+
+    const filtered = pnlTimeline.filter((point) => point.t >= cutoff);
+    if (filtered.length >= 2) return filtered;
+    const fallback = pnlTimeline[pnlTimeline.length - 1] ?? { t: now, v: 0 };
+    return [{ t: cutoff, v: fallback.v }, fallback];
+  }, [pnlRange, pnlTimeline]);
+
+  const pnlChartPolyline = useMemo(() => {
+    const width = 640;
+    const height = 220;
+    const minX = pnlChartPoints[0]?.t ?? Date.now();
+    const maxX = pnlChartPoints[pnlChartPoints.length - 1]?.t ?? minX + 1;
+    const values = pnlChartPoints.map((point) => point.v);
+    const minY = Math.min(...values, 0);
+    const maxY = Math.max(...values, 0);
+    const xSpan = Math.max(1, maxX - minX);
+    const ySpan = Math.max(1e-6, maxY - minY);
+
+    return pnlChartPoints
+      .map((point) => {
+        const x = ((point.t - minX) / xSpan) * width;
+        const y = height - ((point.v - minY) / ySpan) * height;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+  }, [pnlChartPoints]);
+
   const selectableMarketOptions = useMemo(() => {
     const currentProducts = new Set(trackedMarkets.map((market) => market.coinbaseProduct));
     return marketOptions.filter(
@@ -1093,6 +1190,7 @@ function DashboardPage() {
       </section>
 
       <section className="grid" style={{ marginBottom: 22 }}>
+        <div className="panel-stack">
         <div className="panel">
           <h3>In-App Wallet</h3>
           <div className="wallet-controls">
@@ -1179,6 +1277,46 @@ function DashboardPage() {
               </div>
             ))}
           </div>
+        </div>
+        <div className="panel">
+          <h3>PnL</h3>
+          <div className="pnl-metrics">
+            <div className="pnl-metric">
+              <span>24hr</span>
+              <strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong>
+            </div>
+            <div className="pnl-metric">
+              <span>7-day</span>
+              <strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong>
+            </div>
+            <div className="pnl-metric">
+              <span>30-day</span>
+              <strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong>
+            </div>
+            <div className="pnl-metric">
+              <span>YTD</span>
+              <strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong>
+            </div>
+          </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
+            <button type="button" className={pnlRange === "7d" ? "" : "secondary"} onClick={() => setPnlRange("7d")}>7D</button>
+            <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
+            <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
+          </div>
+          <div className="pnl-chart-wrap">
+            <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
+              <polyline
+                points={pnlChartPolyline}
+                fill="none"
+                stroke="var(--accent)"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+        </div>
         </div>
 
         <div className="panel">
