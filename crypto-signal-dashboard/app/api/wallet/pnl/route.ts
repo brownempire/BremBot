@@ -6,11 +6,33 @@ type PnlPoint = {
   v: number;
 };
 
+type LocalCacheEntry = {
+  points: PnlPoint[];
+  expiresAt: number;
+};
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __brembotPnlCache: Map<string, LocalCacheEntry> | undefined;
+}
+
+function getLocalCache() {
+  if (!global.__brembotPnlCache) {
+    global.__brembotPnlCache = new Map<string, LocalCacheEntry>();
+  }
+  return global.__brembotPnlCache;
+}
+
 function getRpcEndpoint() {
   return process.env.SOLANA_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl("mainnet-beta");
 }
 
 async function readCachedPnl(address: string): Promise<PnlPoint[] | null> {
+  const local = getLocalCache().get(address);
+  if (local && local.expiresAt > Date.now() && local.points.length > 0) {
+    return local.points;
+  }
+
   const redis = await getRedisClient().catch(() => null);
   if (!redis) return null;
   const key = `brembot:pnl:${address}`;
@@ -19,13 +41,25 @@ async function readCachedPnl(address: string): Promise<PnlPoint[] | null> {
   try {
     const parsed = JSON.parse(raw) as { points?: PnlPoint[] };
     if (!Array.isArray(parsed?.points)) return null;
-    return parsed.points.filter((point) => Number.isFinite(point?.t) && Number.isFinite(point?.v));
+    const points = parsed.points.filter((point) => Number.isFinite(point?.t) && Number.isFinite(point?.v));
+    if (points.length > 0) {
+      getLocalCache().set(address, {
+        points,
+        expiresAt: Date.now() + 90_000,
+      });
+    }
+    return points;
   } catch {
     return null;
   }
 }
 
 async function writeCachedPnl(address: string, points: PnlPoint[]) {
+  getLocalCache().set(address, {
+    points,
+    expiresAt: Date.now() + 90_000,
+  });
+
   const redis = await getRedisClient().catch(() => null);
   if (!redis) return;
   const key = `brembot:pnl:${address}`;
@@ -240,8 +274,13 @@ export async function GET(request: Request) {
         headers: { "Content-Type": "application/json" },
       });
     }
-    const message = error instanceof Error ? error.message : "Failed to compute pnl";
-    const status = message.includes("Too many requests") || message.includes("-32429") ? 429 : 500;
-    return new Response(JSON.stringify({ error: message }), { status });
+    const now = Date.now();
+    return new Response(JSON.stringify({
+      points: [{ t: now, v: 0 }],
+      degraded: true,
+      cached: false,
+    }), {
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }

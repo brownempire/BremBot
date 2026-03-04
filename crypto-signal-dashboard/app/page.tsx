@@ -155,6 +155,7 @@ function DashboardPage() {
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
   const [walletPnlPoints, setWalletPnlPoints] = useState<WalletPnlPoint[]>([]);
   const [pnlStatus, setPnlStatus] = useState("Connect wallet to load PnL");
+  const [pnlBaseline, setPnlBaseline] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -692,8 +693,13 @@ function DashboardPage() {
   }, [refreshWalletPortfolio]);
 
   useEffect(() => {
+    setPnlBaseline(null);
+  }, [walletAddress]);
+
+  useEffect(() => {
     if (!walletAddress) {
       setWalletPnlPoints([]);
+      setPnlBaseline(null);
       setPnlStatus("Connect wallet to load PnL");
       return;
     }
@@ -717,6 +723,9 @@ function DashboardPage() {
           .filter((point: WalletPnlPoint) => Number.isFinite(point.t) && Number.isFinite(point.v));
 
         setWalletPnlPoints(points);
+        if (points.length > 0) {
+          setPnlBaseline((previous) => (previous === null ? points[points.length - 1].v : previous));
+        }
         setPnlStatus(points.length > 0 ? "PnL synced from on-chain transaction history" : "No transaction history found");
       } catch (_error) {
         if (!cancelled) setPnlStatus("PnL sync failed");
@@ -749,9 +758,12 @@ function DashboardPage() {
   });
 
   const pnlTimeline = useMemo(() => {
-    if (walletPnlPoints.length > 0) return walletPnlPoints;
+    const baseline = pnlBaseline ?? 0;
+    if (walletPnlPoints.length > 0) {
+      return walletPnlPoints.map((point) => ({ t: point.t, v: point.v - baseline }));
+    }
     return [{ t: Date.now(), v: 0 }];
-  }, [walletPnlPoints]);
+  }, [walletPnlPoints, pnlBaseline]);
 
   const pnlValues = useMemo(() => {
     const latest = pnlTimeline[pnlTimeline.length - 1];
