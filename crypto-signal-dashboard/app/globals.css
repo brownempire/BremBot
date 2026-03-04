@@ -342,12 +342,18 @@ button:disabled {
   color: var(--text);
 }
 
-#target-container {
+#jupiter-plugin-container {
   min-height: 520px;
   border-radius: 12px;
   border: 1px solid var(--border);
   background: rgba(13, 17, 25, 0.7);
   padding: 8px;
+}
+
+.recent-trades-scroll {
+  max-height: 430px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .wallet-adapter-button {

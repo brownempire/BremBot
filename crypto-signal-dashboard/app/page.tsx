@@ -6,6 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
+import { JupiterPluginPanel } from "@/app/components/JupiterPluginPanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -146,6 +147,7 @@ function DashboardPage() {
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showManualTradeModal, setShowManualTradeModal] = useState(false);
+  const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [manualInputToken, setManualInputToken] = useState<AutoTradeToken>("SOL");
   const [manualOutputToken, setManualOutputToken] = useState<AutoTradeToken>("USDC");
   const [manualAmount, setManualAmount] = useState("0");
@@ -788,13 +790,14 @@ function DashboardPage() {
     try {
       await wallet.createWallet((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet created");
+      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet creation failed");
     }
   }
 
   async function importInAppWallet() {
-    const secretInput = window.prompt("Paste wallet secret key JSON array (64 numbers):");
+    const secretInput = window.prompt("Paste wallet private key (base58):");
     if (!secretInput) return;
     const passwordInput = window.prompt(
       "Enter wallet password (4-16 chars). Leave blank for default 'bremlogic':",
@@ -803,6 +806,7 @@ function DashboardPage() {
     try {
       await wallet.importWallet(secretInput, (passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet imported");
+      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet import failed");
     }
@@ -835,6 +839,7 @@ function DashboardPage() {
     try {
       await wallet.login((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("Wallet unlocked");
+      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet login failed");
     }
@@ -968,6 +973,21 @@ function DashboardPage() {
       const message = error instanceof Error ? error.message : "trade failed";
       setPortfolioStatus(`Manual trade failed: ${message}`);
     }
+  }
+
+  function clearRecentTrades() {
+    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+    setRecentTrades([]);
+    try {
+      window.localStorage.removeItem(tradesStorageKey(activeWallet));
+    } catch (_error) {
+      // ignore storage errors
+    }
+  }
+
+  function clearRecentSignals() {
+    setSignals([]);
+    setLastSignalAt({});
   }
 
   function saveSignalParams() {
@@ -1118,6 +1138,11 @@ function DashboardPage() {
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button className="secondary" onClick={() => setShowJupiterPlugin((prev) => !prev)}>
+              {showJupiterPlugin ? "Hide Jupiter Plugin" : "Show Jupiter Plugin"}
+            </button>
+          </div>
           <div className="subtext" style={{ marginTop: 8 }}>
             Wallet keys are stored in this browser until you disconnect (which removes them from this device).
           </div>
@@ -1127,6 +1152,14 @@ function DashboardPage() {
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
+          {showJupiterPlugin ? (
+            <div style={{ marginTop: 10 }}>
+              <JupiterPluginPanel
+                targetId="jupiter-plugin-container"
+                fixedMint={autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT}
+              />
+            </div>
+          ) : null}
           <div className="wallet-holdings">
             <div className="holding-row total-row">
               <span>Total Balance</span>
@@ -1380,7 +1413,10 @@ function DashboardPage() {
 
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
-          <h3>Live Signals</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h3>Live Signals</h3>
+            <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
+          </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
           {signals.map((signal) => (
             <div
@@ -1402,7 +1438,10 @@ function DashboardPage() {
         <div className="panel">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <h3>Recent Trades</h3>
-            <button className="secondary" onClick={() => setShowManualTradeModal(true)}>Manual Trade</button>
+            <div className="wallet-controls">
+              <button className="secondary" onClick={() => setShowManualTradeModal(true)}>Manual Trade</button>
+              <button className="secondary" onClick={clearRecentTrades}>Clear Trades</button>
+            </div>
           </div>
           {!wallet.publicKey && recentTrades.length === 0 && (
             <div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>
@@ -1410,7 +1449,8 @@ function DashboardPage() {
           {recentTrades.length === 0 && wallet.publicKey && (
             <div className="subtext">No recent trades recorded for this wallet yet.</div>
           )}
-          {recentTrades.map((trade) => (
+          <div className="recent-trades-scroll">
+          {recentTrades.slice(0, 5).map((trade) => (
             <div key={trade.id} className="news-item">
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>
@@ -1439,6 +1479,7 @@ function DashboardPage() {
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         <div className="panel">

@@ -2,6 +2,7 @@
 
 import { clusterApiUrl, Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
+import bs58 from "bs58";
 
 const LOCAL_WALLET_STORAGE_KEY = "brembot.local-wallet.encrypted.v2";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
@@ -85,16 +86,14 @@ function parseSecretArray(raw: string): Uint8Array | null {
 function parseImportedSecret(rawInput: string): Uint8Array | null {
   const trimmed = rawInput.trim();
   if (!trimmed) return null;
-
-  const fromJson = parseSecretArray(trimmed);
-  if (fromJson) return fromJson;
-
-  const commaSeparated = trimmed.split(",").map((piece) => Number(piece.trim()));
-  if (commaSeparated.length === 64 && commaSeparated.every((value) => Number.isFinite(value))) {
-    return Uint8Array.from(commaSeparated);
+  try {
+    const decoded = bs58.decode(trimmed);
+    if (decoded.length === 64) return decoded;
+    if (decoded.length === 32) return Keypair.fromSeed(decoded).secretKey;
+    return null;
+  } catch {
+    return null;
   }
-
-  return null;
 }
 
 function normalizePassword(password?: string) {
@@ -290,36 +289,23 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       const amount = uiToAtomicAmount(uiAmount, mintDecimals(inputMint));
       if (BigInt(amount) <= 0n) throw new Error("Trade amount must be greater than zero");
 
-      const quoteUrl = new URL("https://quote-api.jup.ag/v6/quote");
-      quoteUrl.searchParams.set("inputMint", inputMint);
-      quoteUrl.searchParams.set("outputMint", outputMint);
-      quoteUrl.searchParams.set("amount", amount);
-      quoteUrl.searchParams.set("slippageBps", String(slippageBps));
-      quoteUrl.searchParams.set("onlyDirectRoutes", "false");
-
-      const quoteResponse = await fetch(quoteUrl.toString(), { cache: "no-store" });
-      if (!quoteResponse.ok) {
-        const detail = await quoteResponse.text().catch(() => "");
-        throw new Error(`Quote failed (${quoteResponse.status}) ${detail}`);
-      }
-      const quote = await quoteResponse.json();
-
-      const swapResponse = await fetch("https://quote-api.jup.ag/v6/swap", {
+      const swapResponse = await fetch("/api/trade/jupiter", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          quoteResponse: quote,
+          inputMint,
+          outputMint,
+          amount,
+          slippageBps,
           userPublicKey: keypair.publicKey.toBase58(),
-          wrapAndUnwrapSol: true,
-          dynamicComputeUnitLimit: true,
-          prioritizationFeeLamports: "auto",
         }),
       });
       if (!swapResponse.ok) {
         const detail = await swapResponse.text().catch(() => "");
-        throw new Error(`Swap build failed (${swapResponse.status}) ${detail}`);
+        throw new Error(`Swap route failed (${swapResponse.status}) ${detail}`);
       }
       const swapPayload = await swapResponse.json();
+      const quote = swapPayload?.quote;
       const base64Tx = String(swapPayload?.swapTransaction ?? "");
       if (!base64Tx) throw new Error("Jupiter did not return a swap transaction");
 
