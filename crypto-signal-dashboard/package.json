@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "20.14.14",
-    "@types/react": "18.2.66",
+    "@types/react": "^19.2.14",
     "@types/react-dom": "18.2.22",
     "@types/web-push": "3.6.4",
     "eslint": "8.57.0",
