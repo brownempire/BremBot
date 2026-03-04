@@ -392,11 +392,23 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       const txBytes = fromBase64(base64Tx);
       const transaction = VersionedTransaction.deserialize(txBytes);
       transaction.sign([keypair]);
-      const txid = await connection.sendRawTransaction(transaction.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
+      const signedTx = transaction.serialize();
+      const sendResponse = await fetch("/api/trade/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signedTransaction: toBase64(signedTx),
+          skipPreflight: false,
+          maxRetries: 3,
+        }),
       });
-      await connection.confirmTransaction(txid, "confirmed");
+      if (!sendResponse.ok) {
+        const detail = await sendResponse.text().catch(() => "");
+        throw new Error(`Broadcast failed (${sendResponse.status}) ${detail}`);
+      }
+      const sendPayload = await sendResponse.json().catch(() => ({}));
+      const txid = String(sendPayload?.txid ?? "");
+      if (!txid) throw new Error("Broadcast route did not return a transaction signature");
 
       return {
         txid,
@@ -407,7 +419,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       };
     },
     passthroughWalletContextState,
-  }), [connected, connection, hasStoredWallet, keypair, passthroughWalletContextState]);
+  }), [connected, hasStoredWallet, keypair, passthroughWalletContextState]);
 
   return (
     <SolanaContext.Provider value={{ connection, wallet }}>
