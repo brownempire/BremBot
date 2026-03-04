@@ -27,6 +27,19 @@ function getRpcEndpoint() {
   return process.env.SOLANA_RPC_URL ?? process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? clusterApiUrl("mainnet-beta");
 }
 
+function getSolscanEndpoint() {
+  return process.env.SOLSCAN_API_URL ?? "https://pro-api.solscan.io/v2.0";
+}
+
+function getSolscanHeaders() {
+  const apiKey = process.env.SOLSCAN_API_KEY?.trim();
+  if (!apiKey) return undefined;
+  return {
+    token: apiKey,
+    Authorization: `Bearer ${apiKey}`,
+  };
+}
+
 async function readCachedPnl(address: string): Promise<PnlPoint[] | null> {
   const local = getLocalCache().get(address);
   if (local && local.expiresAt > Date.now() && local.points.length > 0) {
@@ -171,6 +184,129 @@ function extractUsdDeltaFromTransaction(
   return Number.isFinite(usdDelta) ? usdDelta : 0;
 }
 
+function toStringArray(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  return input.map((value) => String(value ?? "")).filter(Boolean);
+}
+
+function extractSolscanSignature(item: Record<string, unknown>): string {
+  const candidates = [
+    item.trans_id,
+    item.tx_hash,
+    item.signature,
+    item.tx,
+    item.hash,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function extractSolscanTime(item: Record<string, unknown>): number {
+  const candidates = [item.block_time, item.time, item.blockTime, item.timestamp];
+  for (const value of candidates) {
+    const parsed = Number(value ?? 0);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function isSolscanJupiterSwap(item: Record<string, unknown>) {
+  const activity = String(item.activity_type ?? item.type ?? item.action ?? "").toLowerCase();
+  const tags = [
+    ...toStringArray(item.sources),
+    ...toStringArray(item.routers),
+    ...toStringArray(item.programs),
+    String(item.source ?? ""),
+    String(item.platform ?? ""),
+    String(item.project ?? ""),
+    String(item.router ?? ""),
+    String(item.protocol ?? ""),
+    String(item.action ?? ""),
+  ].join(" ").toLowerCase();
+
+  const looksLikeSwap = activity.includes("swap") || tags.includes("swap");
+  const looksLikeJupiter = tags.includes("jupiter") || activity.includes("jupiter");
+  return looksLikeSwap && looksLikeJupiter;
+}
+
+async function fetchJupiterSignaturesFromSolscan(address: string, ytdCutoff: number, maxSignatures: number) {
+  const signatures = new Set<string>();
+  const headers = getSolscanHeaders();
+  const endpoint = getSolscanEndpoint();
+  let sawResponse = false;
+
+  for (let page = 1; page <= 8; page += 1) {
+    const url = new URL(`${endpoint}/account/defi/activities`);
+    url.searchParams.set("address", address);
+    url.searchParams.set("page", String(page));
+    url.searchParams.set("page_size", "100");
+    url.searchParams.set("sort_by", "block_time");
+    url.searchParams.set("sort_order", "desc");
+    url.searchParams.set("from_time", String(ytdCutoff));
+    url.searchParams.set("activity_type[]", "ACTIVITY_TOKEN_SWAP");
+
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers,
+    }).catch(() => null);
+    if (!response || !response.ok) break;
+
+    sawResponse = true;
+    const payload = await response.json().catch(() => null);
+    const rows: unknown[] = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const item = row as Record<string, unknown>;
+      const blockTime = extractSolscanTime(item);
+      if (blockTime > 0 && blockTime < ytdCutoff) continue;
+      if (!isSolscanJupiterSwap(item)) continue;
+      const signature = extractSolscanSignature(item);
+      if (!signature) continue;
+      signatures.add(signature);
+      if (signatures.size >= maxSignatures) break;
+    }
+
+    if (signatures.size >= maxSignatures || rows.length < 100) break;
+  }
+
+  return sawResponse ? signatures : null;
+}
+
+async function fetchSignaturesFromRpc(connection: Connection, owner: PublicKey, ytdCutoff: number, maxSignatures: number) {
+  const signatures: string[] = [];
+  let before: string | undefined;
+
+  while (signatures.length < maxSignatures) {
+    const page = await connection.getSignaturesForAddress(owner, { limit: 1000, before });
+    if (page.length === 0) break;
+
+    for (const item of page) {
+      if (!item.signature) continue;
+      if ((item.blockTime ?? 0) < ytdCutoff) {
+        break;
+      }
+      signatures.push(item.signature);
+      if (signatures.length >= maxSignatures) break;
+    }
+
+    const oldest = page[page.length - 1];
+    if (!oldest?.signature || (oldest.blockTime ?? 0) < ytdCutoff || signatures.length >= maxSignatures) {
+      break;
+    }
+    before = oldest.signature;
+  }
+
+  return signatures;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const address = String(searchParams.get("address") ?? "").trim();
@@ -193,29 +329,13 @@ export async function GET(request: Request) {
   const now = Date.now();
   const ytdCutoff = new Date(new Date().getFullYear(), 0, 1).getTime() / 1000;
   const maxSignatures = 300;
-  const signatures: string[] = [];
-  let before: string | undefined;
 
   try {
-    while (signatures.length < maxSignatures) {
-      const page = await connection.getSignaturesForAddress(owner, { limit: 1000, before });
-      if (page.length === 0) break;
-
-      for (const item of page) {
-        if (!item.signature) continue;
-        if ((item.blockTime ?? 0) < ytdCutoff) {
-          break;
-        }
-        signatures.push(item.signature);
-        if (signatures.length >= maxSignatures) break;
-      }
-
-      const oldest = page[page.length - 1];
-      if (!oldest?.signature || (oldest.blockTime ?? 0) < ytdCutoff || signatures.length >= maxSignatures) {
-        break;
-      }
-      before = oldest.signature;
-    }
+    const solscanSignatures = await fetchJupiterSignaturesFromSolscan(address, ytdCutoff, maxSignatures);
+    const signatures = solscanSignatures
+      ? [...solscanSignatures].slice(0, maxSignatures)
+      : await fetchSignaturesFromRpc(connection, owner, ytdCutoff, maxSignatures);
+    const allowedSignatures = solscanSignatures ? new Set(signatures) : null;
 
     const transactions: ParsedTransactionWithMeta[] = [];
     for (let i = 0; i < signatures.length; i += 100) {
@@ -226,6 +346,10 @@ export async function GET(request: Request) {
       parsed.forEach((tx) => {
         if (!tx || !tx.blockTime || tx.blockTime < ytdCutoff) return;
         if (!tx.meta) return;
+        if (allowedSignatures && tx.transaction.signatures.length > 0) {
+          const primarySignature = tx.transaction.signatures[0];
+          if (!allowedSignatures.has(primarySignature)) return;
+        }
         transactions.push(tx);
       });
     }
