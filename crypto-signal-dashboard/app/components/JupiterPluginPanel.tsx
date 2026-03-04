@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import "@jup-ag/plugin/css";
 
@@ -17,6 +17,12 @@ export function JupiterPluginPanel({
   passthroughWalletContextState,
   onRequestConnectWallet,
 }: JupiterPluginPanelProps) {
+  const onRequestConnectWalletRef = useRef(onRequestConnectWallet);
+
+  useEffect(() => {
+    onRequestConnectWalletRef.current = onRequestConnectWallet;
+  }, [onRequestConnectWallet]);
+
   useEffect(() => {
     let cancelled = false;
     if (typeof window === "undefined") return;
@@ -29,7 +35,9 @@ export function JupiterPluginPanel({
           integratedTargetId: targetId,
           enableWalletPassthrough: true,
           passthroughWalletContextState: passthroughWalletContextState as never,
-          onRequestConnectWallet,
+          onRequestConnectWallet: async () => {
+            await onRequestConnectWalletRef.current?.();
+          },
           defaultExplorer: "Solscan",
           formProps: {
             swapMode: "ExactInOrOut",
@@ -50,7 +58,7 @@ export function JupiterPluginPanel({
         .then((mod) => mod.close())
         .catch(() => undefined);
     };
-  }, [fixedMint, onRequestConnectWallet, passthroughWalletContextState, targetId]);
+  }, [fixedMint, targetId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -60,6 +68,12 @@ export function JupiterPluginPanel({
           enableWalletPassthrough: true,
           passthroughWalletContextState: passthroughWalletContextState as never,
         });
+        if (window.Jupiter) {
+          window.Jupiter.enableWalletPassthrough = true;
+          window.Jupiter.onRequestConnectWallet = async () => {
+            await onRequestConnectWalletRef.current?.();
+          };
+        }
       })
       .catch(() => undefined);
   }, [passthroughWalletContextState]);
