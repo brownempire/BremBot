@@ -4,6 +4,7 @@ export type NewsItem = {
   headline: string;
   sentiment: number; // -1 to 1
   timestamp: number;
+  url?: string;
 };
 
 const headlines = [
@@ -22,5 +23,6 @@ export function getMockNews(): NewsItem[] {
     headline,
     sentiment: Math.sin(now / 900000 + index) * 0.8,
     timestamp: now - index * 60000,
+    url: `https://news.google.com/search?q=${encodeURIComponent(headline)}`,
   }));
 }

@@ -1,26 +1,54 @@
 type PricePayload = {
   source: "coinbase";
-  markets: Record<string, { price: number; change24hPercent: number }>;
+  markets: Record<string, { price: number; change24hPercent?: number }>;
   timestamp: number;
 };
-async function fetchCoinbasePrices(products: string[]): Promise<PricePayload | null> {
-  const markets: Record<string, { price: number; change24hPercent: number }> = {};
 
-  for (const product of products) {
-    const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, {
+type CoinbaseTicker = {
+  price?: string;
+  open?: string;
+  open_24h?: string;
+};
+
+type CoinbaseStats = {
+  open?: string;
+};
+
+async function fetchCoinbasePriceEntry(product: string) {
+  const [tickerResponse, statsResponse] = await Promise.all([
+    fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, {
       cache: "no-store",
-      headers: {
-        "Accept": "application/json",
-      },
-    });
-    if (!response.ok) return null;
-    const raw = await response.json();
-    const price = Number(raw?.price);
-    const open24h = Number(raw?.open ?? raw?.open_24h);
-    if (!Number.isFinite(price) || price <= 0) return null;
-    const change24hPercent =
-      Number.isFinite(open24h) && open24h > 0 ? ((price - open24h) / open24h) * 100 : 0;
-    markets[product] = { price, change24hPercent };
+      headers: { Accept: "application/json" },
+    }),
+    fetch(`https://api.exchange.coinbase.com/products/${product}/stats`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    }),
+  ]);
+
+  if (!tickerResponse.ok || !statsResponse.ok) return null;
+
+  const ticker = (await tickerResponse.json()) as CoinbaseTicker;
+  const stats = (await statsResponse.json()) as CoinbaseStats;
+
+  const price = Number(ticker?.price);
+  const open24h = Number(stats?.open ?? ticker?.open_24h ?? ticker?.open);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  const change24hPercent =
+    Number.isFinite(open24h) && open24h > 0 ? ((price - open24h) / open24h) * 100 : undefined;
+
+  return { price, change24hPercent };
+}
+
+async function fetchCoinbasePrices(products: string[]): Promise<PricePayload | null> {
+  const markets: Record<string, { price: number; change24hPercent?: number }> = {};
+
+  const entries = await Promise.all(products.map(async (product) => [product, await fetchCoinbasePriceEntry(product)] as const));
+
+  for (const [product, entry] of entries) {
+    if (!entry) return null;
+    markets[product] = entry;
   }
 
   return {
@@ -45,8 +73,8 @@ export async function GET(request: Request) {
     });
   }
 
-  // Signal generation is calibrated against the visible TradingView COINBASE chart.
-  // Use Coinbase directly here so chart + price boxes + signal engine share the same market source.
+  // TradingView chart is configured with COINBASE symbols.
+  // Keep the real-time feed locked to Coinbase so chart + signal engine + cards stay in sync.
   const coinbase = await fetchCoinbasePrices(products).catch(() => null);
   if (coinbase) {
     return new Response(JSON.stringify(coinbase), {

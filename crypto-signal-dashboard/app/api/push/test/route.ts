@@ -1,19 +1,13 @@
-import webpush from "web-push";
-import { listSubscriptions } from "@/lib/push/store";
-
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? "mailto:dev@example.com";
+import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
 
 export async function POST(request: Request) {
-  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+  const configError = getPushConfigError();
+  if (configError) {
     return new Response(
-      JSON.stringify({ error: "Missing VAPID keys" }),
+      JSON.stringify({ error: configError }),
       { status: 400 }
     );
   }
-
-  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
   let body: { subscription?: PushSubscriptionJSON } | null = null;
   try {
@@ -22,7 +16,7 @@ export async function POST(request: Request) {
     body = null;
   }
 
-  const subs = body?.subscription ? [body.subscription] : listSubscriptions();
+  const subs = await getTargetSubscriptions(body?.subscription ?? null);
   if (subs.length === 0) {
     return new Response(
       JSON.stringify({ error: "No push subscriptions found. Enable push first." }),
@@ -30,27 +24,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const payload = JSON.stringify({
-    title: "PulseSignal",
+  const payload = {
+    title: "BremLogic",
     body: "Test push notification from your signal desk.",
     url: "/",
-  });
-
-  const results = await Promise.all(
-    subs.map(async (sub) => {
-      try {
-        await webpush.sendNotification(sub as any, payload);
-        return { endpoint: sub.endpoint, ok: true };
-      } catch (error) {
-        return { endpoint: sub.endpoint, ok: false };
-      }
-    })
-  );
-
-  const sent = results.filter((result) => result.ok).length;
+  };
+  const { sent, results } = await sendPushPayload(subs, payload);
   if (sent === 0) {
     return new Response(
-      JSON.stringify({ error: "Failed to send push to active subscription(s)." }),
+      JSON.stringify({ error: "Failed to send push to active subscription(s).", results }),
       { status: 500 }
     );
   }

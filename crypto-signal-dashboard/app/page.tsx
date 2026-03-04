@@ -1,21 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
-import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { WalletModalButton, WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
+import { JupiterPluginPanel } from "@/app/components/JupiterPluginPanel";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
-import { getMockNews } from "@/lib/news/mock";
+import { getMockNews, type NewsItem } from "@/lib/news/mock";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
+const AUTO_TRADE_STORAGE_KEY = "brembot.auto-trade-enabled.v1";
+const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
+const DEFAULT_WALLET_PASSWORD = "bremlogic";
 
 type TrackedMarket = {
   id: string;
@@ -37,20 +43,47 @@ const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
 ];
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 30,
-  trendThreshold: 2.2,
-  breakoutPercent: 1.6,
-  newsBias: 0.08,
-  cooldownSeconds: 300,
+  trendWindow: 5,
+  trendThreshold: 1.0,
+  breakoutPercent: 0.9,
+  newsBias: 0.25,
+  cooldownSeconds: 120,
+};
+
+type AutoTradeToken = "SOL" | "USDC";
+
+type AutoTradeSettings = {
+  walletPercent: number;
+  inputToken: AutoTradeToken;
+};
+
+const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
+  walletPercent: 10,
+  inputToken: "SOL",
 };
 
 type WalletTokenHolding = {
   mint: string;
   amount: number;
+  symbol?: string;
+  name?: string;
+  logoURI?: string | null;
+  usdPrice?: number | null;
+  usdValue?: number | null;
 };
 
-type StoredTradeRecord = JupiterTradeRecord & {
+type StoredTradeRecord = {
+  txid: string;
+  timestamp: number;
+  walletAddress?: string;
+  inputMint?: string;
+  outputMint?: string;
+  inputAmount?: number;
+  outputAmount?: number;
   id: string;
+  source?: "manual" | "auto";
+  signalId?: string;
+  signalSummary?: string;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -71,6 +104,7 @@ function formatFeedSource(status: string) {
     simulated: "Simulated",
     chaos_edge: "Chaos Edge",
     coinbase: "Coinbase",
+    coingecko: "CoinGecko",
   };
   return map[status] ?? status;
 }
@@ -82,17 +116,20 @@ function tradesStorageKey(walletAddress: string) {
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
+  const walletAddress = wallet.publicKey?.toBase58() ?? null;
 
   const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
   const [dayChange24h, setDayChange24h] = useState<Record<string, number>>({});
   const [params, setParams] = useState<UserParams>(DEFAULT_PARAMS);
   const [paramsSaveStatus, setParamsSaveStatus] = useState("Using defaults");
+  const [autoTradeEnabled, setAutoTradeEnabled] = useState(false);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
+  const [newsItems, setNewsItems] = useState<NewsItem[]>(getMockNews());
   const [editingMarketSlotId, setEditingMarketSlotId] = useState<string | null>(null);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
@@ -102,8 +139,14 @@ function DashboardPage() {
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
+  const [totalBalanceUsd, setTotalBalanceUsd] = useState<number | null>(null);
+  const [solValueUsd, setSolValueUsd] = useState<number | null>(null);
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
+  const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
+  const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +165,15 @@ function DashboardPage() {
           if (!Number.isFinite(price) || price <= 0) return;
           const existing = next[market.id] ?? [];
           next[market.id] = [...existing, { t: now, v: price }].slice(-5400);
+
+          if (changes24hBySlot[market.id] === undefined && next[market.id].length > 1) {
+            const history = next[market.id];
+            const current = history[history.length - 1]?.v ?? 0;
+            const dayAgo = history.find((point) => now - point.t >= 24 * 60 * 60 * 1000) ?? history[0];
+            if (dayAgo && dayAgo.v > 0) {
+              changes24hBySlot[market.id] = ((current - dayAgo.v) / dayAgo.v) * 100;
+            }
+          }
         });
         return next;
       });
@@ -193,7 +245,7 @@ function DashboardPage() {
         stopSimulationFallback();
         setPriceFeedStatus(source);
         appendPrices(pricesBySlot, changes24hBySlot, now);
-      } catch {
+      } catch (_error) {
         if (!cancelled) startSimulationFallback();
       }
     };
@@ -211,8 +263,8 @@ function DashboardPage() {
   }, [trackedMarkets]);
 
   useEffect(() => {
-    const latestNews = getMockNews();
-    const newsScore = latestNews.reduce((sum, item) => sum + item.sentiment, 0) / latestNews.length;
+    const newsScore = newsItems.reduce((sum, item) => sum + item.sentiment, 0) /
+      Math.max(newsItems.length, 1);
 
     setSignals((prev) => {
       let next = [...prev];
@@ -223,7 +275,7 @@ function DashboardPage() {
         const recentPoints = points.filter(
           (point) => now - point.t <= params.trendWindow * 60 * 1000
         );
-        const minimumDataPoints = params.trendWindow * 45;
+        const minimumDataPoints = Math.max(10, params.trendWindow * 2);
         if (recentPoints.length < minimumDataPoints) return;
 
         const newSignals = detectSignals({
@@ -248,6 +300,97 @@ function DashboardPage() {
               new Notification(`Signal: ${signal.symbol}`, { body: signal.summary });
             }
 
+            if (autoTradeEnabled) {
+              const inputMint = autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT;
+              const directionalOutputMint = signal.direction === "bullish" ? SOL_MINT : USDC_MINT;
+
+              if (wallet.publicKey) {
+                const outputMint = directionalOutputMint === inputMint
+                  ? (inputMint === SOL_MINT ? USDC_MINT : SOL_MINT)
+                  : directionalOutputMint;
+                const availableInput = autoTradeSettings.inputToken === "USDC"
+                  ? (walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0)
+                  : (solBalance ?? 0);
+                const tradeAmount = Number((availableInput * (autoTradeSettings.walletPercent / 100)).toFixed(6));
+                if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
+                  setAutoTradeStatus(`Signal detected for ${signal.symbol} but no ${autoTradeSettings.inputToken} balance is available`);
+                } else {
+                  setAutoTradeStatus(`Executing auto-trade for ${signal.symbol} (${tradeAmount} ${autoTradeSettings.inputToken})...`);
+                  wallet.executeSwap({
+                    inputMint,
+                    outputMint,
+                    uiAmount: tradeAmount,
+                  }).then((result) => {
+                    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+                    const autoTradeRecord: StoredTradeRecord = {
+                      id: `auto-${signal.id}-${Date.now()}`,
+                      txid: result.txid,
+                      timestamp: Date.now(),
+                      walletAddress: activeWallet,
+                      source: "auto",
+                      signalId: signal.id,
+                      inputMint: result.inputMint,
+                      outputMint: result.outputMint,
+                      inputAmount: result.inputAmount,
+                      outputAmount: result.outputAmount,
+                      signalSummary: `${signal.summary} · executed ${tradeAmount} ${autoTradeSettings.inputToken}`,
+                    };
+                    setRecentTrades((prevTrades) => {
+                      const nextTrades = [autoTradeRecord, ...prevTrades].slice(0, 20);
+                      try {
+                        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                      } catch (_error) {
+                        // ignore storage errors
+                      }
+                      return nextTrades;
+                    });
+                    setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                    if (pushEnabled) {
+                      fetch("/api/push/notify", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          title: `Auto-trade executed: ${signal.symbol}`,
+                          body: `Tx: ${result.txid.slice(0, 12)}... · Tap to view on-chain.`,
+                          url: `https://solscan.io/tx/${result.txid}`,
+                          subscription,
+                        }),
+                      }).catch(() => undefined);
+                    }
+                  }).catch((error: unknown) => {
+                    const message = error instanceof Error ? error.message : "swap failed";
+                    setAutoTradeStatus(`Auto-trade failed for ${signal.symbol}: ${message}`);
+                  });
+                }
+              } else {
+                const activeWallet = "paper-auto";
+                const autoTradeRecord: StoredTradeRecord = {
+                  id: `auto-${signal.id}`,
+                  txid: `auto-${signal.id}`,
+                  timestamp: Date.now(),
+                  walletAddress: activeWallet,
+                  source: "auto",
+                  signalId: signal.id,
+                  signalSummary: `${signal.summary} · ${autoTradeSettings.walletPercent}% of wallet in ${autoTradeSettings.inputToken}`,
+                };
+                setRecentTrades((prevTrades) => {
+                  const nextTrades = [
+                    autoTradeRecord,
+                    ...prevTrades.filter((item) => item.id !== autoTradeRecord.id),
+                  ].slice(0, 20);
+                  try {
+                    window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+                  } catch (_error) {
+                    // ignore storage errors
+                  }
+                  return nextTrades;
+                });
+                setAutoTradeStatus(
+                  `Auto-trade paper execution for ${signal.symbol} using ${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken} (connect wallet for live)`
+                );
+              }
+            }
+
             if (pushEnabled) {
               fetch("/api/push/notify", {
                 method: "POST",
@@ -256,6 +399,7 @@ function DashboardPage() {
                   title: `Signal: ${signal.symbol}`,
                   body: signal.summary,
                   url: "/",
+                  subscription,
                 }),
               }).catch(() => undefined);
             }
@@ -265,10 +409,33 @@ function DashboardPage() {
 
       return next;
     });
-  }, [lastSignalAt, params, priceHistory, pushEnabled, trackedMarkets]);
+  }, [
+    autoTradeEnabled,
+    autoTradeSettings.inputToken,
+    autoTradeSettings.walletPercent,
+    lastSignalAt,
+    newsItems,
+    params,
+    priceHistory,
+    pushEnabled,
+    subscription,
+    trackedMarkets,
+    wallet.executeSwap,
+    wallet.publicKey,
+    walletTokens,
+    solBalance,
+  ]);
 
   useEffect(() => {
-    if (!("serviceWorker" in navigator)) return;
+    if (!window.isSecureContext) {
+      setPushStatus("Push requires HTTPS (or localhost)");
+      return;
+    }
+
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      setPushStatus("Push is not supported on this browser/device");
+      return;
+    }
 
     navigator.serviceWorker
       .register("/sw.js")
@@ -279,12 +446,39 @@ function DashboardPage() {
         if (existing) {
           setSubscription(existing.toJSON());
           setPushEnabled(true);
-          setPushStatus("Push already enabled");
+          setPushStatus("Alerts enabled");
+        } else {
+          setPushEnabled(false);
+          setPushStatus("Alerts disabled");
         }
       })
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pollNews = async () => {
+      try {
+        const response = await fetch("/api/news/trending", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload?.items) || cancelled) return;
+        setNewsItems(payload.items as NewsItem[]);
+      } catch (_error) {
+        if (!cancelled) setNewsItems(getMockNews());
+      }
+    };
+
+    pollNews().catch(() => undefined);
+    const interval = setInterval(() => {
+      pollNews().catch(() => undefined);
+    }, 60000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
@@ -300,8 +494,36 @@ function DashboardPage() {
         cooldownSeconds: Number(parsed.cooldownSeconds ?? DEFAULT_PARAMS.cooldownSeconds),
       });
       setParamsSaveStatus("Saved preset loaded");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Failed to load saved preset");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AUTO_TRADE_STORAGE_KEY);
+      const enabled = raw === "true";
+      setAutoTradeEnabled(enabled);
+      setAutoTradeStatus(enabled ? "Auto-trade is on" : "Auto-trade is off");
+    } catch (_error) {
+      setAutoTradeEnabled(false);
+      setAutoTradeStatus("Auto-trade is off");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings>;
+      const nextPercent = Number(parsed.walletPercent);
+      const percent = Number.isFinite(nextPercent)
+        ? Math.min(100, Math.max(1, Math.round(nextPercent)))
+        : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+      const inputToken = parsed.inputToken === "USDC" ? "USDC" : "SOL";
+      setAutoTradeSettings({ walletPercent: percent, inputToken });
+    } catch (_error) {
+      setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     }
   }, []);
 
@@ -324,39 +546,56 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    const walletAddress = wallet.publicKey?.toBase58();
-    if (!walletAddress) {
-      setRecentTrades([]);
-      return;
-    }
-
+    const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
     try {
-      const raw = window.localStorage.getItem(tradesStorageKey(walletAddress));
+      const raw = window.localStorage.getItem(activeTradeKey);
       if (!raw) {
         setRecentTrades([]);
         return;
       }
       const parsed = JSON.parse(raw) as StoredTradeRecord[];
       setRecentTrades(Array.isArray(parsed) ? parsed : []);
-    } catch {
+    } catch (_error) {
       setRecentTrades([]);
     }
-  }, [wallet.publicKey?.toBase58()]);
+  }, [walletAddress]);
 
-  async function refreshWalletPortfolio() {
+  const refreshWalletPortfolio = useCallback(async () => {
     if (!wallet.connected || !wallet.publicKey) {
       setSolBalance(null);
       setWalletTokens([]);
+      setTotalBalanceUsd(null);
+      setSolValueUsd(null);
       setPortfolioStatus("Wallet not connected");
       return;
     }
 
     setPortfolioStatus("Syncing wallet balances...");
 
-    const [balanceResult, tokenAccountsResult] = await Promise.allSettled([
-      connection.getBalance(wallet.publicKey),
+    try {
+      const response = await fetch(`/api/wallet/balances?address=${wallet.publicKey.toBase58()}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => null);
+      if (response.ok && payload) {
+        setSolBalance(typeof payload.solBalance === "number" ? payload.solBalance : null);
+        setWalletTokens(Array.isArray(payload.tokens) ? (payload.tokens as WalletTokenHolding[]) : []);
+        setTotalBalanceUsd(typeof payload.totalBalanceUsd === "number" ? payload.totalBalanceUsd : null);
+        setSolValueUsd(typeof payload.solValueUsd === "number" ? payload.solValueUsd : null);
+        setPortfolioStatus(typeof payload.status === "string" ? payload.status : "Wallet synced");
+        return;
+      }
+    } catch (_error) {
+      // fallback to direct client RPC calls below
+    }
+
+    const [balanceResult, splTokenAccountsResult, token2022AccountsResult] = await Promise.allSettled([
+      connection.getBalance(wallet.publicKey, "processed"),
       connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
         programId: TOKEN_PROGRAM_ID,
+      }),
+      connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+        programId: TOKEN_2022_PROGRAM_ID,
       }),
     ]);
 
@@ -367,27 +606,51 @@ function DashboardPage() {
       setSolBalance(balanceResult.value / 1_000_000_000);
       solLoaded = true;
     } else {
-      setSolBalance(null);
+      try {
+        const accountInfo = await connection.getAccountInfo(wallet.publicKey, "finalized");
+        if (accountInfo) {
+          setSolBalance(accountInfo.lamports / 1_000_000_000);
+          solLoaded = true;
+        } else {
+          setSolBalance(null);
+        }
+      } catch (_error) {
+        setSolBalance(null);
+      }
     }
 
-    if (tokenAccountsResult.status === "fulfilled") {
-      const holdings = tokenAccountsResult.value.value
-        .map((accountInfo) => {
-          const parsed = accountInfo.account.data.parsed.info;
-          const amount = Number(parsed.tokenAmount.uiAmount ?? 0);
-          return {
-            mint: String(parsed.mint),
-            amount,
-          } satisfies WalletTokenHolding;
-        })
-        .filter((holding) => holding.amount > 0)
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 6);
-      setWalletTokens(holdings);
+    const holdingsByMint = new Map<string, WalletTokenHolding>();
+    const tokenResults = [splTokenAccountsResult, token2022AccountsResult];
+    tokenResults.forEach((result) => {
+      if (result.status !== "fulfilled") {
+        return;
+      }
       tokensLoaded = true;
-    } else {
-      setWalletTokens([]);
-    }
+      result.value.value.forEach((accountInfo) => {
+        const parsedInfo = accountInfo.account.data.parsed?.info;
+        const mint = String(parsedInfo?.mint ?? "");
+        const uiAmount = Number(parsedInfo?.tokenAmount?.uiAmount ?? 0);
+        const uiAmountString = Number(parsedInfo?.tokenAmount?.uiAmountString ?? 0);
+        const amount = Number.isFinite(uiAmount) && uiAmount > 0 ? uiAmount : uiAmountString;
+
+        if (!mint || !Number.isFinite(amount) || amount <= 0) {
+          return;
+        }
+
+        const existing = holdingsByMint.get(mint);
+        holdingsByMint.set(mint, {
+          mint,
+          amount: (existing?.amount ?? 0) + amount,
+        });
+      });
+    });
+
+    const holdings = [...holdingsByMint.values()]
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 6);
+    setWalletTokens(holdings);
+    setTotalBalanceUsd(null);
+    setSolValueUsd(null);
 
     if (solLoaded && tokensLoaded) {
       setPortfolioStatus("Wallet synced");
@@ -397,8 +660,12 @@ function DashboardPage() {
       setPortfolioStatus("SOL balance synced (token accounts unavailable)");
       return;
     }
+    if (!solLoaded && tokensLoaded) {
+      setPortfolioStatus("Token balances synced (SOL balance unavailable)");
+      return;
+    }
     setPortfolioStatus("Failed to sync wallet balances");
-  }
+  }, [connection, wallet.connected, wallet.publicKey]);
 
   useEffect(() => {
     refreshWalletPortfolio().catch(() => undefined);
@@ -407,9 +674,9 @@ function DashboardPage() {
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [wallet.connected, wallet.publicKey?.toBase58()]);
+  }, [refreshWalletPortfolio]);
 
-  const latestNews = useMemo(() => getMockNews(), [priceHistory]);
+  const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
@@ -460,7 +727,8 @@ function DashboardPage() {
 
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      setPushStatus("Notifications blocked");
+      setPushEnabled(false);
+      setPushStatus("Alerts disabled");
       return;
     }
 
@@ -494,92 +762,233 @@ function DashboardPage() {
       }
 
       setSubscription(subscriptionJson);
-      setPushStatus("Push enabled");
       setPushEnabled(true);
-    } catch {
-      setPushStatus("Push subscribe failed");
+      setPushStatus("Alerts enabled");
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : "Push subscribe failed");
     }
   }
 
+  async function disablePush() {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const active = await registration.pushManager.getSubscription();
+      const endpoint = active?.endpoint ?? subscription?.endpoint;
+      if (active) {
+        await active.unsubscribe();
+      }
+      if (endpoint) {
+        await fetch("/api/push/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint }),
+        }).catch(() => undefined);
+      }
+      setSubscription(null);
+      setPushEnabled(false);
+      setPushStatus("Alerts disabled");
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : "Failed to disable alerts");
+    }
+  }
+
+  async function togglePush() {
+    if (pushEnabled) {
+      await disablePush();
+      return;
+    }
+    await enablePush();
+  }
+
   async function sendTestPush() {
-    if (!subscription) {
+    if (!pushEnabled || !subscription) {
       setPushStatus("Enable push first");
       return;
     }
 
     setPushStatus("Sending test...");
-    const response = await fetch("/api/push/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      setPushStatus(payload?.error ?? "Push test failed");
-      return;
+    try {
+      const response = await fetch("/api/push/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        setPushStatus(payload?.error ?? "Push test failed");
+        return;
+      }
+      setPushStatus("Test push sent");
+    } catch (_error) {
+      setPushStatus("Push test failed");
     }
-    setPushStatus("Test push sent");
   }
 
-  async function disconnectWallet() {
+  async function createInAppWallet() {
+    const passwordInput = window.prompt(
+      "Set wallet password (4-16 chars). Leave blank to use default 'bremlogic':",
+      DEFAULT_WALLET_PASSWORD
+    );
     try {
-      await wallet.disconnect();
-      setPortfolioStatus("Wallet disconnected");
-    } catch {
-      setPortfolioStatus("Wallet disconnect failed");
+      await wallet.createWallet((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setPortfolioStatus("In-app wallet created");
+      setShowJupiterPlugin(true);
+    } catch (_error) {
+      setPortfolioStatus("Wallet creation failed");
     }
+  }
+
+  async function importInAppWallet() {
+    const secretInput = window.prompt("Paste wallet private key (base58):");
+    if (!secretInput) return;
+    const passwordInput = window.prompt(
+      "Enter wallet password (4-16 chars). Leave blank for default 'bremlogic':",
+      DEFAULT_WALLET_PASSWORD
+    );
+    try {
+      await wallet.importWallet(secretInput, (passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setPortfolioStatus("In-app wallet imported");
+      setShowJupiterPlugin(true);
+    } catch (_error) {
+      setPortfolioStatus("Wallet import failed");
+    }
+  }
+
+  async function exportInAppWallet() {
+    const exported = wallet.exportWallet();
+    if (!exported) {
+      setPortfolioStatus("No in-app wallet to export");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(exported);
+      setPortfolioStatus("Wallet secret copied to clipboard");
+    } catch (_error) {
+      setPortfolioStatus("Copy failed - check browser clipboard permissions");
+    }
+  }
+
+  async function disconnectInAppWallet() {
+    await wallet.disconnect();
+    setShowDepositModal(false);
+    setPortfolioStatus("Wallet disconnected and removed from this device");
+  }
+
+  async function loginInAppWallet() {
+    const passwordInput = window.prompt("Enter wallet password:", DEFAULT_WALLET_PASSWORD);
+    if (passwordInput === null) return;
+    try {
+      await wallet.login((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setPortfolioStatus("Wallet unlocked");
+      setShowJupiterPlugin(true);
+    } catch (_error) {
+      setPortfolioStatus("Wallet login failed");
+    }
+  }
+
+  async function changeWalletPassword() {
+    if (!wallet.connected) {
+      setPortfolioStatus("Connect wallet before changing password");
+      return;
+    }
+
+    const currentPassword = window.prompt("Enter current password:", DEFAULT_WALLET_PASSWORD);
+    if (currentPassword === null) return;
+    const nextPassword = window.prompt("Enter new password (4-16 chars):");
+    if (nextPassword === null) return;
+    const confirmText = window.prompt("Type CHANGE to confirm password update:");
+    if (confirmText !== "CHANGE") {
+      setPortfolioStatus("Password change cancelled");
+      return;
+    }
+
+    try {
+      await wallet.changePassword((currentPassword || DEFAULT_WALLET_PASSWORD).trim(), nextPassword.trim());
+      setPortfolioStatus("Wallet password updated");
+    } catch (_error) {
+      setPortfolioStatus("Password update failed");
+    }
+  }
+
+  async function copyDepositAddress() {
+    if (!wallet.publicKey) return;
+    try {
+      await navigator.clipboard.writeText(wallet.publicKey.toBase58());
+      setPortfolioStatus("Deposit address copied to clipboard");
+    } catch (_error) {
+      setPortfolioStatus("Address copy failed");
+    }
+  }
+
+  function clearRecentTrades() {
+    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+    setRecentTrades([]);
+    try {
+      window.localStorage.removeItem(tradesStorageKey(activeWallet));
+    } catch (_error) {
+      // ignore storage errors
+    }
+  }
+
+  function clearRecentSignals() {
+    setSignals([]);
+    setLastSignalAt({});
   }
 
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
+      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(autoTradeSettings));
       setParamsSaveStatus("Saved");
-    } catch {
+    } catch (_error) {
       setParamsSaveStatus("Save failed");
     }
   }
 
   function resetSignalParams() {
     setParams(DEFAULT_PARAMS);
+    setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
-    } catch {
+      window.localStorage.removeItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
+    } catch (_error) {
       // ignore storage errors
     }
     setParamsSaveStatus("Reset to defaults");
   }
 
-  function handleTradeSuccess(trade: JupiterTradeRecord) {
-    const walletAddress = trade.walletAddress ?? wallet.publicKey?.toBase58();
-    if (!walletAddress) return;
-
-    const entry: StoredTradeRecord = {
-      ...trade,
-      walletAddress,
-      id: `${trade.txid}-${trade.timestamp}`,
-    };
-
-    setRecentTrades((prev) => {
-      const next = [entry, ...prev.filter((item) => item.txid !== entry.txid)].slice(0, 20);
+  function toggleAutoTrade() {
+    setAutoTradeEnabled((previous) => {
+      const next = !previous;
       try {
-        window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(next));
-      } catch {
+        window.localStorage.setItem(AUTO_TRADE_STORAGE_KEY, String(next));
+      } catch (_error) {
         // ignore storage errors
       }
+      setAutoTradeStatus(
+        next
+          ? `Auto-trade is on (${autoTradeSettings.walletPercent}% ${autoTradeSettings.inputToken})`
+          : "Auto-trade is off"
+      );
       return next;
     });
   }
 
   return (
     <main>
-      <JupiterTradePanel onTradeSuccess={handleTradeSuccess} />
-
       <header>
         <div className="header-row">
           <div>
-            <div className="title">PulseSignal Desk</div>
+            <Image
+              className="brand-logo"
+              src="/header-photo.png"
+              alt="BremLogic"
+              width={1038}
+              height={338}
+              priority
+            />
             <div className="subtext">
-              Real-time crypto signals with wallet-linked execution via Jupiter Plugin.
+              Real-time crypto signals with on-app wallet controls and manual trade execution flow.
             </div>
           </div>
           <div className="header-alert-slot">
@@ -587,14 +996,21 @@ function DashboardPage() {
               <strong>Alerts & Push</strong>
               <span className="subtext">{pushStatus}</span>
               <div className="alerts-actions">
-                <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
+                <button
+                  onClick={togglePush}
+                  disabled={!pushReady}
+                  className={pushEnabled ? "push-toggle on" : "push-toggle off"}
+                >
+                  {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
+                </button>
                 <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
               </div>
             </div>
           </div>
           <div className="badges">
             <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-            <div className="badge">Jupiter: widget</div>
+            <div className="badge">Wallet: in-app</div>
+            <div className="badge">{autoTradeStatus}</div>
           </div>
         </div>
 
@@ -662,30 +1078,88 @@ function DashboardPage() {
 
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
-          <h3>Wallet Connect</h3>
+          <h3>In-App Wallet</h3>
           <div className="wallet-controls">
-            <WalletMultiButton key={wallet.publicKey?.toBase58() ?? "wallet-multi-button"} />
-            <WalletModalButton className="wallet-adapter-button wallet-change">
-              Select Wallet
-            </WalletModalButton>
+            {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
+            <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
+            {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+            {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
+            {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
+            {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
+            {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
-            {wallet.connected ? <button onClick={disconnectWallet}>Disconnect</button> : null}
+          </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button className="secondary" onClick={() => setShowJupiterPlugin((prev) => !prev)}>
+              {showJupiterPlugin ? "Hide Jupiter Plugin" : "Show Jupiter Plugin"}
+            </button>
+          </div>
+          <div className="subtext" style={{ marginTop: 8 }}>
+            Wallet keys are stored in this browser until you disconnect (which removes them from this device).
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
-              : "Connect Phantom or Solflare to trade."}
+              : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
+          {showJupiterPlugin ? (
+            <div style={{ marginTop: 10 }}>
+              <JupiterPluginPanel
+                targetId="jupiter-plugin-container"
+                fixedMint={autoTradeSettings.inputToken === "USDC" ? USDC_MINT : SOL_MINT}
+                passthroughWalletContextState={wallet.passthroughWalletContextState}
+                onRequestConnectWallet={loginInAppWallet}
+              />
+            </div>
+          ) : null}
           <div className="wallet-holdings">
-            <div className="holding-row">
-              <span>SOL</span>
-              <strong>{solBalance === null ? "-" : solBalance.toFixed(4)}</strong>
+            <div className="holding-row total-row">
+              <span>Total Balance</span>
+              <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
+            </div>
+            <div className="holding-row token-row">
+              <span className="token-meta">
+                <Image
+                  src="https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/solana/info/logo.png"
+                  alt="Solana"
+                  className="token-icon"
+                  width={20}
+                  height={20}
+                  unoptimized
+                />
+                <span className="token-lines">
+                  <span className="token-line token-top">Solana</span>
+                  <span className="token-line token-bottom">SOL</span>
+                </span>
+              </span>
+              <span className="token-values">
+                <span className="token-line token-top">{solValueUsd === null ? "-" : formatUsd(solValueUsd)}</span>
+                <span className="token-line token-bottom">{solBalance === null ? "-" : solBalance.toFixed(4)}</span>
+              </span>
             </div>
             {walletTokens.map((token) => (
-              <div key={token.mint} className="holding-row">
-                <span>{shortAddress(token.mint)}</span>
-                <strong>{token.amount.toFixed(4)}</strong>
+              <div key={token.mint} className="holding-row token-row">
+                <span className="token-meta">
+                  {token.logoURI ? (
+                    <Image
+                      src={token.logoURI}
+                      alt={token.symbol ?? token.name ?? token.mint}
+                      className="token-icon"
+                      width={20}
+                      height={20}
+                      unoptimized
+                    />
+                  ) : null}
+                  <span className="token-lines">
+                    <span className="token-line token-top">{token.name ?? token.symbol ?? shortAddress(token.mint)}</span>
+                    <span className="token-line token-bottom">{shortAddress(token.mint)}</span>
+                  </span>
+                </span>
+                <span className="token-values">
+                  <span className="token-line token-top">{token.usdValue !== null && token.usdValue !== undefined ? formatUsd(token.usdValue) : "-"}</span>
+                  <span className="token-line token-bottom">{token.amount.toFixed(4)}</span>
+                </span>
               </div>
             ))}
           </div>
@@ -695,6 +1169,15 @@ function DashboardPage() {
           <h3>Signal Parameters</h3>
           <div className="controls params-toolbar">
             <div className="subtext">{paramsSaveStatus}</div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoTradeEnabled}
+              className={`auto-trade-toggle ${autoTradeEnabled ? "on" : "off"}`}
+              onClick={toggleAutoTrade}
+            >
+              Auto-trade: {autoTradeEnabled ? "On" : "Off"}
+            </button>
             <button type="button" onClick={saveSignalParams}>Save</button>
             <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
           </div>
@@ -764,63 +1247,158 @@ function DashboardPage() {
                 }
               />
             </label>
+            <label>
+              Auto-trade wallet allocation (%)
+              <input
+                type="number"
+                value={autoTradeSettings.walletPercent}
+                min={1}
+                max={100}
+                step={1}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  const walletPercent = Number.isFinite(value)
+                    ? Math.min(100, Math.max(1, Math.round(value)))
+                    : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+                  setAutoTradeSettings((prev) => {
+                    const next = { ...prev, walletPercent };
+                    try {
+                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+                    } catch (_error) {
+                      // ignore storage errors
+                    }
+                    return next;
+                  });
+                }}
+              />
+            </label>
+            <label>
+              Auto-trade token
+              <select
+                value={autoTradeSettings.inputToken}
+                onChange={(event) => {
+                  const inputToken: AutoTradeToken = event.target.value === "USDC" ? "USDC" : "SOL";
+                  setAutoTradeSettings((prev) => {
+                    const next = { ...prev, inputToken };
+                    try {
+                      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+                    } catch (_error) {
+                      // ignore storage errors
+                    }
+                    return next;
+                  });
+                }}
+              >
+                <option value="SOL">Solana (SOL)</option>
+                <option value="USDC">USDC</option>
+              </select>
+            </label>
           </div>
         </div>
       </section>
 
+      {showDepositModal && wallet.publicKey ? (
+        <div className="modal-backdrop" onClick={() => setShowDepositModal(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>Deposit Funds</h3>
+            <div className="subtext">Send SOL or SPL tokens to this wallet.</div>
+            <img
+              className="deposit-qr"
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(wallet.publicKey.toBase58())}`}
+              alt="Deposit address QR code"
+            />
+            <code className="deposit-address">{wallet.publicKey.toBase58()}</code>
+            <div className="wallet-controls">
+              <button onClick={copyDepositAddress}>Copy Address</button>
+              <button className="secondary" onClick={() => setShowDepositModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className="grid" style={{ marginBottom: 22 }}>
         <div className="panel">
-          <h3>Live Signals</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h3>Live Signals</h3>
+            <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
+          </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
-          {signals.map((signal) => (
-            <div
-              key={signal.id}
-              className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
-            >
-              <div>
+          <div className="signals-scroll">
+            {signals.map((signal) => (
+              <div
+                key={signal.id}
+                className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}
+              >
                 <div>
-                  {signal.symbol} · {signal.type.toUpperCase()}
+                  <div>
+                    {signal.symbol} · {signal.type.toUpperCase()}
+                  </div>
+                  <div className="signal-meta">{signal.summary}</div>
+                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
                 </div>
-                <div className="signal-meta">{signal.summary}</div>
+                <div>{Math.round(signal.confidence * 100)}%</div>
               </div>
-              <div>{Math.round(signal.confidence * 100)}%</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
 
         <div className="panel">
-          <h3>Recent Trades</h3>
-          {!wallet.publicKey && (
-            <div className="subtext">Connect a wallet to view trade history linked to that address.</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <h3>Recent Trades</h3>
+            <div className="wallet-controls">
+              <button className="secondary" onClick={clearRecentTrades}>Clear Trades</button>
+            </div>
+          </div>
+          {!wallet.publicKey && recentTrades.length === 0 && (
+            <div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>
           )}
-          {wallet.publicKey && recentTrades.length === 0 && (
+          {recentTrades.length === 0 && wallet.publicKey && (
             <div className="subtext">No recent trades recorded for this wallet yet.</div>
           )}
-          {wallet.publicKey && recentTrades.map((trade) => (
+          <div className="recent-trades-scroll">
+          {recentTrades.map((trade) => (
             <div key={trade.id} className="news-item">
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <span>Swap via Jupiter</span>
+                <span>{trade.source === "auto" ? "Auto trade" : "Manual trade"}</span>
                 <span className="subtext">{new Date(trade.timestamp).toLocaleTimeString()}</span>
               </div>
+              {trade.signalSummary ? <div className="subtext">{trade.signalSummary}</div> : null}
               <div className="news-meta">
-                <span>{shortAddress(trade.txid)}</span>
-                <a
-                  href={`https://solscan.io/tx/${trade.txid}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View Tx
-                </a>
+                <span>
+                  {trade.txid.startsWith("auto-") || trade.txid.startsWith("manual-")
+                    ? trade.txid.slice(0, 20)
+                    : shortAddress(trade.txid)}
+                </span>
+                {trade.txid.startsWith("auto-") ? (
+                  <span>Simulated execution</span>
+                ) : trade.txid.startsWith("manual-") ? (
+                  <span>Manual entry</span>
+                ) : (
+                  <a
+                    href={`https://solscan.io/tx/${trade.txid}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View Tx
+                  </a>
+                )}
               </div>
             </div>
           ))}
+          </div>
         </div>
 
         <div className="panel">
           <h3>News Pulse</h3>
           {latestNews.map((item) => (
             <div key={item.id} className="news-item">
-              <div>{item.headline}</div>
+              <div>
+                {item.url ? (
+                  <a href={item.url} target="_blank" rel="noreferrer">
+                    {item.headline}
+                  </a>
+                ) : item.headline}
+              </div>
               <div className="news-meta">
                 <span>{item.source}</span>
                 <span>{item.sentiment >= 0 ? "Positive" : "Negative"}</span>

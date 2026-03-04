@@ -21,3 +21,10 @@ coverage/
 
 # Editor/system artifacts
 .vscode/
+
+# Keys
+BBkey
+BBkey.pub
+.env
+.env
+.env

@@ -28,10 +28,15 @@ body {
   margin: 0;
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   color: var(--text);
+  background-color: #000;
   background: radial-gradient(1200px 600px at 10% -10%, rgba(101, 217, 255, 0.12), transparent 60%),
     radial-gradient(900px 500px at 90% 10%, rgba(255, 164, 92, 0.14), transparent 55%),
     linear-gradient(160deg, var(--bg), var(--bg-2));
   min-height: 100vh;
+}
+
+html {
+  background-color: #000;
 }
 
 a {
@@ -64,6 +69,13 @@ header {
   font-family: "Space Grotesk", system-ui, sans-serif;
   font-size: 32px;
   letter-spacing: -0.02em;
+}
+
+.brand-logo {
+  width: min(520px, 100%);
+  height: auto;
+  display: block;
+  margin-bottom: 6px;
 }
 
 .badges {
@@ -110,13 +122,15 @@ header {
 }
 
 .price-pair-button {
-  padding: 0;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: var(--text);
   font-family: "Space Grotesk", system-ui, sans-serif;
   font-size: 16px;
-  line-height: 1.2;
+  line-height: 1.3;
   text-align: left;
 }
 
@@ -183,10 +197,28 @@ header {
 }
 
 .params-toolbar {
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   margin-top: 0;
   margin-bottom: 8px;
+}
+
+.auto-trade-toggle {
+  border-width: 1px;
+  border-style: solid;
+  min-width: 132px;
+}
+
+.auto-trade-toggle.off {
+  border-color: rgba(255, 107, 107, 0.55);
+  background: rgba(255, 107, 107, 0.2);
+  color: #ffd1d1;
+}
+
+.auto-trade-toggle.on {
+  border-color: rgba(107, 255, 177, 0.65);
+  background: rgba(107, 255, 177, 0.22);
+  color: #cbffe4;
 }
 
 input,
@@ -269,6 +301,62 @@ button:disabled {
   align-items: center;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(1, 6, 18, 0.72);
+  z-index: 70;
+  padding: 18px;
+}
+
+.modal-card {
+  width: min(520px, 100%);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(17, 23, 36, 0.96), rgba(10, 14, 26, 0.96));
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.deposit-qr {
+  width: 240px;
+  height: 240px;
+  border-radius: 10px;
+  margin: 6px auto;
+  background: #fff;
+  padding: 8px;
+}
+
+.deposit-address {
+  display: block;
+  width: 100%;
+  overflow-wrap: anywhere;
+  background: rgba(13, 17, 25, 0.8);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
+#jupiter-plugin-container {
+  min-height: 520px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 25, 0.7);
+  padding: 8px;
+}
+
+.signals-scroll,
+.recent-trades-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 .wallet-adapter-button {
   background: rgba(101, 217, 255, 0.15) !important;
   border: 1px solid rgba(101, 217, 255, 0.25) !important;
@@ -304,6 +392,22 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.push-toggle {
+  min-width: 148px;
+}
+
+.push-toggle.on {
+  border-color: rgba(107, 255, 177, 0.65);
+  background: rgba(107, 255, 177, 0.24);
+  color: #cbffe4;
+}
+
+.push-toggle.off {
+  border-color: rgba(255, 107, 107, 0.55);
+  background: rgba(255, 107, 107, 0.2);
+  color: #ffd1d1;
 }
 
 .header-alert-slot {
@@ -344,6 +448,57 @@ button:disabled {
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(13, 17, 25, 0.7);
+}
+
+
+.total-row {
+  border-color: rgba(130, 180, 255, 0.35);
+}
+
+.token-meta {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+
+.token-row {
+  align-items: center;
+}
+
+.token-lines,
+.token-values {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.token-values {
+  text-align: right;
+  min-width: 120px;
+}
+
+.token-line {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.token-top {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.token-bottom {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.token-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.12);
 }
 
 @media (max-width: 720px) {

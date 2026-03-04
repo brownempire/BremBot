@@ -1,0 +1,55 @@
+name: Push Signal Scan
+
+on:
+  schedule:
+    # GitHub Actions supports minimum 5-minute cron cadence.
+    # We run a 5-iteration, 60s loop below to achieve effective 1-minute scans.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Validate required secrets
+        env:
+          SIGNAL_SCAN_URL: ${{ secrets.SIGNAL_SCAN_URL }}
+        run: |
+          if [ -z "$SIGNAL_SCAN_URL" ]; then
+            echo "Missing SIGNAL_SCAN_URL secret"
+            exit 1
+          fi
+
+      - name: Trigger push signal scan every minute (x5)
+        env:
+          SIGNAL_SCAN_URL: ${{ secrets.SIGNAL_SCAN_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          AUTH_HEADER=""
+          if [ -n "${CRON_SECRET:-}" ]; then
+            AUTH_HEADER="Authorization: Bearer ${CRON_SECRET}"
+          fi
+
+          for i in 1 2 3 4 5; do
+            echo "Scan attempt $i/5 at $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            if [ -n "$AUTH_HEADER" ]; then
+              RESPONSE=$(curl -sS -L -w "\n%{http_code}" -H "$AUTH_HEADER" "$SIGNAL_SCAN_URL")
+            else
+              RESPONSE=$(curl -sS -L -w "\n%{http_code}" "$SIGNAL_SCAN_URL")
+            fi
+
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            STATUS=$(echo "$RESPONSE" | tail -n1)
+            echo "Status: $STATUS"
+            echo "Body: $BODY"
+
+            if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+              exit 1
+            fi
+
+            if [ "$i" -lt 5 ]; then
+              sleep 60
+            fi
+          done
