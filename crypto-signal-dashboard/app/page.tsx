@@ -434,7 +434,10 @@ function DashboardPage() {
         if (existing) {
           setSubscription(existing.toJSON());
           setPushEnabled(true);
-          setPushStatus("Push already enabled");
+          setPushStatus("Alerts enabled");
+        } else {
+          setPushEnabled(false);
+          setPushStatus("Alerts disabled");
         }
       })
       .catch(() => {
@@ -712,7 +715,8 @@ function DashboardPage() {
 
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      setPushStatus("Notifications blocked");
+      setPushEnabled(false);
+      setPushStatus("Alerts disabled");
       return;
     }
 
@@ -746,15 +750,46 @@ function DashboardPage() {
       }
 
       setSubscription(subscriptionJson);
-      setPushStatus("Push enabled");
       setPushEnabled(true);
+      setPushStatus("Alerts enabled");
     } catch (error) {
       setPushStatus(error instanceof Error ? error.message : "Push subscribe failed");
     }
   }
 
+  async function disablePush() {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const active = await registration.pushManager.getSubscription();
+      const endpoint = active?.endpoint ?? subscription?.endpoint;
+      if (active) {
+        await active.unsubscribe();
+      }
+      if (endpoint) {
+        await fetch("/api/push/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ endpoint }),
+        }).catch(() => undefined);
+      }
+      setSubscription(null);
+      setPushEnabled(false);
+      setPushStatus("Alerts disabled");
+    } catch (error) {
+      setPushStatus(error instanceof Error ? error.message : "Failed to disable alerts");
+    }
+  }
+
+  async function togglePush() {
+    if (pushEnabled) {
+      await disablePush();
+      return;
+    }
+    await enablePush();
+  }
+
   async function sendTestPush() {
-    if (!subscription) {
+    if (!pushEnabled || !subscription) {
       setPushStatus("Enable push first");
       return;
     }
@@ -949,7 +984,13 @@ function DashboardPage() {
               <strong>Alerts & Push</strong>
               <span className="subtext">{pushStatus}</span>
               <div className="alerts-actions">
-                <button onClick={enablePush} disabled={!pushReady}>Enable Push</button>
+                <button
+                  onClick={togglePush}
+                  disabled={!pushReady}
+                  className={pushEnabled ? "push-toggle on" : "push-toggle off"}
+                >
+                  {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
+                </button>
                 <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
               </div>
             </div>
