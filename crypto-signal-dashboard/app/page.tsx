@@ -127,10 +127,12 @@ function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
+  const [receiveSignalsForSlotId, setReceiveSignalsForSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
   const [newsItems, setNewsItems] = useState<NewsItem[]>(getMockNews());
   const [editingMarketSlotId, setEditingMarketSlotId] = useState<string | null>(null);
+  const [editingSignalTarget, setEditingSignalTarget] = useState(false);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
   const [pushReady, setPushReady] = useState(false);
@@ -268,7 +270,13 @@ function DashboardPage() {
 
     setSignals((prev) => {
       let next = [...prev];
-      trackedMarkets.forEach((market) => {
+      const targetMarket =
+        trackedMarkets.find((market) => market.id === receiveSignalsForSlotId) ?? trackedMarkets[0];
+      if (!targetMarket) {
+        return next;
+      }
+
+      [targetMarket].forEach((market) => {
         const points = priceHistory[market.id] ?? [];
         if (points.length === 0) return;
         const now = points[points.length - 1].t;
@@ -418,6 +426,7 @@ function DashboardPage() {
     params,
     priceHistory,
     pushEnabled,
+    receiveSignalsForSlotId,
     subscription,
     trackedMarkets,
     wallet.executeSwap,
@@ -680,6 +689,8 @@ function DashboardPage() {
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
+  const selectedSignalMarket =
+    trackedMarkets.find((market) => market.id === receiveSignalsForSlotId) ?? trackedMarkets[0];
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];
@@ -715,6 +726,7 @@ function DashboardPage() {
       setSignals((prev) => prev.filter((signal) => signal.symbol !== previousPair));
     }
     setSelectedChartSlotId(slotId);
+    setReceiveSignalsForSlotId(slotId);
     setEditingMarketSlotId(null);
   }
 
@@ -1019,11 +1031,15 @@ function DashboardPage() {
             <div
               key={card.id}
               className={`panel price-card ${selectedChartSlotId === card.id ? "active" : ""}`}
-              onClick={() => setSelectedChartSlotId(card.id)}
+              onClick={() => {
+                setSelectedChartSlotId(card.id);
+                setReceiveSignalsForSlotId(card.id);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
                   setSelectedChartSlotId(card.id);
+                  setReceiveSignalsForSlotId(card.id);
                 }
               }}
               role="button"
@@ -1182,6 +1198,33 @@ function DashboardPage() {
             <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
           </div>
           <div className="controls">
+            <label>
+              Receive Signals For
+              <button
+                type="button"
+                className="secondary"
+                style={{ marginTop: 8 }}
+                onClick={() => setEditingSignalTarget((prev) => !prev)}
+              >
+                {selectedSignalMarket?.pair ?? "Select Market"}
+              </button>
+              {editingSignalTarget ? (
+                <select
+                  style={{ marginTop: 8 }}
+                  value={selectedSignalMarket?.coinbaseProduct ?? ""}
+                  onChange={(event) => {
+                    updateTrackedMarket(receiveSignalsForSlotId, event.target.value);
+                    setEditingSignalTarget(false);
+                  }}
+                >
+                  {marketOptions.map((option) => (
+                    <option key={option.coinbaseProduct} value={option.coinbaseProduct}>
+                      {option.pair}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+            </label>
             <label>
               Trend window (min)
               <input
