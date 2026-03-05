@@ -491,8 +491,16 @@ button:disabled {
 
 .dashboard-panel-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 8px;
+  gap: 10px;
+}
+
+.dashboard-panel-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .drag-handle {
@@ -654,7 +662,11 @@ button:disabled {
 
   .dashboard-panel {
     width: 100% !important;
-    min-height: 280px;
+    min-height: 240px;
+  }
+
+  .dashboard-panel-content {
+    height: calc(100% - 38px);
   }
 
   .header-alert-slot {
