@@ -164,6 +164,24 @@ function getAutoTradeTokenOption(symbol: AutoTradeToken) {
   return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
 }
 
+const PNL_DEFAULT_MINT = SOL_MINT;
+const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
+  [SOL_MINT]: "SOL",
+  [USDC_MINT]: "USDC",
+  [ETH_MINT]: "ETH",
+  [BTC_MINT]: "BTC",
+  JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN: "JUP",
+  DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: "BONK",
+};
+
+function formatTokenAmount(value: number) {
+  if (!Number.isFinite(value)) return "0";
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  });
+}
+
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -201,9 +219,8 @@ function DashboardPage() {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
-  const [walletPnlPoints, setWalletPnlPoints] = useState<WalletPnlPoint[]>([]);
-  const [pnlStatus, setPnlStatus] = useState("Connect wallet to load PnL");
-  const [pnlBaseline, setPnlBaseline] = useState<number | null>(null);
+  const [pnlTokenMint, setPnlTokenMint] = useState<string>(PNL_DEFAULT_MINT);
+  const [pnlStatus, setPnlStatus] = useState("PnL tracking recent trades");
   const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
   const resizeStateRef = useRef<{
@@ -781,57 +798,6 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
 
-  useEffect(() => {
-    setPnlBaseline(null);
-  }, [walletAddress]);
-
-  useEffect(() => {
-    if (!walletAddress) {
-      setWalletPnlPoints([]);
-      setPnlBaseline(null);
-      setPnlStatus("Connect wallet to load PnL");
-      return;
-    }
-
-    let cancelled = false;
-    const loadPnl = async () => {
-      try {
-        const response = await fetch(`/api/wallet/pnl?address=${walletAddress}`, { cache: "no-store" });
-        const payload = await response.json().catch(() => null);
-        if (cancelled) return;
-        if (!response.ok || !Array.isArray(payload?.points)) {
-          setPnlStatus(payload?.error ?? "PnL sync failed");
-          return;
-        }
-
-        const points = payload.points
-          .map((point: { t?: number; v?: number }) => ({
-            t: Number(point?.t ?? 0),
-            v: Number(point?.v ?? 0),
-          }))
-          .filter((point: WalletPnlPoint) => Number.isFinite(point.t) && Number.isFinite(point.v));
-
-        setWalletPnlPoints(points);
-        if (points.length > 0) {
-          setPnlBaseline((previous) => (previous === null ? points[points.length - 1].v : previous));
-        }
-        setPnlStatus(points.length > 0 ? "PnL synced from on-chain transaction history" : "No transaction history found");
-      } catch (_error) {
-        if (!cancelled) setPnlStatus("PnL sync failed");
-      }
-    };
-
-    loadPnl().catch(() => undefined);
-    const interval = setInterval(() => {
-      loadPnl().catch(() => undefined);
-    }, 60000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [walletAddress]);
-
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
@@ -846,13 +812,58 @@ function DashboardPage() {
     return { ...market, current, change24h };
   });
 
-  const pnlTimeline = useMemo(() => {
-    const baseline = pnlBaseline ?? 0;
-    if (walletPnlPoints.length > 0) {
-      return walletPnlPoints.map((point) => ({ t: point.t, v: point.v - baseline }));
+  const pnlTokenOptions = useMemo(() => {
+    const byMint = new Map<string, string>();
+    byMint.set(SOL_MINT, "SOL");
+    walletTokens.forEach((token) => {
+      if (token.mint) {
+        byMint.set(token.mint, token.symbol ?? token.name ?? shortAddress(token.mint));
+      }
+    });
+    recentTrades.forEach((trade) => {
+      if (trade.inputMint) byMint.set(trade.inputMint, KNOWN_TOKEN_BY_MINT[trade.inputMint] ?? shortAddress(trade.inputMint));
+      if (trade.outputMint) byMint.set(trade.outputMint, KNOWN_TOKEN_BY_MINT[trade.outputMint] ?? shortAddress(trade.outputMint));
+    });
+    return [...byMint.entries()].map(([mint, label]) => ({ mint, label }));
+  }, [recentTrades, walletTokens]);
+
+  useEffect(() => {
+    if (!pnlTokenOptions.some((option) => option.mint === pnlTokenMint)) {
+      setPnlTokenMint(pnlTokenOptions[0]?.mint ?? PNL_DEFAULT_MINT);
     }
+  }, [pnlTokenMint, pnlTokenOptions]);
+
+  const pnlTimeline = useMemo(() => {
+    const trades = [...recentTrades]
+      .filter((trade) => Number.isFinite(trade.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp);
+    let cumulative = 0;
+    const points: WalletPnlPoint[] = [];
+
+    trades.forEach((trade) => {
+      let delta = 0;
+      if (trade.inputMint === pnlTokenMint && Number.isFinite(trade.inputAmount)) {
+        delta -= Number(trade.inputAmount);
+      }
+      if (trade.outputMint === pnlTokenMint && Number.isFinite(trade.outputAmount)) {
+        delta += Number(trade.outputAmount);
+      }
+      cumulative += delta;
+      points.push({ t: trade.timestamp, v: cumulative });
+    });
+
+    if (points.length > 0) return points;
     return [{ t: Date.now(), v: 0 }];
-  }, [walletPnlPoints, pnlBaseline]);
+  }, [pnlTokenMint, recentTrades]);
+
+  useEffect(() => {
+    const tokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "token";
+    if (recentTrades.length === 0) {
+      setPnlStatus(`No recent trades. PnL reset for ${tokenLabel}.`);
+      return;
+    }
+    setPnlStatus(`Tracking ${tokenLabel} PnL from recent trades since last clear.`);
+  }, [pnlTokenMint, pnlTokenOptions, recentTrades.length]);
 
   const pnlValues = useMemo(() => {
     const latest = pnlTimeline[pnlTimeline.length - 1];
@@ -1145,6 +1156,7 @@ function DashboardPage() {
   function clearRecentTrades() {
     const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
     setRecentTrades([]);
+    setPnlStatus("No recent trades. PnL reset.");
     try {
       window.localStorage.removeItem(tradesStorageKey(activeWallet));
     } catch (_error) {
@@ -1404,21 +1416,34 @@ function DashboardPage() {
     }
 
     if (id === "pnl") {
+      const selectedTokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "Token";
       return (
         <>
           <h3>PnL</h3>
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
           <div className="pnl-metrics">
-            <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
-            <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong></div>
-            <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong></div>
-            <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
+            <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d24)} {selectedTokenLabel}</strong></div>
+            <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d7)} {selectedTokenLabel}</strong></div>
+            <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d30)} {selectedTokenLabel}</strong></div>
+            <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.ytd)} {selectedTokenLabel}</strong></div>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
             <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
             <button type="button" className={pnlRange === "7d" ? "" : "secondary"} onClick={() => setPnlRange("7d")}>7D</button>
             <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
             <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
+            <select
+              value={pnlTokenMint}
+              onChange={(event) => setPnlTokenMint(event.target.value)}
+              style={{ maxWidth: 180 }}
+              aria-label="PnL token selection"
+            >
+              {pnlTokenOptions.map((option) => (
+                <option key={option.mint} value={option.mint}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="pnl-chart-wrap">
             <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
