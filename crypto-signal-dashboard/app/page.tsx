@@ -151,14 +151,24 @@ function tradesStorageKey(walletAddress: string) {
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
 const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
-  { id: "chart", width: 980, height: 610 },
-  { id: "wallet", width: 520, height: 680 },
-  { id: "pnl", width: 520, height: 460 },
-  { id: "params", width: 520, height: 700 },
-  { id: "signals", width: 440, height: 470 },
-  { id: "trades", width: 440, height: 470 },
-  { id: "news", width: 440, height: 470 },
+  { id: "chart", width: 1080, height: 640 },
+  { id: "wallet", width: 1080, height: 520 },
+  { id: "pnl", width: 1080, height: 460 },
+  { id: "params", width: 1080, height: 500 },
+  { id: "signals", width: 1080, height: 430 },
+  { id: "trades", width: 1080, height: 500 },
+  { id: "news", width: 1080, height: 430 },
 ];
+
+const DASHBOARD_SECTION_TITLES: Record<DashboardSectionId, string> = {
+  chart: "TradingView Chart",
+  wallet: "In-App Wallet",
+  pnl: "PnL",
+  params: "Signal Parameters",
+  signals: "Live Signals",
+  trades: "Recent Trades",
+  news: "News Pulse",
+};
 
 function getAutoTradeTokenOption(symbol: AutoTradeToken) {
   return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
@@ -1300,7 +1310,6 @@ function DashboardPage() {
     if (id === "chart") {
       return (
         <>
-          <h3>TradingView Chart</h3>
           <div className="subtext" style={{ marginBottom: 10 }}>
             Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
           </div>
@@ -1314,7 +1323,6 @@ function DashboardPage() {
     if (id === "wallet") {
       return (
         <>
-          <h3>In-App Wallet</h3>
           <div className="wallet-controls">
             {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
             <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
@@ -1406,7 +1414,6 @@ function DashboardPage() {
     if (id === "pnl") {
       return (
         <>
-          <h3>PnL</h3>
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
           <div className="pnl-metrics">
             <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
@@ -1432,7 +1439,6 @@ function DashboardPage() {
     if (id === "params") {
       return (
         <>
-          <h3>Signal Parameters</h3>
           <div className="controls params-toolbar">
             <div className="subtext">{paramsSaveStatus}</div>
             <button type="button" onClick={saveSignalParams}>Save</button>
@@ -1511,7 +1517,6 @@ function DashboardPage() {
       return (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <h3>Live Signals</h3>
             <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
           </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
@@ -1535,7 +1540,6 @@ function DashboardPage() {
       return (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <h3>Recent Trades</h3>
             <div className="wallet-controls"><button className="secondary" onClick={clearRecentTrades}>Clear Trades</button></div>
           </div>
           {!wallet.publicKey && recentTrades.length === 0 && (<div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>)}
@@ -1567,7 +1571,6 @@ function DashboardPage() {
 
     return (
       <>
-        <h3>News Pulse</h3>
         {latestNews.map((item) => (
           <div key={item.id} className="news-item">
             <div>{item.url ? (<a href={item.url} target="_blank" rel="noreferrer">{item.headline}</a>) : item.headline}</div>
@@ -1687,6 +1690,7 @@ function DashboardPage() {
             }}
           >
             <div className="dashboard-panel-toolbar">
+              <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[section.id]}</span>
               <button
                 type="button"
                 draggable
