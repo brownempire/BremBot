@@ -174,14 +174,6 @@ const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
   DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: "BONK",
 };
 
-function formatTokenAmount(value: number) {
-  if (!Number.isFinite(value)) return "0";
-  return value.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 6,
-  });
-}
-
 function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
@@ -833,6 +825,20 @@ function DashboardPage() {
     }
   }, [pnlTokenMint, pnlTokenOptions]);
 
+  const selectedTokenUsdPrice = useMemo(() => {
+    if (pnlTokenMint === USDC_MINT) return 1;
+    if (pnlTokenMint === SOL_MINT) {
+      if (solValueUsd !== null && solBalance !== null && solBalance > 0) {
+        const derived = solValueUsd / solBalance;
+        if (Number.isFinite(derived) && derived > 0) return derived;
+      }
+    }
+    const token = walletTokens.find((item) => item.mint === pnlTokenMint);
+    const price = Number(token?.usdPrice ?? 0);
+    if (Number.isFinite(price) && price > 0) return price;
+    return pnlTokenMint === USDC_MINT ? 1 : 0;
+  }, [pnlTokenMint, solBalance, solValueUsd, walletTokens]);
+
   const pnlTimeline = useMemo(() => {
     const trades = [...recentTrades]
       .filter((trade) => Number.isFinite(trade.timestamp))
@@ -848,13 +854,13 @@ function DashboardPage() {
       if (trade.outputMint === pnlTokenMint && Number.isFinite(trade.outputAmount)) {
         delta += Number(trade.outputAmount);
       }
-      cumulative += delta;
+      cumulative += delta * selectedTokenUsdPrice;
       points.push({ t: trade.timestamp, v: cumulative });
     });
 
     if (points.length > 0) return points;
     return [{ t: Date.now(), v: 0 }];
-  }, [pnlTokenMint, recentTrades]);
+  }, [pnlTokenMint, recentTrades, selectedTokenUsdPrice]);
 
   useEffect(() => {
     const tokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "token";
@@ -862,8 +868,9 @@ function DashboardPage() {
       setPnlStatus(`No recent trades. PnL reset for ${tokenLabel}.`);
       return;
     }
-    setPnlStatus(`Tracking ${tokenLabel} PnL from recent trades since last clear.`);
-  }, [pnlTokenMint, pnlTokenOptions, recentTrades.length]);
+    const priceHint = selectedTokenUsdPrice > 0 ? ` @ ${formatUsd(selectedTokenUsdPrice)}` : "";
+    setPnlStatus(`Tracking ${tokenLabel} PnL in USD from recent trades since last clear${priceHint}.`);
+  }, [pnlTokenMint, pnlTokenOptions, recentTrades.length, selectedTokenUsdPrice]);
 
   const pnlValues = useMemo(() => {
     const latest = pnlTimeline[pnlTimeline.length - 1];
@@ -1416,16 +1423,15 @@ function DashboardPage() {
     }
 
     if (id === "pnl") {
-      const selectedTokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "Token";
       return (
         <>
           <h3>PnL</h3>
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
           <div className="pnl-metrics">
-            <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d24)} {selectedTokenLabel}</strong></div>
-            <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d7)} {selectedTokenLabel}</strong></div>
-            <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.d30)} {selectedTokenLabel}</strong></div>
-            <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatTokenAmount(pnlValues.ytd)} {selectedTokenLabel}</strong></div>
+            <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
+            <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong></div>
+            <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong></div>
+            <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
             <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
