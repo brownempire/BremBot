@@ -22,7 +22,9 @@ const ETH_MINT = "7vfCXTUXx5WQXj6Yf8sTG6iM6Aq98J4A4P8M7P8yWfYw";
 const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
+const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
+const LOCAL_RECENT_TRADES_CAP = 20;
 
 type TrackedMarket = {
   id: string;
@@ -115,6 +117,7 @@ type StoredTradeRecord = {
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
+type PnlMode = "app" | "chain";
 type DashboardSectionId = "chart" | "wallet" | "pnl" | "params" | "signals" | "trades" | "news";
 type DashboardSectionLayout = {
   id: DashboardSectionId;
@@ -147,6 +150,10 @@ function formatFeedSource(status: string) {
 
 function tradesStorageKey(walletAddress: string) {
   return `brembot.recent-trades.${walletAddress}`;
+}
+
+function remoteTradesAuthStorageKey(walletAddress: string) {
+  return `${REMOTE_AUTH_TOKEN_STORAGE_KEY}.${walletAddress}`;
 }
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
@@ -221,8 +228,13 @@ function DashboardPage() {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
+  const [pnlMode, setPnlMode] = useState<PnlMode>("app");
   const [pnlTokenMint, setPnlTokenMint] = useState<string>(PNL_DEFAULT_MINT);
   const [pnlStatus, setPnlStatus] = useState("PnL tracking recent trades");
+  const [remoteAuthStatus, setRemoteAuthStatus] = useState("Remote auth pending");
+  const [remoteSyncStatus, setRemoteSyncStatus] = useState("Remote sync idle");
+  const [remoteAuthToken, setRemoteAuthToken] = useState<string | null>(null);
+  const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: Date.now(), v: 0 }]);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
   const resizeStateRef = useRef<{
@@ -398,6 +410,7 @@ function DashboardPage() {
             }
 
             if (autoTradeEnabled && activeAutoTradeToken) {
+              const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
               const assetSymbol = activeAutoTradeToken.symbol;
               const assetMint = activeAutoTradeToken.mint;
               const isBullSignal = signal.direction === "bullish";
@@ -418,7 +431,6 @@ function DashboardPage() {
                     outputMint,
                     uiAmount: tradeAmount,
                   }).then((result) => {
-                    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
                     const autoTradeRecord: StoredTradeRecord = {
                       id: `auto-${signal.id}-${Date.now()}`,
                       txid: result.txid,
@@ -432,15 +444,7 @@ function DashboardPage() {
                       outputAmount: result.outputAmount,
                       signalSummary: `${signal.summary} · ${isBullSignal ? "buy" : "sell"} ${assetSymbol} · executed ${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol}`,
                     };
-                    setRecentTrades((prevTrades) => {
-                      const nextTrades = [autoTradeRecord, ...prevTrades].slice(0, 20);
-                      try {
-                        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
-                      } catch (_error) {
-                        // ignore storage errors
-                      }
-                      return nextTrades;
-                    });
+                    persistTradeRecord(autoTradeRecord).catch(() => undefined);
                     setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
                     if (pushEnabled) {
                       fetch("/api/push/notify", {
@@ -460,7 +464,6 @@ function DashboardPage() {
                   });
                 }
               } else {
-                const activeWallet = "paper-auto";
                 const autoTradeRecord: StoredTradeRecord = {
                   id: `auto-${signal.id}`,
                   txid: `auto-${signal.id}`,
@@ -470,18 +473,7 @@ function DashboardPage() {
                   signalId: signal.id,
                   signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${autoTradeSettings.walletPercent}% allocation`,
                 };
-                setRecentTrades((prevTrades) => {
-                  const nextTrades = [
-                    autoTradeRecord,
-                    ...prevTrades.filter((item) => item.id !== autoTradeRecord.id),
-                  ].slice(0, 20);
-                  try {
-                    window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
-                  } catch (_error) {
-                    // ignore storage errors
-                  }
-                  return nextTrades;
-                });
+                persistTradeRecord(autoTradeRecord).catch(() => undefined);
                 setAutoTradeStatus(
                   `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${autoTradeSettings.walletPercent}% allocation; connect wallet for live)`
                 );
@@ -518,6 +510,8 @@ function DashboardPage() {
     receiveSignalsForSlotId,
     subscription,
     trackedMarkets,
+    persistTradeRecord,
+    wallet,
     wallet.executeSwap,
     wallet.publicKey,
     walletTokens,
@@ -669,6 +663,29 @@ function DashboardPage() {
     setAutoTradeStatus(`Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation)`);
   }, [activeAutoTradeToken, autoTradeSettings.walletPercent]);
 
+  async function persistTradeRecord(trade: StoredTradeRecord) {
+    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+    setRecentTrades((prevTrades) => {
+      const nextTrades = [trade, ...prevTrades.filter((item) => item.id !== trade.id)].slice(0, LOCAL_RECENT_TRADES_CAP);
+      try {
+        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+      } catch (_error) {
+        // ignore storage errors
+      }
+      return nextTrades;
+    });
+
+    if (!wallet.connected || !wallet.publicKey || !remoteAuthToken) return;
+    await fetch("/api/trades", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${remoteAuthToken}`,
+      },
+      body: JSON.stringify({ trade }),
+    }).catch(() => undefined);
+  }
+
   useEffect(() => {
     const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
     try {
@@ -683,6 +700,95 @@ function DashboardPage() {
       setRecentTrades([]);
     }
   }, [walletAddress]);
+
+  useEffect(() => {
+    if (!walletAddress || !wallet.connected) {
+      setRemoteAuthToken(null);
+      setRemoteAuthStatus("Remote auth requires connected wallet");
+      setRemoteSyncStatus("Remote sync unavailable");
+      return;
+    }
+
+    let cancelled = false;
+    const cachedToken = typeof window !== "undefined"
+      ? window.localStorage.getItem(remoteTradesAuthStorageKey(walletAddress))
+      : null;
+    if (cachedToken) {
+      setRemoteAuthToken(cachedToken);
+      setRemoteAuthStatus("Remote auth connected");
+      return;
+    }
+
+    setRemoteAuthStatus("Authenticating remote trade sync...");
+    fetch("/api/trades/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: walletAddress }),
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (cancelled) return;
+      if (!response.ok || !payload?.token) {
+        setRemoteAuthToken(null);
+        setRemoteAuthStatus("Remote auth failed");
+        return;
+      }
+      setRemoteAuthToken(String(payload.token));
+      try {
+        window.localStorage.setItem(remoteTradesAuthStorageKey(walletAddress), String(payload.token));
+      } catch (_error) {
+        // ignore storage errors
+      }
+      setRemoteAuthStatus("Remote auth connected");
+    }).catch(() => {
+      if (cancelled) return;
+      setRemoteAuthToken(null);
+      setRemoteAuthStatus("Remote auth failed");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet.connected, walletAddress]);
+
+  useEffect(() => {
+    if (!wallet.connected || !walletAddress || !remoteAuthToken) {
+      if (!wallet.connected || !walletAddress) {
+        setRemoteSyncStatus("Remote sync requires wallet connection");
+      } else {
+        setRemoteSyncStatus("Remote sync waiting for auth");
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setRemoteSyncStatus("Syncing remote trades...");
+    fetch(`/api/trades?address=${walletAddress}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${remoteAuthToken}` },
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (cancelled) return;
+      if (!response.ok) {
+        setRemoteSyncStatus("Remote sync failed");
+        return;
+      }
+      const remoteTrades = Array.isArray(payload?.trades) ? (payload.trades as StoredTradeRecord[]) : [];
+      setRecentTrades(remoteTrades);
+      try {
+        window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(remoteTrades));
+      } catch (_error) {
+        // ignore storage errors
+      }
+      setRemoteSyncStatus(`Remote sync connected (${remoteTrades.length} trades)`);
+    }).catch(() => {
+      if (cancelled) return;
+      setRemoteSyncStatus("Remote sync failed");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteAuthToken, wallet.connected, walletAddress]);
 
   const refreshWalletPortfolio = useCallback(async () => {
     if (!wallet.connected || !wallet.publicKey) {
@@ -873,23 +979,48 @@ function DashboardPage() {
   }, [pnlTokenMint, recentTrades, selectedTokenUsdPrice]);
 
   useEffect(() => {
+    if (!walletAddress || !wallet.connected) {
+      setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
+      return;
+    }
+
+    fetch(`/api/wallet/pnl?address=${walletAddress}`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        const points = Array.isArray(payload?.points)
+          ? (payload.points as WalletPnlPoint[]).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v))
+          : [];
+        setRemotePnlPoints(points.length > 0 ? points : [{ t: Date.now(), v: 0 }]);
+      })
+      .catch(() => {
+        setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
+      });
+  }, [wallet.connected, walletAddress]);
+
+  useEffect(() => {
     const tokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "token";
+    if (pnlMode === "chain") {
+      setPnlStatus("Tracking on-chain Jupiter swap PnL from remote wallet history (secondary mode).");
+      return;
+    }
     if (recentTrades.length === 0) {
       setPnlStatus(`No recent trades. PnL reset for ${tokenLabel}.`);
       return;
     }
     const priceHint = selectedTokenUsdPrice > 0 ? ` @ ${formatUsd(selectedTokenUsdPrice)}` : "";
     setPnlStatus(`Tracking ${tokenLabel} PnL in USD from recent trades since last clear${priceHint}.`);
-  }, [pnlTokenMint, pnlTokenOptions, recentTrades.length, selectedTokenUsdPrice]);
+  }, [pnlMode, pnlTokenMint, pnlTokenOptions, recentTrades.length, selectedTokenUsdPrice]);
+
+  const displayedPnlTimeline = pnlMode === "app" ? pnlTimeline : remotePnlPoints;
 
   const pnlValues = useMemo(() => {
-    const latest = pnlTimeline[pnlTimeline.length - 1];
+    const latest = displayedPnlTimeline[displayedPnlTimeline.length - 1];
     const latestValue = latest?.v ?? 0;
     const now = Date.now();
     const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
 
     const calcSince = (cutoff: number) => {
-      const base = pnlTimeline.find((point) => point.t >= cutoff) ?? pnlTimeline[0];
+      const base = displayedPnlTimeline.find((point) => point.t >= cutoff) ?? displayedPnlTimeline[0];
       return latestValue - (base?.v ?? 0);
     };
 
@@ -899,7 +1030,7 @@ function DashboardPage() {
       d30: calcSince(now - 30 * 24 * 60 * 60 * 1000),
       ytd: calcSince(yearStart),
     };
-  }, [pnlTimeline]);
+  }, [displayedPnlTimeline]);
 
   const pnlChartPoints = useMemo(() => {
     const now = Date.now();
@@ -911,11 +1042,11 @@ function DashboardPage() {
           ? now - 30 * 24 * 60 * 60 * 1000
           : new Date(new Date().getFullYear(), 0, 1).getTime();
 
-    const filtered = pnlTimeline.filter((point) => point.t >= cutoff);
+    const filtered = displayedPnlTimeline.filter((point) => point.t >= cutoff);
     if (filtered.length >= 2) return filtered;
-    const fallback = pnlTimeline[pnlTimeline.length - 1] ?? { t: now, v: 0 };
+    const fallback = displayedPnlTimeline[displayedPnlTimeline.length - 1] ?? { t: now, v: 0 };
     return [{ t: cutoff, v: fallback.v }, fallback];
-  }, [pnlRange, pnlTimeline]);
+  }, [displayedPnlTimeline, pnlRange]);
 
   const pnlChartPolyline = useMemo(() => {
     const width = 640;
@@ -1170,10 +1301,17 @@ function DashboardPage() {
     }
   }
 
-  function clearRecentTrades() {
+  async function clearRecentTrades() {
     const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
     setRecentTrades([]);
     setPnlStatus("No recent trades. PnL reset.");
+    if (wallet.connected && wallet.publicKey && remoteAuthToken) {
+      await fetch("/api/trades", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      }).catch(() => undefined);
+      setRemoteSyncStatus("Remote trades cleared");
+    }
     try {
       window.localStorage.removeItem(tradesStorageKey(activeWallet));
     } catch (_error) {
@@ -1434,11 +1572,18 @@ function DashboardPage() {
       return (
         <>
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
+          <div className="subtext" style={{ marginBottom: 10 }}>
+            Remote status · auth: {remoteAuthStatus} · sync: {remoteSyncStatus}
+          </div>
           <div className="pnl-metrics">
             <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
             <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong></div>
             <div className="pnl-metric"><span>30-day</span><strong className={pnlValues.d30 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d30)}</strong></div>
             <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
+          </div>
+          <div className="wallet-controls" style={{ marginTop: 8 }}>
+            <button type="button" className={pnlMode === "app" ? "" : "secondary"} onClick={() => setPnlMode("app")}>App Trades (Primary)</button>
+            <button type="button" className={pnlMode === "chain" ? "" : "secondary"} onClick={() => setPnlMode("chain")}>On-Chain (Secondary)</button>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
             <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
@@ -1449,6 +1594,7 @@ function DashboardPage() {
               value={pnlTokenMint}
               onChange={(event) => setPnlTokenMint(event.target.value)}
               style={{ maxWidth: 180 }}
+              disabled={pnlMode === "chain"}
               aria-label="PnL token selection"
             >
               {pnlTokenOptions.map((option) => (
@@ -1573,6 +1719,8 @@ function DashboardPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <div className="wallet-controls"><button className="secondary" onClick={clearRecentTrades}>Clear Trades</button></div>
           </div>
+          <div className="subtext">Local device view keeps the most recent {LOCAL_RECENT_TRADES_CAP} trades for quick history. Remote sync stores a longer canonical history for cross-device PnL.</div>
+          <div className="subtext">Remote status · auth: {remoteAuthStatus} · sync: {remoteSyncStatus}</div>
           {!wallet.publicKey && recentTrades.length === 0 && (<div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>)}
           {recentTrades.length === 0 && wallet.publicKey && (<div className="subtext">No recent trades recorded for this wallet yet.</div>)}
           <div className="recent-trades-scroll">
