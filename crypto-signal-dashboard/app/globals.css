@@ -109,12 +109,6 @@ main {
   gap: 16px;
 }
 
-.bot-home-top-logo {
-  width: min(460px, 72vw);
-  height: auto;
-  display: block;
-}
-
 .bot-home-favicon {
   width: 72px;
   height: 72px;

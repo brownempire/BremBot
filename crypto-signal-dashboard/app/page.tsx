@@ -22,14 +22,6 @@ const BOT_ITEMS = [
 export default function HomePage() {
   return (
     <main className="bot-home">
-      <Image
-        className="bot-home-top-logo"
-        src="/header-photo.png"
-        alt="BremLogic"
-        width={1038}
-        height={338}
-        priority
-      />
       <section className="bot-home-center panel">
         <Image
           className="bot-home-favicon"
