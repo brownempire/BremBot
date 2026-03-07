@@ -61,10 +61,18 @@ html {
 }
 
 .top-menu-link {
+  appearance: none;
+  width: 100%;
+  text-align: left;
   padding: 10px 12px;
   font-size: 14px;
   color: var(--text);
   border-bottom: 1px solid rgba(126, 148, 189, 0.1);
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .top-menu-link:last-child {

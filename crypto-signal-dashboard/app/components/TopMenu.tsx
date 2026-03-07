@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 const MENU_ITEMS = [
@@ -13,11 +12,16 @@ const MENU_ITEMS = [
 
 export function TopMenu() {
   const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const activeLabel = useMemo(
     () => MENU_ITEMS.find((item) => item.href === pathname)?.label ?? "Menu",
     [pathname]
   );
+  const navigateTo = (href: string) => {
+    setOpen(false);
+    router.push(href);
+  };
 
   return (
     <div className="top-menu">
@@ -27,14 +31,14 @@ export function TopMenu() {
       {open ? (
         <div className="top-menu-dropdown" onMouseLeave={() => setOpen(false)}>
           {MENU_ITEMS.map((item) => (
-            <Link
+            <button
+              type="button"
               key={item.href}
               className={`top-menu-link ${pathname === item.href ? "active" : ""}`}
-              href={item.href}
-              onClick={() => setOpen(false)}
+              onClick={() => navigateTo(item.href)}
             >
               {item.label}
-            </Link>
+            </button>
           ))}
         </div>
       ) : null}
