@@ -77,12 +77,14 @@ type AutoTradeSlot = {
 
 type AutoTradeSettings = {
   walletPercent: number;
+  takeProfitPercent: number;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
+  takeProfitPercent: 0,
   slots: [
     { id: "auto-slot-1", token: "SOL" },
     { id: "auto-slot-2", token: "ETH" },
@@ -123,6 +125,17 @@ type DashboardSectionLayout = {
   id: DashboardSectionId;
   width: number;
   height: number;
+};
+type PendingTakeProfit = {
+  id: string;
+  symbol: string;
+  tokenSymbol: string;
+  tokenMint: string;
+  amount: number;
+  entryPrice: number;
+  targetPrice: number;
+  signalId: string;
+  createdAt: number;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -224,6 +237,7 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
+  const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
@@ -244,12 +258,25 @@ function DashboardPage() {
     startWidth: number;
     startHeight: number;
   } | null>(null);
+  const autoTradeBusyRef = useRef(false);
+  const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
+  const lastTpAttemptAtRef = useRef(0);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
   );
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
+
+  useEffect(() => {
+    pendingTakeProfitRef.current = pendingTakeProfit;
+  }, [pendingTakeProfit]);
+
+  useEffect(() => {
+    if (wallet.publicKey || !pendingTakeProfit) return;
+    setPendingTakeProfit(null);
+    pendingTakeProfitRef.current = null;
+  }, [pendingTakeProfit, wallet.publicKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -410,6 +437,16 @@ function DashboardPage() {
             }
 
             if (autoTradeEnabled && activeAutoTradeToken) {
+              if (autoTradeBusyRef.current) {
+                return;
+              }
+              const activeTp = pendingTakeProfitRef.current;
+              if (activeTp) {
+                setAutoTradeStatus(
+                  `TP lock active for ${activeTp.tokenSymbol}: waiting for ${formatUsd(activeTp.targetPrice)} before new trades`
+                );
+                return;
+              }
               const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
               const assetSymbol = activeAutoTradeToken.symbol;
               const assetMint = activeAutoTradeToken.mint;
@@ -426,6 +463,8 @@ function DashboardPage() {
                 } else {
                   const sideLabel = isBullSignal ? `buy ${assetSymbol}` : `sell ${assetSymbol}`;
                   setAutoTradeStatus(`Executing auto-trade for ${signal.symbol}: ${sideLabel} (${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol})...`);
+                  autoTradeBusyRef.current = true;
+                  const marketEntryPrice = points[points.length - 1]?.v ?? 0;
                   wallet.executeSwap({
                     inputMint,
                     outputMint,
@@ -445,7 +484,32 @@ function DashboardPage() {
                       signalSummary: `${signal.summary} · ${isBullSignal ? "buy" : "sell"} ${assetSymbol} · executed ${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol}`,
                     };
                     persistTradeRecord(autoTradeRecord).catch(() => undefined);
-                    setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                    if (isBullSignal && autoTradeSettings.takeProfitPercent > 0) {
+                      const executedOutputAmount = Number(result.outputAmount ?? 0);
+                      if (Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0) {
+                        const targetPrice = marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100));
+                        const nextPendingTp: PendingTakeProfit = {
+                          id: `tp-${signal.id}-${Date.now()}`,
+                          symbol: signal.symbol,
+                          tokenSymbol: assetSymbol,
+                          tokenMint: assetMint,
+                          amount: executedOutputAmount,
+                          entryPrice: marketEntryPrice,
+                          targetPrice,
+                          signalId: signal.id,
+                          createdAt: Date.now(),
+                        };
+                        setPendingTakeProfit(nextPendingTp);
+                        pendingTakeProfitRef.current = nextPendingTp;
+                        setAutoTradeStatus(
+                          `TP armed for ${assetSymbol}: sell ${executedOutputAmount.toFixed(6)} at ${formatUsd(targetPrice)} (+${autoTradeSettings.takeProfitPercent}%)`
+                        );
+                      } else {
+                        setAutoTradeStatus(`Auto-trade executed for ${signal.symbol} (TP not armed: output amount unavailable)`);
+                      }
+                    } else {
+                      setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                    }
                     if (pushEnabled) {
                       fetch("/api/push/notify", {
                         method: "POST",
@@ -461,9 +525,15 @@ function DashboardPage() {
                   }).catch((error: unknown) => {
                     const message = error instanceof Error ? error.message : "swap failed";
                     setAutoTradeStatus(`Auto-trade failed for ${signal.symbol}: ${message}`);
+                  }).finally(() => {
+                    autoTradeBusyRef.current = false;
                   });
                 }
               } else {
+                if (autoTradeSettings.takeProfitPercent > 0 && isBullSignal) {
+                  setAutoTradeStatus("TP requires a connected wallet for live token settlement");
+                  return;
+                }
                 const autoTradeRecord: StoredTradeRecord = {
                   id: `auto-${signal.id}`,
                   txid: `auto-${signal.id}`,
@@ -502,6 +572,7 @@ function DashboardPage() {
     activeAutoTradeToken,
     autoTradeEnabled,
     autoTradeSettings.walletPercent,
+    autoTradeSettings.takeProfitPercent,
     lastSignalAt,
     newsItems,
     params,
@@ -600,6 +671,10 @@ function DashboardPage() {
       const percent = Number.isFinite(nextPercent)
         ? Math.min(100, Math.max(1, Math.round(nextPercent)))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+      const nextTakeProfit = Number(parsed.takeProfitPercent);
+      const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
+        ? nextTakeProfit
+        : DEFAULT_AUTO_TRADE_SETTINGS.takeProfitPercent;
       const parsedSlots = Array.isArray(parsed.slots)
         ? parsed.slots
           .map((slot) => {
@@ -629,6 +704,7 @@ function DashboardPage() {
 
       setAutoTradeSettings({
         walletPercent: percent,
+        takeProfitPercent,
         slots: normalizedSlots,
         activeSlotId,
       });
@@ -660,8 +736,14 @@ function DashboardPage() {
       setAutoTradeStatus("Auto-trade is off");
       return;
     }
+    if (pendingTakeProfit) {
+      setAutoTradeStatus(
+        `TP armed for ${pendingTakeProfit.tokenSymbol}: waiting for ${formatUsd(pendingTakeProfit.targetPrice)} to sell ${pendingTakeProfit.amount.toFixed(6)}`
+      );
+      return;
+    }
     setAutoTradeStatus(`Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation)`);
-  }, [activeAutoTradeToken, autoTradeSettings.walletPercent]);
+  }, [activeAutoTradeToken, autoTradeSettings.walletPercent, pendingTakeProfit]);
 
   async function persistTradeRecord(trade: StoredTradeRecord) {
     const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
@@ -685,6 +767,55 @@ function DashboardPage() {
       body: JSON.stringify({ trade }),
     }).catch(() => undefined);
   }
+
+  useEffect(() => {
+    if (!pendingTakeProfit || !wallet.publicKey || !autoTradeEnabled) return;
+    if (autoTradeBusyRef.current) return;
+
+    const market = trackedMarkets.find((item) => item.pair === pendingTakeProfit.symbol);
+    if (!market) return;
+    const latestPrice = priceHistory[market.id]?.[priceHistory[market.id].length - 1]?.v ?? 0;
+    if (!Number.isFinite(latestPrice) || latestPrice <= 0) return;
+    if (latestPrice < pendingTakeProfit.targetPrice) return;
+
+    const now = Date.now();
+    if (now - lastTpAttemptAtRef.current < 15000) return;
+    lastTpAttemptAtRef.current = now;
+    autoTradeBusyRef.current = true;
+
+    setAutoTradeStatus(
+      `TP hit for ${pendingTakeProfit.tokenSymbol}: selling ${pendingTakeProfit.amount.toFixed(6)} at ${formatUsd(latestPrice)}`
+    );
+
+    wallet.executeSwap({
+      inputMint: pendingTakeProfit.tokenMint,
+      outputMint: USDC_MINT,
+      uiAmount: pendingTakeProfit.amount,
+    }).then((result) => {
+      const tpTradeRecord: StoredTradeRecord = {
+        id: `tp-${pendingTakeProfit.id}-${Date.now()}`,
+        txid: result.txid,
+        timestamp: Date.now(),
+        walletAddress: wallet.publicKey?.toBase58() ?? "paper-auto",
+        source: "auto",
+        signalId: pendingTakeProfit.signalId,
+        inputMint: result.inputMint,
+        outputMint: result.outputMint,
+        inputAmount: result.inputAmount,
+        outputAmount: result.outputAmount,
+        signalSummary: `TP sell ${pendingTakeProfit.tokenSymbol} at ${formatUsd(latestPrice)} (target ${formatUsd(pendingTakeProfit.targetPrice)})`,
+      };
+      persistTradeRecord(tpTradeRecord).catch(() => undefined);
+      setPendingTakeProfit(null);
+      pendingTakeProfitRef.current = null;
+      setAutoTradeStatus(`TP executed for ${pendingTakeProfit.symbol} at ${formatUsd(latestPrice)}`);
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "swap failed";
+      setAutoTradeStatus(`TP execution failed for ${pendingTakeProfit.symbol}: ${message}`);
+    }).finally(() => {
+      autoTradeBusyRef.current = false;
+    });
+  }, [autoTradeEnabled, pendingTakeProfit, priceHistory, trackedMarkets, wallet.executeSwap, wallet.publicKey, walletAddress]);
 
   useEffect(() => {
     const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
@@ -1304,6 +1435,8 @@ function DashboardPage() {
   async function clearRecentTrades() {
     const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
     setRecentTrades([]);
+    setPendingTakeProfit(null);
+    pendingTakeProfitRef.current = null;
     setPnlStatus("No recent trades. PnL reset.");
     if (wallet.connected && wallet.publicKey && remoteAuthToken) {
       await fetch("/api/trades", {
@@ -1654,11 +1787,31 @@ function DashboardPage() {
                 }}
               />
             </label>
+            <label>
+              Take Profit % (bull buys only)
+              <input
+                type="number"
+                value={autoTradeSettings.takeProfitPercent}
+                min={0}
+                step={0.1}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  const takeProfitPercent = Number.isFinite(value) && value >= 0 ? value : 0;
+                  const next = { ...autoTradeSettings, takeProfitPercent };
+                  persistAutoTradeSettings(next);
+                }}
+              />
+            </label>
           </div>
           <div className="auto-trade-selector-wrap">
             <div className="auto-trade-selector-header">
               <strong>Auto-Trade Selector</strong>
               <span className="subtext">Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.</span>
+              {pendingTakeProfit ? (
+                <span className="subtext">
+                  TP lock active: sell {pendingTakeProfit.amount.toFixed(6)} {pendingTakeProfit.tokenSymbol} at {formatUsd(pendingTakeProfit.targetPrice)}
+                </span>
+              ) : null}
             </div>
             <div className="auto-trade-selector-grid">
               {autoTradeSettings.slots.map((slot) => (
