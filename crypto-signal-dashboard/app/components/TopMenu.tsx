@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const MENU_ITEMS = [
   { href: "/", label: "Home" },
@@ -14,6 +14,7 @@ export function TopMenu() {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const activeLabel = useMemo(
     () => MENU_ITEMS.find((item) => item.href === pathname)?.label ?? "Menu",
     [pathname]
@@ -23,19 +24,29 @@ export function TopMenu() {
     router.push(href);
   };
 
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current) return;
+      if (containerRef.current.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, []);
+
   return (
-    <div className="top-menu">
+    <div ref={containerRef} className="top-menu">
       <button type="button" className="top-menu-button" onClick={() => setOpen((prev) => !prev)}>
         Menu · {activeLabel}
       </button>
       {open ? (
-        <div className="top-menu-dropdown" onMouseLeave={() => setOpen(false)}>
+        <div className="top-menu-dropdown">
           {MENU_ITEMS.map((item) => (
             <button
               type="button"
               key={item.href}
               className={`top-menu-link ${pathname === item.href ? "active" : ""}`}
-              onClick={() => navigateTo(item.href)}
+              onPointerDown={() => navigateTo(item.href)}
             >
               {item.label}
             </button>
