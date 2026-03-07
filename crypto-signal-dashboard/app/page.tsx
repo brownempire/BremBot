@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 const BOT_ITEMS = [
@@ -21,8 +22,23 @@ const BOT_ITEMS = [
 export default function HomePage() {
   return (
     <main className="bot-home">
+      <Image
+        className="bot-home-top-logo"
+        src="/header-photo.png"
+        alt="BremLogic"
+        width={1038}
+        height={338}
+        priority
+      />
       <section className="bot-home-center panel">
-        <h1 className="title">BremLogic</h1>
+        <Image
+          className="bot-home-favicon"
+          src="/favicon.ico"
+          alt="BremLogic favicon"
+          width={72}
+          height={72}
+          priority
+        />
         <p className="subtext">Choose a bot to continue.</p>
         <div className="bot-home-grid">
           {BOT_ITEMS.map((item) => (
