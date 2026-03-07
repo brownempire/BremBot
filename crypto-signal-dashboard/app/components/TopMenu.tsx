@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const MENU_ITEMS = [
@@ -12,7 +12,6 @@ const MENU_ITEMS = [
 
 export function TopMenu() {
   const pathname = usePathname();
-  const router = useRouter();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeLabel = useMemo(
@@ -21,7 +20,9 @@ export function TopMenu() {
   );
   const navigateTo = (href: string) => {
     setOpen(false);
-    router.push(href);
+    if (typeof window !== "undefined") {
+      window.location.assign(href);
+    }
   };
 
   useEffect(() => {
