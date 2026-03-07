@@ -3,9 +3,9 @@ export default function Page() {
     <main>
       <section className="hero">
         <p className="eyebrow">BremLogic</p>
-        <h1>AI-Powered Crypto Signal Intelligence</h1>
+        <h1>AI-Powered Crypto Trading Dashboard</h1>
         <p className="lead">
-          Track market momentum, monitor live signals, and execute strategy from the app dashboard.
+          Track market momentum, monitor live signals, and execute strategy like a true professional from the app dashboard.
         </p>
         <a className="cta" href="https://app.bremlogic.com">
           Open App
