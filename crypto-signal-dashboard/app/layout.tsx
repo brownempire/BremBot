@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import { TopMenu } from "@/app/components/TopMenu";
 
 export const metadata: Metadata = {
   title: "BremLogic — Crypto Signals",
@@ -30,6 +31,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <TopMenu />
         {children}
       </body>
     </html>

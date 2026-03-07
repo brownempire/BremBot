@@ -39,6 +39,47 @@ html {
   background-color: #000;
 }
 
+.top-menu {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+}
+
+.top-menu-button {
+  min-width: 152px;
+}
+
+.top-menu-dropdown {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(13, 17, 25, 0.96);
+  box-shadow: 0 16px 34px var(--shadow);
+  display: grid;
+  overflow: hidden;
+}
+
+.top-menu-link {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--text);
+  border-bottom: 1px solid rgba(126, 148, 189, 0.1);
+}
+
+.top-menu-link:last-child {
+  border-bottom: 0;
+}
+
+.top-menu-link:hover {
+  background: rgba(101, 217, 255, 0.1);
+}
+
+.top-menu-link.active {
+  background: rgba(101, 217, 255, 0.16);
+  color: var(--accent);
+}
+
 a {
   color: inherit;
   text-decoration: none;
@@ -48,6 +89,59 @@ main {
   padding: 32px 32px 80px;
   max-width: 1200px;
   margin: 0 auto;
+}
+
+.bot-home {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+
+.bot-home-center {
+  width: min(920px, 100%);
+  text-align: center;
+}
+
+.bot-home-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.bot-home-card {
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(13, 17, 25, 0.64);
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.bot-home-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(101, 217, 255, 0.4);
+}
+
+.bot-home-card h3 {
+  margin: 0 0 8px;
+}
+
+.bot-home-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.bot-placeholder {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+
+.bot-placeholder-panel {
+  width: min(560px, 100%);
+  text-align: center;
 }
 
 header {
