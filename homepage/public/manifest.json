@@ -1,0 +1,20 @@
+{
+  "name": "Network Install Assistant",
+  "short_name": "InstallAssist",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040805",
+  "theme_color": "#0aff7f",
+  "icons": [
+    {
+      "src": "/header-photo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/header-photo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
