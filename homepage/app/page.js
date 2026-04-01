@@ -30,16 +30,23 @@ function generateSignals() {
   }).sort((a, b) => b.signal - a.signal);
 }
 
+const initialSignals = [
+  { id: "seed-1", ssid: "Client-Network-12", band: "5 GHz", channel: 149, signal: -46, security: "WPA2/WPA3" },
+  { id: "seed-2", ssid: "Office-Setup-21", band: "5 GHz", channel: 44, signal: -59, security: "WPA2/WPA3" },
+  { id: "seed-3", ssid: "Guest-Net-17", band: "2.4 GHz", channel: 6, signal: -67, security: "Open" },
+];
+
 export default function Page() {
-  const [signals, setSignals] = useState([]);
-  const [lastScan, setLastScan] = useState(null);
+  const [signals, setSignals] = useState(initialSignals);
+  const [lastScan, setLastScan] = useState("Ready");
+  const [remoteAuth, setRemoteAuth] = useState("connected");
 
   const strongestSignal = useMemo(() => {
     if (!signals.length) {
       return null;
     }
 
-    return signals[0];
+    return [...signals].sort((a, b) => b.signal - a.signal)[0];
   }, [signals]);
 
   const runScan = () => {
@@ -47,14 +54,26 @@ export default function Page() {
     setLastScan(new Date().toLocaleTimeString());
   };
 
+  const checkConnection = () => {
+    setRemoteAuth("connected");
+  };
+
   return (
     <main>
       <section className="panel">
         <h1>Network Install Assistant</h1>
         <p className="lead">
-          Fast, installer-friendly Wi‑Fi survey tool for iPhone and desktop. This app
-          helps evaluate signal quality and setup readiness.
+          Fast, installer-friendly Wi‑Fi survey tool for iPhone and desktop. Use this
+          to document signal health and verify remote-auth connection status before
+          installation work starts.
         </p>
+
+        <div className="status-row">
+          <span className="chip">Remote Auth: {remoteAuth}</span>
+          <button type="button" className="subtle" onClick={checkConnection}>
+            Re-check Connection
+          </button>
+        </div>
 
         <div className="notice">
           Browsers cannot and should not expose Wi‑Fi passwords. Credentials must be

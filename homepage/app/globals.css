@@ -41,6 +41,30 @@ h1 {
   color: #9ce0b8;
 }
 
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.chip {
+  border: 1px solid rgba(110, 255, 171, 0.38);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.84rem;
+  background: rgba(8, 32, 17, 0.8);
+}
+
+.subtle {
+  border: 1px solid rgba(110, 255, 171, 0.4);
+  background: rgba(10, 25, 14, 0.9);
+  color: #bcffd7;
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
 .notice {
   border: 1px solid rgba(116, 255, 176, 0.4);
   background: rgba(12, 38, 20, 0.75);
