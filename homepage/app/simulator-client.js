@@ -648,7 +648,8 @@ export default function SimulatorClient() {
         </div>
 
         <div className="simulator-topbar">
-          <div>
+          <div className="simulator-hero-copy">
+            <img className="hero-logo simulator-hero-logo" src="/header-photo.png" alt="BremLogic" />
             <h1>BremLogic Jupiter Perps Simulator</h1>
             <p className="simulator-sub">
               Test leveraged perps compounding with wallet growth, leverage, take profit, stop
