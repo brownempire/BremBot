@@ -8,6 +8,7 @@ const MENU_ITEMS = [
   { href: "/signals-bot", label: "Signals Bot" },
   { href: "/memecoin-bot", label: "Memecoin Bot" },
   { href: "/ai-trading-bot", label: "AI Trading Bot" },
+  { href: "https://www.bremlogic.com/simulator", label: "Simulator" },
 ];
 
 export function TopMenu() {

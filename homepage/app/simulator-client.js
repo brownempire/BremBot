@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 
+const SIMULATOR_MENU_ITEMS = [
+  { href: "https://app.bremlogic.com/signals-bot", label: "Signals Bot" },
+];
+
 const DEFAULT_FORM = {
   startingBalance: 15.55,
   leverage: 50,
@@ -248,6 +252,7 @@ function drawPath(ctx, data, dims, maxBal, maxTrade, strokeStyle, lineWidth, alp
 export default function SimulatorClient() {
   const [form, setForm] = useState(DEFAULT_FORM);
   const [monteCarloMode, setMonteCarloMode] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [metrics, setMetrics] = useState(DEFAULT_METRICS);
   const [rows, setRows] = useState([]);
   const [logTitle, setLogTitle] = useState("Trade Log");
@@ -262,6 +267,7 @@ export default function SimulatorClient() {
   const canvasRef = useRef(null);
   const chartWrapRef = useRef(null);
   const chartStateRef = useRef(null);
+  const menuRef = useRef(null);
 
   const currentModeLabel = monteCarloMode ? "Monte Carlo Mode" : "Simple Mode";
   const modeBadge = monteCarloMode
@@ -506,6 +512,13 @@ export default function SimulatorClient() {
     showTooltip(nearest.run, nearest.point, point.pageX, point.pageY);
   }
 
+  function navigateTo(href) {
+    setMenuOpen(false);
+    if (typeof window !== "undefined") {
+      window.location.assign(href);
+    }
+  }
+
   useEffect(() => {
     calculate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -514,6 +527,23 @@ export default function SimulatorClient() {
   useEffect(() => {
     calculate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onPointerDown = (event) => {
+      if (!menuRef.current) {
+        return;
+      }
+
+      if (menuRef.current.contains(event.target)) {
+        return;
+      }
+
+      setMenuOpen(false);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
   }, []);
 
   useEffect(() => {
@@ -588,9 +618,29 @@ export default function SimulatorClient() {
   return (
     <main className="simulator-page">
       <div className="simulator-shell">
-        <a className="home-link" href="/">
-          ← Back to BremLogic
-        </a>
+        <div ref={menuRef} className="simulator-menu">
+          <button
+            type="button"
+            className="simulator-menu-button"
+            onClick={() => setMenuOpen((current) => !current)}
+          >
+            Menu · Simulator
+          </button>
+          {menuOpen ? (
+            <div className="simulator-menu-dropdown">
+              {SIMULATOR_MENU_ITEMS.map((item) => (
+                <button
+                  type="button"
+                  key={item.href}
+                  className="simulator-menu-link"
+                  onPointerDown={() => navigateTo(item.href)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
         <div className="simulator-topbar">
           <div>
@@ -706,7 +756,7 @@ export default function SimulatorClient() {
             <div className="note">{modeNote}</div>
           </div>
 
-          <div>
+          <div className="simulator-results-column">
             <div className="simulator-card">
               <h2>Results</h2>
 
