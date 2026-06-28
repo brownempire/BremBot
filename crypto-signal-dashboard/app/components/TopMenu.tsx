@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const MENU_ITEMS = [
   { href: "/", label: "Home" },
@@ -15,10 +15,6 @@ export function TopMenu() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const activeLabel = useMemo(
-    () => MENU_ITEMS.find((item) => item.href === pathname)?.label ?? "Menu",
-    [pathname]
-  );
   const navigateTo = (href: string) => {
     setOpen(false);
     if (typeof window !== "undefined") {
@@ -38,8 +34,17 @@ export function TopMenu() {
 
   return (
     <div ref={containerRef} className="top-menu">
-      <button type="button" className="top-menu-button" onClick={() => setOpen((prev) => !prev)}>
-        Menu · {activeLabel}
+      <button
+        type="button"
+        className={`top-menu-button ${open ? "open" : ""}`}
+        aria-expanded={open}
+        aria-label={open ? "Close menu" : "Open menu"}
+        onClick={() => setOpen((prev) => !prev)}
+      >
+        <span className="top-menu-icon" aria-hidden="true">
+          <span className="top-menu-line top-menu-line-top" />
+          <span className="top-menu-line top-menu-line-bottom" />
+        </span>
       </button>
       {open ? (
         <div className="top-menu-dropdown">

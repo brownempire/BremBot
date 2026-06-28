@@ -621,10 +621,15 @@ export default function SimulatorClient() {
         <div ref={menuRef} className="simulator-menu">
           <button
             type="button"
-            className="simulator-menu-button"
+            className={`simulator-menu-button ${menuOpen ? "open" : ""}`}
+            aria-expanded={menuOpen}
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
             onClick={() => setMenuOpen((current) => !current)}
           >
-            Menu · Simulator
+            <span className="simulator-menu-icon" aria-hidden="true">
+              <span className="simulator-menu-line simulator-menu-line-top" />
+              <span className="simulator-menu-line simulator-menu-line-bottom" />
+            </span>
           </button>
           {menuOpen ? (
             <div className="simulator-menu-dropdown">
