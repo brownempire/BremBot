@@ -33,6 +33,9 @@ const DEFAULT_METRICS = [
   { label: "Target Hit?", value: "No" },
 ];
 
+const BASE_CHART_WIDTH = 900;
+const CHART_HEIGHT = 420;
+
 function money(n) {
   return `$${Number(n).toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -262,6 +265,7 @@ export default function SimulatorClient() {
   );
   const [interactiveRuns, setInteractiveRuns] = useState([]);
   const [highlightedRunId, setHighlightedRunId] = useState(null);
+  const [chartZoom, setChartZoom] = useState(1);
   const [tooltip, setTooltip] = useState({ visible: false, html: "", left: 8, top: 8 });
 
   const canvasRef = useRef(null);
@@ -338,6 +342,7 @@ export default function SimulatorClient() {
     setRows(result.rows);
     setInteractiveRuns([]);
     setHighlightedRunId(null);
+    setChartZoom(1);
     setTooltip({ visible: false, html: "", left: 8, top: 8 });
 
     chartStateRef.current = {
@@ -405,11 +410,12 @@ export default function SimulatorClient() {
     setLogTitle("Sample Monte Carlo Trade Log");
     setTableNote("Monte Carlo table shows one sample random run. The graph shows multiple possible paths.");
     setChartNote(
-      "Monte Carlo graph shows sample random equity paths. Hover on web or tap on mobile to inspect a path. Green paths reached the target; blue paths did not."
+      "Monte Carlo graph shows sample random equity paths. Green paths reached the target; red paths did not. Hover on web or tap on mobile to inspect a path, and use zoom to spread dense runs out."
     );
     setRows(sampleRunForTable ? sampleRunForTable.rows : []);
     setInteractiveRuns(samplePaths);
     setHighlightedRunId(null);
+    setChartZoom(1);
     setTooltip({ visible: false, html: "", left: 8, top: 8 });
 
     chartStateRef.current = {
@@ -572,7 +578,7 @@ export default function SimulatorClient() {
 
     const enrichedRuns = state.data.map((pathObj) => {
       const hit = pathObj.hitTarget;
-      const color = hit ? "#38d996" : "#4f7cff";
+      const color = hit ? "#38d996" : "#ff6b6b";
 
       const screenPoints = pathObj.balances.map((point) => ({
         trade: point.trade,
@@ -592,7 +598,16 @@ export default function SimulatorClient() {
       const isHighlighted = run.run === highlightedRunId;
 
       if (!isHighlighted) {
-        drawPath(ctx, run.balances, dims, maxBal, maxTrade, run.color, run.hitTarget ? 2.2 : 1.4, run.hitTarget ? 0.55 : 0.2);
+        drawPath(
+          ctx,
+          run.balances,
+          dims,
+          maxBal,
+          maxTrade,
+          run.color,
+          run.hitTarget ? 2.2 : 1.8,
+          run.hitTarget ? 0.55 : 0.42
+        );
       }
     });
 
@@ -613,7 +628,9 @@ export default function SimulatorClient() {
     }
 
     setInteractiveRuns(enrichedRuns);
-  }, [highlightedRunId, rows]);
+  }, [chartZoom, highlightedRunId, rows]);
+
+  const chartWidth = Math.round(BASE_CHART_WIDTH * chartZoom);
 
   return (
     <main className="simulator-page">
@@ -775,9 +792,43 @@ export default function SimulatorClient() {
                 ))}
               </div>
 
+              {monteCarloMode ? (
+                <div className="chart-toolbar">
+                  <div className="chart-toolbar-group">
+                    <span className="chart-toolbar-label">Graph zoom</span>
+                    <button
+                      className="chart-zoom-button"
+                      disabled={chartZoom <= 1}
+                      onClick={() => setChartZoom((current) => Math.max(1, Number((current - 0.25).toFixed(2))))}
+                      type="button"
+                    >
+                      -
+                    </button>
+                    <span className="chart-zoom-value">{Math.round(chartZoom * 100)}%</span>
+                    <button
+                      className="chart-zoom-button"
+                      disabled={chartZoom >= 3}
+                      onClick={() => setChartZoom((current) => Math.min(3, Number((current + 0.25).toFixed(2))))}
+                      type="button"
+                    >
+                      +
+                    </button>
+                    <button
+                      className="chart-zoom-reset"
+                      disabled={chartZoom === 1}
+                      onClick={() => setChartZoom(1)}
+                      type="button"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="chart-wrap" ref={chartWrapRef}>
+                <div className="chart-scroll">
                 <canvas
-                  height="420"
+                  height={CHART_HEIGHT}
                   onClick={(event) => {
                     if (monteCarloMode) {
                       handleChartPointer(event, true);
@@ -801,8 +852,10 @@ export default function SimulatorClient() {
                     }
                   }}
                   ref={canvasRef}
-                  width="900"
+                  style={{ width: `${chartWidth}px` }}
+                  width={chartWidth}
                 />
+                </div>
                 <div
                   className="chart-tooltip"
                   dangerouslySetInnerHTML={{ __html: tooltip.html }}

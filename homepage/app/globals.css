@@ -402,8 +402,39 @@ button:hover {
   line-height: 1.2;
 }
 
+.chart-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.chart-toolbar-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-solid);
+  border-radius: 12px;
+  background: rgba(16, 19, 26, 0.8);
+}
+
+.chart-toolbar-label,
+.chart-zoom-value {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chart-zoom-button,
+.chart-zoom-reset {
+  width: auto;
+  min-width: 38px;
+  margin-top: 0;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
 canvas {
-  width: 100%;
   height: clamp(240px, 40vw, 280px);
   background: var(--inner);
   border: 1px solid var(--border-solid);
@@ -415,6 +446,12 @@ canvas {
 
 .chart-wrap {
   position: relative;
+}
+
+.chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
 }
 
 .chart-tooltip {
