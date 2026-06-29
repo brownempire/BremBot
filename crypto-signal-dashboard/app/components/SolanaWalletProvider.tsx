@@ -91,6 +91,24 @@ function parseSecretArray(raw: string): Uint8Array | null {
 function parseImportedSecret(rawInput: string): Uint8Array | null {
   const trimmed = rawInput.trim();
   if (!trimmed) return null;
+
+  const secretArray = parseSecretArray(trimmed);
+  if (secretArray) return secretArray;
+
+  if (trimmed.includes(",")) {
+    try {
+      const bytes = Uint8Array.from(
+        trimmed
+          .split(",")
+          .map((value) => Number(value.trim()))
+          .filter((value) => Number.isFinite(value))
+      );
+      if (bytes.length === 64) return bytes;
+    } catch {
+      // fall through to base58 parsing
+    }
+  }
+
   try {
     const decoded = bs58.decode(trimmed);
     if (decoded.length === 64) return decoded;
@@ -359,7 +377,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
     },
     exportWallet: () => {
       if (!keypair) return null;
-      return toStoredSecret(keypair.secretKey);
+      return bs58.encode(keypair.secretKey);
     },
     changePassword: async (currentPassword: string, nextPassword: string) => {
       const payload = loadStoredWalletPayload();
