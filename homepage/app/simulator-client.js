@@ -33,7 +33,6 @@ const DEFAULT_METRICS = [
   { label: "Target Hit?", value: "No" },
 ];
 
-const BASE_CHART_WIDTH = 900;
 const CHART_HEIGHT = 420;
 
 function money(n) {
@@ -410,7 +409,7 @@ export default function SimulatorClient() {
     setLogTitle("Sample Monte Carlo Trade Log");
     setTableNote("Monte Carlo table shows one sample random run. The graph shows multiple possible paths.");
     setChartNote(
-      "Monte Carlo graph shows sample random equity paths. Green paths reached the target; red paths did not. Hover on web or tap on mobile to inspect a path, and use zoom to spread dense runs out."
+      "Monte Carlo graph shows sample random equity paths. Green paths reached the target; red paths did not. Hover on web or tap on mobile to inspect a path, and use zoom to enlarge the chart while keeping it fitted to the screen."
     );
     setRows(sampleRunForTable ? sampleRunForTable.rows : []);
     setInteractiveRuns(samplePaths);
@@ -630,7 +629,8 @@ export default function SimulatorClient() {
     setInteractiveRuns(enrichedRuns);
   }, [chartZoom, highlightedRunId, rows]);
 
-  const chartWidth = Math.round(BASE_CHART_WIDTH * chartZoom);
+  const chartDisplayHeight = Math.round(280 + (chartZoom - 1) * 120);
+  const chartPixelHeight = Math.round(CHART_HEIGHT + (chartZoom - 1) * 160);
 
   return (
     <main className="simulator-page">
@@ -828,7 +828,7 @@ export default function SimulatorClient() {
               <div className="chart-wrap" ref={chartWrapRef}>
                 <div className="chart-scroll">
                 <canvas
-                  height={CHART_HEIGHT}
+                  height={chartPixelHeight}
                   onClick={(event) => {
                     if (monteCarloMode) {
                       handleChartPointer(event, true);
@@ -852,8 +852,8 @@ export default function SimulatorClient() {
                     }
                   }}
                   ref={canvasRef}
-                  style={{ width: `${chartWidth}px` }}
-                  width={chartWidth}
+                  style={{ width: "100%", height: `min(${chartDisplayHeight}px, 62vh)` }}
+                  width={900}
                 />
                 </div>
                 <div

@@ -435,6 +435,7 @@ button:hover {
 }
 
 canvas {
+  width: 100%;
   height: clamp(240px, 40vw, 280px);
   background: var(--inner);
   border: 1px solid var(--border-solid);
@@ -449,9 +450,7 @@ canvas {
 }
 
 .chart-scroll {
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding-bottom: 4px;
+  width: 100%;
 }
 
 .chart-tooltip {
