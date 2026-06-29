@@ -22,7 +22,22 @@ type JupiterPerpsPositionsState = {
 };
 
 function getFriendlyErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
+  if (error instanceof Error && error.message) {
+    if (/Discriminant\s+\d+\s+out of range/i.test(error.message) || /out of range for \d+ variants/i.test(error.message)) {
+      return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+    }
+
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    if (/Discriminant\s+\d+\s+out of range/i.test(error) || /out of range for \d+ variants/i.test(error)) {
+      return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+    }
+
+    return error;
+  }
+
   return "Unable to load Jupiter Perps positions right now.";
 }
 
