@@ -83,9 +83,18 @@ type PortfolioLeveragePosition = {
 };
 
 const JUPITER_PORTFOLIO_BASE = "https://api.jup.ag/portfolio/v1";
+const JUPITER_EXCHANGE_PLATFORM = "jupiter-exchange";
 
 function toFiniteNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function getFriendlyPortfolioErrorMessage(error: string) {
+  if (/Discriminant\s+\d+\s+out of range/i.test(error) || /out of range for \d+ variants/i.test(error)) {
+    return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+  }
+
+  return error;
 }
 
 function normalizeMarketSymbol(position: PortfolioLeveragePosition, tokenSymbol?: string) {
@@ -135,34 +144,66 @@ function mapLeveragePosition(
 }
 
 export async function fetchJupiterPerpsPositions(walletAddress: string): Promise<JupiterPerpsPosition[]> {
-  const response = await fetch(
-    `${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}?platforms=jupiter-exchange`,
-    { headers: { Accept: "application/json" } }
+  async function fetchPortfolio(url: string) {
+    const response = await fetch(url, { headers: { Accept: "application/json" } });
+
+    if (!response.ok) {
+      throw new Error(`Jupiter Portfolio API returned ${response.status}`);
+    }
+
+    return (await response.json()) as PortfolioResponse;
+  }
+
+  function extractLeveragePositions(payload: PortfolioResponse) {
+    const responseDate = toFiniteNumber(payload.date);
+    return (payload.elements ?? [])
+      .filter((element) => element.type === "leverage" && element.platformId === JUPITER_EXCHANGE_PLATFORM)
+      .flatMap((element) => {
+        const isolatedPositions = (element.data?.isolated?.positions ?? []).map((position) =>
+          mapLeveragePosition(position, element.platformId ?? JUPITER_EXCHANGE_PLATFORM, responseDate, payload.tokenInfo)
+        );
+        const crossPositions = (element.data?.cross?.positions ?? []).map((position) =>
+          mapLeveragePosition(position, element.platformId ?? JUPITER_EXCHANGE_PLATFORM, responseDate, payload.tokenInfo)
+        );
+        return [...isolatedPositions, ...crossPositions];
+      });
+  }
+
+  function getFailedReport(payload: PortfolioResponse) {
+    return payload.fetcherReports?.find((report) => report.status === "failed" && report.id === JUPITER_EXCHANGE_PLATFORM)
+      ?? payload.fetcherReports?.find((report) => report.status === "failed");
+  }
+
+  const filteredPayload = await fetchPortfolio(
+    `${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}?platforms=${JUPITER_EXCHANGE_PLATFORM}`
   );
 
-  if (!response.ok) {
-    throw new Error(`Jupiter Portfolio API returned ${response.status}`);
+  const filteredPositions = extractLeveragePositions(filteredPayload);
+  if (filteredPositions.length > 0) {
+    return filteredPositions;
   }
 
-  const payload = (await response.json()) as PortfolioResponse;
-  const responseDate = toFiniteNumber(payload.date);
-
-  const failedReport = payload.fetcherReports?.find((report) => report.status === "failed");
-  if (failedReport?.error) {
-    throw new Error(failedReport.error);
+  const filteredFailure = getFailedReport(filteredPayload);
+  if (!filteredFailure?.error) {
+    return [];
   }
 
-  return (payload.elements ?? [])
-    .filter((element) => element.type === "leverage" && element.platformId === "jupiter-exchange")
-    .flatMap((element) => {
-      const isolatedPositions = (element.data?.isolated?.positions ?? []).map((position) =>
-        mapLeveragePosition(position, element.platformId ?? "jupiter-exchange", responseDate, payload.tokenInfo)
-      );
-      const crossPositions = (element.data?.cross?.positions ?? []).map((position) =>
-        mapLeveragePosition(position, element.platformId ?? "jupiter-exchange", responseDate, payload.tokenInfo)
-      );
-      return [...isolatedPositions, ...crossPositions];
-    });
+  try {
+    const fallbackPayload = await fetchPortfolio(`${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}`);
+    const fallbackPositions = extractLeveragePositions(fallbackPayload);
+    if (fallbackPositions.length > 0) {
+      return fallbackPositions;
+    }
+
+    const fallbackFailure = getFailedReport(fallbackPayload);
+    if (!fallbackFailure?.error) {
+      return [];
+    }
+  } catch {
+    // Keep the original fetcher error as the user-facing signal when the broader portfolio retry also fails.
+  }
+
+  throw new Error(getFriendlyPortfolioErrorMessage(filteredFailure.error));
 }
 
 export async function fetchJupiterPerpsPositionsFromRpc(_walletAddress: string, _rpcUrl: string) {

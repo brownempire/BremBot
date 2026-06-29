@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-type PhantomBrowserSdkModule = typeof import("@phantom/browser-sdk");
-type PhantomBrowserSdk = InstanceType<PhantomBrowserSdkModule["BrowserSDK"]>;
+import { useCallback, useEffect, useMemo, useState } from "react";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 type PhantomBrowserSdkWalletState = {
   canUseInAppApproval: boolean;
@@ -19,28 +18,148 @@ type PhantomBrowserSdkWalletState = {
   disconnect: () => Promise<void>;
 };
 
-type PhantomWalletAddress = {
-  address: string;
-  type?: string;
+type PendingPhantomConnect = {
+  createdAt: number;
+  dappEncryptionPublicKey: string;
+  dappEncryptionSecretKey: string;
+};
+
+type StoredPhantomSession = {
+  connectedAt: number;
+  session: string;
+  walletAddress: string;
+};
+
+type PhantomConnectPayload = {
+  public_key: string;
+  session: string;
 };
 
 const MOBILE_USER_AGENT_PATTERN = /Android|iPhone|iPad|iPod/i;
+const PHANTOM_CONNECT_URL = "https://phantom.app/ul/v1/connect";
+const PENDING_CONNECT_STORAGE_KEY = "bremlogic.phantom.pending-connect.v1";
+const SESSION_STORAGE_KEY = "bremlogic.phantom.session.v1";
+const CALLBACK_PARAM = "phantom_callback";
+const CONNECT_CALLBACK = "connect";
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   return "Unable to complete Phantom wallet connection right now.";
 }
 
-function getSolanaAddress(addresses: PhantomWalletAddress[]) {
-  const solanaAddress = addresses.find((item) => item.type === "solana");
-  return solanaAddress?.address ?? null;
+function serializeCurrentUrl() {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.href);
+  url.hash = "";
+  return url.toString();
 }
 
 function getRedirectUrl() {
   const configured = process.env.NEXT_PUBLIC_PHANTOM_REDIRECT_URL?.trim();
   if (configured) return configured;
-  if (typeof window !== "undefined") return window.location.href;
-  return "";
+
+  if (typeof window === "undefined") return "";
+
+  const url = new URL(window.location.href);
+  url.hash = "";
+  url.searchParams.set(CALLBACK_PARAM, CONNECT_CALLBACK);
+  return url.toString();
+}
+
+function buildConnectUrl(dappEncryptionPublicKey: string) {
+  const params = new URLSearchParams({
+    app_url: typeof window === "undefined" ? "https://www.bremlogic.com" : window.location.origin,
+    dapp_encryption_public_key: dappEncryptionPublicKey,
+    redirect_link: getRedirectUrl(),
+    cluster: "mainnet-beta",
+  });
+
+  return `${PHANTOM_CONNECT_URL}?${params.toString()}`;
+}
+
+function savePendingConnect(value: PendingPhantomConnect) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(PENDING_CONNECT_STORAGE_KEY, JSON.stringify(value));
+}
+
+function loadPendingConnect() {
+  if (typeof window === "undefined") return null;
+
+  const raw = window.localStorage.getItem(PENDING_CONNECT_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as PendingPhantomConnect;
+    if (!parsed?.dappEncryptionPublicKey || !parsed?.dappEncryptionSecretKey) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingConnect() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(PENDING_CONNECT_STORAGE_KEY);
+}
+
+function saveStoredSession(value: StoredPhantomSession) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(value));
+}
+
+function loadStoredSession() {
+  if (typeof window === "undefined") return null;
+
+  const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as StoredPhantomSession;
+    if (!parsed?.walletAddress || !parsed?.session) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearStoredSession() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+function decodeConnectPayload(
+  data: string,
+  nonce: string,
+  phantomEncryptionPublicKey: string,
+  dappEncryptionSecretKey: string
+) {
+  const sharedSecret = nacl.box.before(
+    bs58.decode(phantomEncryptionPublicKey),
+    bs58.decode(dappEncryptionSecretKey)
+  );
+
+  const decrypted = nacl.box.open.after(bs58.decode(data), bs58.decode(nonce), sharedSecret);
+
+  if (!decrypted) {
+    throw new Error("Phantom returned an unreadable connection payload.");
+  }
+
+  return JSON.parse(new TextDecoder().decode(decrypted)) as PhantomConnectPayload;
+}
+
+function stripPhantomParamsFromUrl() {
+  if (typeof window === "undefined") return;
+
+  const currentUrl = new URL(window.location.href);
+  currentUrl.searchParams.delete(CALLBACK_PARAM);
+  currentUrl.searchParams.delete("phantom_encryption_public_key");
+  currentUrl.searchParams.delete("nonce");
+  currentUrl.searchParams.delete("data");
+  currentUrl.searchParams.delete("errorCode");
+  currentUrl.searchParams.delete("errorMessage");
+  currentUrl.hash = "";
+
+  window.history.replaceState({}, "", currentUrl.toString());
 }
 
 export function usePhantomBrowserSdkWallet(): PhantomBrowserSdkWalletState {
@@ -52,44 +171,7 @@ export function usePhantomBrowserSdkWallet(): PhantomBrowserSdkWalletState {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const sdkRef = useRef<PhantomBrowserSdk | null>(null);
-  const appId = process.env.NEXT_PUBLIC_PHANTOM_APP_ID?.trim() ?? "";
-  const isConfigured = appId.length > 0;
-
-  const canUseInAppApproval = useMemo(() => isMobile && isConfigured, [isConfigured, isMobile]);
-
-  const syncWalletState = useCallback((sdk: PhantomBrowserSdk | null) => {
-    if (!sdk) {
-      setIsConnected(false);
-      setWalletAddress(null);
-      return;
-    }
-
-    const connected = sdk.isConnected();
-    const addresses = sdk.getAddresses() as PhantomWalletAddress[];
-    setIsConnected(connected);
-    setWalletAddress(connected ? getSolanaAddress(addresses) : null);
-  }, []);
-
-  const ensureSdk = useCallback(async () => {
-    if (!canUseInAppApproval) return null;
-    if (sdkRef.current) return sdkRef.current;
-
-    const sdkModule = (await import("@phantom/browser-sdk")) as PhantomBrowserSdkModule;
-    const sdk = new sdkModule.BrowserSDK({
-      providers: ["deeplink"],
-      addressTypes: [sdkModule.AddressType.solana],
-      appId,
-      embeddedWalletType: "user-wallet",
-      authOptions: {
-        // Returning to the current page keeps the user on BremLogic after approving in Phantom.
-        redirectUrl: getRedirectUrl(),
-      },
-    });
-
-    sdkRef.current = sdk;
-    return sdk;
-  }, [appId, canUseInAppApproval]);
+  const canUseInAppApproval = useMemo(() => isMobile, [isMobile]);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
@@ -97,91 +179,118 @@ export function usePhantomBrowserSdkWallet(): PhantomBrowserSdkWalletState {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    if (typeof window === "undefined") return;
 
-    async function bootstrap() {
-      if (!canUseInAppApproval) {
-        setIsReady(false);
-        syncWalletState(null);
-        return;
-      }
-
-      try {
-        const sdk = await ensureSdk();
-        await sdk?.autoConnect();
-        if (!cancelled) {
-          syncWalletState(sdk);
-          setError(null);
-        }
-      } catch (bootstrapError) {
-        if (!cancelled) {
-          setError(getFriendlyErrorMessage(bootstrapError));
-          syncWalletState(null);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsReady(true);
-        }
-      }
+    const storedSession = loadStoredSession();
+    if (storedSession) {
+      setIsConnected(true);
+      setWalletAddress(storedSession.walletAddress);
     }
 
-    void bootstrap();
+    const currentUrl = new URL(window.location.href);
+    if (currentUrl.searchParams.get(CALLBACK_PARAM) !== CONNECT_CALLBACK) {
+      setIsReady(true);
+      return;
+    }
 
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseInAppApproval, ensureSdk, syncWalletState]);
+    const pendingConnect = loadPendingConnect();
+
+    try {
+      if (!pendingConnect) {
+        throw new Error("Phantom returned to BremLogic, but the connection session could not be resumed.");
+      }
+
+      const errorCode = currentUrl.searchParams.get("errorCode");
+      const errorMessage = currentUrl.searchParams.get("errorMessage");
+
+      if (errorCode) {
+        throw new Error(errorMessage || "Wallet connection was not approved.");
+      }
+
+      const phantomEncryptionPublicKey = currentUrl.searchParams.get("phantom_encryption_public_key");
+      const nonce = currentUrl.searchParams.get("nonce");
+      const data = currentUrl.searchParams.get("data");
+
+      if (!phantomEncryptionPublicKey || !nonce || !data) {
+        throw new Error("Phantom returned an incomplete connection response.");
+      }
+
+      const payload = decodeConnectPayload(
+        data,
+        nonce,
+        phantomEncryptionPublicKey,
+        pendingConnect.dappEncryptionSecretKey
+      );
+
+      saveStoredSession({
+        connectedAt: Date.now(),
+        session: payload.session,
+        walletAddress: payload.public_key,
+      });
+
+      setIsConnected(true);
+      setWalletAddress(payload.public_key);
+      setError(null);
+    } catch (callbackError) {
+      clearStoredSession();
+      setIsConnected(false);
+      setWalletAddress(null);
+      setError(getFriendlyErrorMessage(callbackError));
+    } finally {
+      clearPendingConnect();
+      stripPhantomParamsFromUrl();
+      setIsReady(true);
+    }
+  }, []);
 
   const connect = useCallback(async () => {
     if (!canUseInAppApproval) {
-      setError("Phantom in-app mobile approval is not available on this device.");
+      setError("Phantom mobile approval is only available on supported mobile devices.");
       return;
     }
+
+    if (typeof window === "undefined") return;
 
     setIsConnecting(true);
     setError(null);
 
     try {
-      const sdk = await ensureSdk();
-      if (!sdk) {
-        throw new Error("Phantom mobile wallet is not ready yet.");
-      }
+      const dappKeyPair = nacl.box.keyPair();
+      savePendingConnect({
+        createdAt: Date.now(),
+        dappEncryptionPublicKey: bs58.encode(dappKeyPair.publicKey),
+        dappEncryptionSecretKey: bs58.encode(dappKeyPair.secretKey),
+      });
 
-      await sdk.connect({ provider: "deeplink" });
-      syncWalletState(sdk);
+      window.location.assign(buildConnectUrl(bs58.encode(dappKeyPair.publicKey)));
     } catch (connectError) {
+      clearPendingConnect();
       setError(getFriendlyErrorMessage(connectError));
-      syncWalletState(sdkRef.current);
-      throw connectError;
-    } finally {
       setIsConnecting(false);
+      throw connectError;
     }
-  }, [canUseInAppApproval, ensureSdk, syncWalletState]);
+  }, [canUseInAppApproval]);
 
   const disconnect = useCallback(async () => {
-    if (!sdkRef.current) {
-      syncWalletState(null);
-      return;
-    }
-
     setIsDisconnecting(true);
-    setError(null);
-
     try {
-      await sdkRef.current.disconnect();
-      syncWalletState(sdkRef.current);
-    } catch (disconnectError) {
-      setError(getFriendlyErrorMessage(disconnectError));
-      throw disconnectError;
+      clearPendingConnect();
+      clearStoredSession();
+      setIsConnected(false);
+      setWalletAddress(null);
+      setError(null);
+      if (typeof window !== "undefined") {
+        window.history.replaceState({}, "", serializeCurrentUrl());
+      }
     } finally {
       setIsDisconnecting(false);
     }
-  }, [syncWalletState]);
+  }, []);
 
   return {
     canUseInAppApproval,
     isMobile,
-    isConfigured,
+    isConfigured: true,
     isReady,
     isConnecting,
     isDisconnecting,

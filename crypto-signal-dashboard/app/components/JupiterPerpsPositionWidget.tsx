@@ -326,7 +326,7 @@ function JupiterPerpsPositionWidgetBody() {
           </div>
           {phantomMobileWallet.isMobile ? (
             <div className="perps-wallet-note">
-              Phantom can return users to BremLogic after approval. Solflare may still open its wallet browser on mobile.
+              Phantom opens its app for approval, then returns users to BremLogic. Solflare may still open its wallet browser on mobile.
             </div>
           ) : null}
           <div className="perps-wallet-grid">
@@ -345,7 +345,7 @@ function JupiterPerpsPositionWidgetBody() {
                     disabled={phantomMobileWallet.isConnecting}
                   >
                     <span>Phantom</span>
-                    <span className="subtext">Approve in the Phantom app and return here</span>
+                    <span className="subtext">Approve in the Phantom app, then return here</span>
                   </button>
                 ) : null}
                 {visibleWallets.map((entry) => (
@@ -366,11 +366,6 @@ function JupiterPerpsPositionWidgetBody() {
               </>
             )}
           </div>
-          {phantomMobileWallet.isMobile && !phantomMobileWallet.isConfigured ? (
-            <div className="perps-wallet-note">
-              Add `NEXT_PUBLIC_PHANTOM_APP_ID` to enable Phantom’s in-app mobile approval flow.
-            </div>
-          ) : null}
         </div>
       ) : null}
 
@@ -430,7 +425,7 @@ function JupiterPerpsPositionWidgetBody() {
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: Jupiter Portfolio API leverage elements. Lower-level Jupiter Perps account parsing is intentionally left as a documented placeholder until the official Perps docs / IDL are fully confirmed.
+        Data source: Jupiter Portfolio API leverage elements. Jupiter&apos;s official Perps docs still mark the lower-level Perps API and account docs as work in progress, so RPC parsing remains intentionally unimplemented until Jupiter publishes a stable contract for it.
       </div>
     </div>
   );

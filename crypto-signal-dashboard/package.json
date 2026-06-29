@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@jup-ag/plugin": "^1.0.13",
-    "@phantom/browser-sdk": "^2.0.2",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-phantom": "^0.9.29",
     "@solana/wallet-adapter-react": "^0.15.39",
@@ -23,6 +22,7 @@
     "react": "18.2.0",
     "react-dom": "18.2.0",
     "redis": "^5.11.0",
+    "tweetnacl": "^1.0.3",
     "web-push": "3.6.7"
   },
   "devDependencies": {
