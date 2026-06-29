@@ -116,7 +116,10 @@ h2 {
 .simulator-page {
   min-height: 100vh;
   padding: 16px;
-  background: var(--bg-alt);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(109, 232, 255, 0.12), transparent 60%),
+    radial-gradient(900px 500px at 90% 10%, rgba(255, 164, 92, 0.14), transparent 55%),
+    linear-gradient(160deg, var(--bg), var(--bg-alt));
   color: #f2f2f2;
 }
 
