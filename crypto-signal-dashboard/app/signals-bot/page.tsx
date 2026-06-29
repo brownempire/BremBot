@@ -6,7 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { JupiterPluginPanel } from "@/app/components/JupiterPluginPanel";
+import { JupiterPerpsPositionWidget } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -240,7 +240,6 @@ function DashboardPage() {
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
-  const [showJupiterPlugin, setShowJupiterPlugin] = useState(true);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
   const [pnlMode, setPnlMode] = useState<PnlMode>("app");
   const [pnlTokenMint, setPnlTokenMint] = useState<string>(PNL_DEFAULT_MINT);
@@ -1344,7 +1343,6 @@ function DashboardPage() {
     try {
       await wallet.createWallet((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet created");
-      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet creation failed");
     }
@@ -1360,7 +1358,6 @@ function DashboardPage() {
     try {
       await wallet.importWallet(secretInput, (passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("In-app wallet imported");
-      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet import failed");
     }
@@ -1392,7 +1389,6 @@ function DashboardPage() {
     try {
       await wallet.login((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
       setPortfolioStatus("Wallet unlocked");
-      setShowJupiterPlugin(true);
     } catch (_error) {
       setPortfolioStatus("Wallet login failed");
     }
@@ -1623,11 +1619,6 @@ function DashboardPage() {
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
-          <div className="wallet-controls" style={{ marginTop: 8 }}>
-            <button className="secondary" onClick={() => setShowJupiterPlugin((prev) => !prev)}>
-              {showJupiterPlugin ? "Hide Jupiter Plugin" : "Show Jupiter Plugin"}
-            </button>
-          </div>
           <div className="subtext" style={{ marginTop: 8 }}>
             Wallet keys are stored in this browser until you disconnect (which removes them from this device).
           </div>
@@ -1637,16 +1628,9 @@ function DashboardPage() {
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
-          {showJupiterPlugin ? (
-            <div style={{ marginTop: 10 }}>
-              <JupiterPluginPanel
-                targetId="jupiter-plugin-container"
-                fixedMint={activeAutoTradeToken?.mint ?? SOL_MINT}
-                passthroughWalletContextState={wallet.passthroughWalletContextState}
-                onRequestConnectWallet={loginInAppWallet}
-              />
-            </div>
-          ) : null}
+          <div style={{ marginTop: 10 }}>
+            <JupiterPerpsPositionWidget />
+          </div>
           <div className="wallet-holdings">
             <div className="holding-row total-row">
               <span>Total Balance</span>
