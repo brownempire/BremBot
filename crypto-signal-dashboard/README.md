@@ -25,6 +25,7 @@ npm run dev
 - Trading remains Solana-native (wallet, balances, and swaps use Solana + Jupiter; BTC/ETH are handled as Solana wrapped assets through Jupiter routes).
 - Push notifications require VAPID keys and a secure origin (localhost is OK).
 - Wallet connect and trading are powered by Solana Wallet Adapter + Jupiter Plugin.
+- The read-only Jupiter Perps widget can use Phantom's mobile app approval flow when `NEXT_PUBLIC_PHANTOM_APP_ID` is configured from Phantom Portal.
 
 ### Generate VAPID keys
 ```
@@ -43,6 +44,8 @@ For local Jupiter plugin rendering, keep:
 For live feed setup:
 - set `CHAOS_EDGE_API_KEY` and three `CHAOS_EDGE_FEED_*` ids
 - set `NEXT_PUBLIC_SOLANA_RPC_URL` for wallet balance sync / Jupiter connection
+- optionally set `NEXT_PUBLIC_PHANTOM_APP_ID` to let mobile users approve Phantom connection in the app and return to BremLogic
+- optionally set `NEXT_PUBLIC_PHANTOM_REDIRECT_URL` if you want a fixed post-approval callback URL instead of the current page
 
 ## Roadmap
 - Integrate Chaos Edge REST/WebSocket feed

@@ -12,6 +12,7 @@ import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
 import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
+import { usePhantomBrowserSdkWallet } from "@/hooks/usePhantomBrowserSdkWallet";
 import { formatUsd } from "@/lib/utils";
 import { shortenWalletAddress, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
 
@@ -148,21 +149,25 @@ function LoadingState() {
 function JupiterPerpsPositionWidgetBody() {
   const {
     publicKey,
-    connected,
-    connecting,
-    disconnecting,
+    connected: adapterConnected,
+    connecting: adapterConnecting,
+    disconnecting: adapterDisconnecting,
     wallets,
     wallet,
     select,
     connect,
     disconnect,
   } = useWallet();
+  const phantomMobileWallet = usePhantomBrowserSdkWallet();
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [selectedWalletName, setSelectedWalletName] = useState<WalletName<string> | null>(null);
   const [walletFeedback, setWalletFeedback] = useState<string | null>(null);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
 
-  const walletAddress = publicKey?.toBase58() ?? null;
+  const isConnected = phantomMobileWallet.isConnected || adapterConnected;
+  const isConnecting = phantomMobileWallet.isConnecting || adapterConnecting;
+  const isDisconnecting = phantomMobileWallet.isDisconnecting || adapterDisconnecting;
+  const walletAddress = phantomMobileWallet.walletAddress ?? publicKey?.toBase58() ?? null;
   const { positions, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     walletAddress,
     showMockData,
@@ -172,12 +177,13 @@ function JupiterPerpsPositionWidgetBody() {
     const preferred = ["Phantom", "Solflare"];
     return [...wallets]
       .filter((entry) => entry.readyState !== "Unsupported")
+      .filter((entry) => !(phantomMobileWallet.canUseInAppApproval && entry.adapter.name === "Phantom"))
       .sort((left, right) => {
         const leftScore = preferred.indexOf(left.adapter.name);
         const rightScore = preferred.indexOf(right.adapter.name);
         return (leftScore === -1 ? 99 : leftScore) - (rightScore === -1 ? 99 : rightScore);
       });
-  }, [wallets]);
+  }, [phantomMobileWallet.canUseInAppApproval, wallets]);
 
   useEffect(() => {
     if (!selectedWalletName || wallet?.adapter.name !== selectedWalletName) return;
@@ -210,6 +216,11 @@ function JupiterPerpsPositionWidgetBody() {
     };
   }, [connect, selectedWalletName, wallet?.adapter.name]);
 
+  useEffect(() => {
+    if (!phantomMobileWallet.error) return;
+    setWalletFeedback(phantomMobileWallet.error);
+  }, [phantomMobileWallet.error]);
+
   async function handleWalletPick(name: WalletName<string>, readyState: WalletReadyState) {
     if (readyState === "NotDetected") {
       setWalletFeedback("Wallet extension not detected. Install Phantom or Solflare, then try again.");
@@ -221,9 +232,29 @@ function JupiterPerpsPositionWidgetBody() {
     select(name);
   }
 
+  async function handlePhantomMobileConnect() {
+    try {
+      setWalletFeedback(
+        phantomMobileWallet.isReady
+          ? "Opening Phantom for approval..."
+          : "Preparing Phantom mobile connection..."
+      );
+      await phantomMobileWallet.connect();
+      setWalletFeedback(null);
+      setWalletMenuOpen(false);
+    } catch (connectError) {
+      const message = connectError instanceof Error ? connectError.message : "Wallet connection was not completed.";
+      setWalletFeedback(message);
+    }
+  }
+
   async function handleDisconnect() {
     try {
-      await disconnect();
+      if (phantomMobileWallet.isConnected) {
+        await phantomMobileWallet.disconnect();
+      } else {
+        await disconnect();
+      }
       setWalletFeedback("Wallet disconnected.");
     } catch (disconnectError) {
       const message = disconnectError instanceof Error ? disconnectError.message : "Unable to disconnect the wallet.";
@@ -231,8 +262,8 @@ function JupiterPerpsPositionWidgetBody() {
     }
   }
 
-  const shouldShowDisconnectedState = !connected && !showMockData && positions.length === 0;
-  const hasNoPositions = connected && !isLoading && !error && positions.length === 0;
+  const shouldShowDisconnectedState = !isConnected && !showMockData && positions.length === 0;
+  const hasNoPositions = isConnected && !isLoading && !error && positions.length === 0;
 
   return (
     <div className="perps-widget-shell">
@@ -248,19 +279,19 @@ function JupiterPerpsPositionWidgetBody() {
           </div>
         </div>
         <div className="wallet-controls perps-widget-actions">
-          {connected ? (
+          {isConnected ? (
             <>
               <button type="button" className="secondary" onClick={() => void refetch()} disabled={isLoading}>
                 {isLoading ? "Refreshing..." : "Refresh"}
               </button>
-              <button type="button" onClick={() => void handleDisconnect()} disabled={disconnecting}>
-                {disconnecting ? "Disconnecting..." : "Disconnect"}
+              <button type="button" onClick={() => void handleDisconnect()} disabled={isDisconnecting}>
+                {isDisconnecting ? "Disconnecting..." : "Disconnect"}
               </button>
             </>
           ) : (
             <>
-              <button type="button" onClick={() => setWalletMenuOpen((open) => !open)} disabled={connecting}>
-                {connecting ? "Connecting..." : "Connect Wallet"}
+              <button type="button" onClick={() => setWalletMenuOpen((open) => !open)} disabled={isConnecting}>
+                {isConnecting ? "Connecting..." : "Connect Wallet"}
               </button>
               <button type="button" className="secondary" onClick={() => setShowMockData((value) => !value)}>
                 {showMockData ? "Hide Demo" : "Preview Demo"}
@@ -270,10 +301,13 @@ function JupiterPerpsPositionWidgetBody() {
         </div>
       </div>
 
-      {connected ? (
+      {isConnected ? (
         <div className="perps-wallet-status">
           <span>Connected wallet</span>
-          <strong>{walletAddress ? shortenWalletAddress(walletAddress) : "-"}</strong>
+          <strong>
+            {walletAddress ? shortenWalletAddress(walletAddress) : "-"}
+            {phantomMobileWallet.isConnected ? " via Phantom app" : ""}
+          </strong>
         </div>
       ) : (
         <div className="perps-wallet-status">
@@ -282,7 +316,7 @@ function JupiterPerpsPositionWidgetBody() {
         </div>
       )}
 
-      {walletMenuOpen && !connected ? (
+      {walletMenuOpen && !isConnected ? (
         <div className="perps-wallet-picker" role="dialog" aria-label="Select a Solana wallet">
           <div className="perps-wallet-picker-header">
             <strong>Choose wallet</strong>
@@ -290,26 +324,53 @@ function JupiterPerpsPositionWidgetBody() {
               Close
             </button>
           </div>
+          {phantomMobileWallet.isMobile ? (
+            <div className="perps-wallet-note">
+              Phantom can return users to BremLogic after approval. Solflare may still open its wallet browser on mobile.
+            </div>
+          ) : null}
           <div className="perps-wallet-grid">
-            {visibleWallets.length === 0 ? (
+            {visibleWallets.length === 0 && !phantomMobileWallet.canUseInAppApproval ? (
               <div className="perps-message-card">
                 <strong>No supported wallet found</strong>
                 <span className="subtext">Install Phantom or Solflare to connect a wallet in read-only mode.</span>
               </div>
             ) : (
-              visibleWallets.map((entry) => (
-                <button
-                  key={entry.adapter.name}
-                  type="button"
-                  className="perps-wallet-option"
-                  onClick={() => void handleWalletPick(entry.adapter.name, entry.readyState)}
-                >
-                  <span>{entry.adapter.name}</span>
-                  <span className="subtext">{getWalletReadinessLabel(entry.readyState)}</span>
-                </button>
-              ))
+              <>
+                {phantomMobileWallet.canUseInAppApproval ? (
+                  <button
+                    type="button"
+                    className="perps-wallet-option"
+                    onClick={() => void handlePhantomMobileConnect()}
+                    disabled={phantomMobileWallet.isConnecting}
+                  >
+                    <span>Phantom</span>
+                    <span className="subtext">Approve in the Phantom app and return here</span>
+                  </button>
+                ) : null}
+                {visibleWallets.map((entry) => (
+                  <button
+                    key={entry.adapter.name}
+                    type="button"
+                    className="perps-wallet-option"
+                    onClick={() => void handleWalletPick(entry.adapter.name, entry.readyState)}
+                  >
+                    <span>{entry.adapter.name}</span>
+                    <span className="subtext">
+                      {entry.adapter.name === "Solflare" && phantomMobileWallet.isMobile
+                        ? "May open the Solflare wallet browser on mobile"
+                        : getWalletReadinessLabel(entry.readyState)}
+                    </span>
+                  </button>
+                ))}
+              </>
             )}
           </div>
+          {phantomMobileWallet.isMobile && !phantomMobileWallet.isConfigured ? (
+            <div className="perps-wallet-note">
+              Add `NEXT_PUBLIC_PHANTOM_APP_ID` to enable Phantom’s in-app mobile approval flow.
+            </div>
+          ) : null}
         </div>
       ) : null}
 

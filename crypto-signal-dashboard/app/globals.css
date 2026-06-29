@@ -811,6 +811,16 @@ button:disabled {
   padding: 12px;
 }
 
+.perps-wallet-note {
+  border-radius: 10px;
+  border: 1px solid rgba(101, 217, 255, 0.14);
+  background: rgba(101, 217, 255, 0.05);
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .perps-wallet-picker-header {
   display: flex;
   justify-content: space-between;
@@ -1124,6 +1134,10 @@ button:disabled {
   .perps-metric-grid,
   .perps-skeleton-grid {
     grid-template-columns: 1fr;
+  }
+
+  .perps-wallet-note {
+    font-size: 11px;
   }
 
   .perps-position-price {

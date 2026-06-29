@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@jup-ag/plugin": "^1.0.13",
+    "@phantom/browser-sdk": "^2.0.2",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-phantom": "^0.9.29",
     "@solana/wallet-adapter-react": "^0.15.39",
