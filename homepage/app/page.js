@@ -1,3 +1,21 @@
+export const metadata = {
+  openGraph: {
+    title: "BremLogic",
+    description: "AI-powered crypto trading dashboard and simulator by BremLogic.",
+    url: "https://www.bremlogic.com",
+    siteName: "BremLogic",
+    images: ["/opengraph-image.png"],
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "BremLogic",
+    description: "AI-powered crypto trading dashboard and simulator by BremLogic.",
+    images: ["/twitter-image.png"],
+  },
+};
+
 export default function Page() {
   return (
     <main className="homepage">
