@@ -1,0 +1,22 @@
+{
+  "name": "BremLogic",
+  "short_name": "BremLogic",
+  "description": "AI-powered crypto trading dashboard and simulator by BremLogic.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0b1220",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

@@ -6,7 +6,12 @@ export const metadata: Metadata = {
   title: "BremLogic — Crypto Signals",
   description:
     "Welcome to BremLogic. Real-time trading signals with in-app wallet controls plus interactive charts from TradingView.",
+  metadataBase: new URL("https://app.bremlogic.com"),
+  applicationName: "BremLogic",
   manifest: "/manifest.json",
+  alternates: {
+    canonical: "https://app.bremlogic.com",
+  },
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
@@ -20,6 +25,30 @@ export const metadata: Metadata = {
     title: "BremLogic",
     capable: true,
     statusBarStyle: "black-translucent",
+  },
+  openGraph: {
+    title: "BremLogic — Crypto Signals",
+    description:
+      "Welcome to BremLogic. Real-time trading signals with in-app wallet controls plus interactive charts from TradingView.",
+    url: "https://app.bremlogic.com",
+    siteName: "BremLogic",
+    images: [
+      {
+        url: "/bremlogic-logo.png",
+        width: 1038,
+        height: 338,
+        alt: "BremLogic",
+      },
+    ],
+    locale: "en_US",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "BremLogic — Crypto Signals",
+    description:
+      "Welcome to BremLogic. Real-time trading signals with in-app wallet controls plus interactive charts from TradingView.",
+    images: ["/bremlogic-logo.png"],
   },
 };
 
