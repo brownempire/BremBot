@@ -13,7 +13,7 @@ export const metadata = {
     siteName: "BremLogic",
     images: [
       {
-        url: "/header-photo.png",
+        url: "/bremlogic-logo.png",
         width: 1038,
         height: 338,
         alt: "BremLogic Jupiter Perps Simulator",
@@ -26,7 +26,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "Jupiter Perps Simulator | BremLogic",
     description: "Test leveraged perps compounding, fees, risk, and Monte Carlo outcomes.",
-    images: ["/header-photo.png"],
+    images: ["/bremlogic-logo.png"],
   },
 };
 

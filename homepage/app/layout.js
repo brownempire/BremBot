@@ -12,10 +12,16 @@ export const metadata = {
   icons: {
     icon: [
       { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.png", type: "image/png", sizes: "1024x1024" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/icon-512.png", type: "image/png", sizes: "512x512" },
     ],
     apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
     shortcut: ["/favicon.ico"],
+  },
+  appleWebApp: {
+    title: "BremLogic",
+    capable: true,
+    statusBarStyle: "black-translucent",
   },
   openGraph: {
     title: "BremLogic",
@@ -24,7 +30,7 @@ export const metadata = {
     siteName: "BremLogic",
     images: [
       {
-        url: "/header-photo.png",
+        url: "/bremlogic-logo.png",
         width: 1038,
         height: 338,
         alt: "BremLogic",
@@ -37,7 +43,7 @@ export const metadata = {
     card: "summary_large_image",
     title: "BremLogic",
     description: "AI-powered crypto trading dashboard and simulator by BremLogic.",
-    images: ["/header-photo.png"],
+    images: ["/bremlogic-logo.png"],
   },
 };
 
