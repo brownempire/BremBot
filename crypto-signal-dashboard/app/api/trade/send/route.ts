@@ -1,43 +1,83 @@
-import { clusterApiUrl, Connection } from "@solana/web3.js";
-
 type SendTradeRequest = {
   signedTransaction?: string;
-  skipPreflight?: boolean;
-  maxRetries?: number;
+  requestId?: string;
 };
 
-function resolveRpcEndpoint() {
-  const serverRpc = process.env.SOLANA_RPC_URL?.trim();
-  if (serverRpc && /^https?:\/\//.test(serverRpc)) return serverRpc;
-  const publicRpc = process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim();
-  if (publicRpc && /^https?:\/\//.test(publicRpc)) return publicRpc;
-  return clusterApiUrl("mainnet-beta");
+const JUPITER_SWAP_V2_BASE = "https://api.jup.ag/swap/v2";
+
+function getJupiterHeaders() {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const apiKey = process.env.JUPITER_API_KEY?.trim();
+  if (apiKey) {
+    headers["x-api-key"] = apiKey;
+  }
+  return headers;
 }
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => ({}))) as SendTradeRequest;
   const signedTransaction = String(body.signedTransaction ?? "");
-  if (!signedTransaction) {
-    return new Response(JSON.stringify({ error: "Missing signedTransaction" }), {
+  const requestId = String(body.requestId ?? "");
+
+  if (!signedTransaction || !requestId) {
+    return new Response(JSON.stringify({ error: "Missing signedTransaction or requestId" }), {
       status: 400,
       headers: { "Content-Type": "application/json" },
     });
   }
 
   try {
-    const connection = new Connection(resolveRpcEndpoint(), "confirmed");
-    const rawTx = Buffer.from(signedTransaction, "base64");
-    const txid = await connection.sendRawTransaction(rawTx, {
-      skipPreflight: Boolean(body.skipPreflight),
-      maxRetries: Number.isFinite(body.maxRetries) ? Number(body.maxRetries) : 3,
+    const response = await fetch(`${JUPITER_SWAP_V2_BASE}/execute`, {
+      method: "POST",
+      headers: getJupiterHeaders(),
+      body: JSON.stringify({
+        signedTransaction,
+        requestId,
+      }),
     });
-    await connection.confirmTransaction(txid, "confirmed");
 
-    return new Response(JSON.stringify({ ok: true, txid }), {
-      headers: { "Content-Type": "application/json" },
-    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = payload?.error ?? payload?.message ?? `Jupiter execute failed (${response.status})`;
+      return new Response(JSON.stringify({ error: String(message) }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const status = String(payload?.status ?? "");
+    const txid = String(payload?.signature ?? payload?.txid ?? "");
+    if (status && status.toLowerCase() !== "success") {
+      const detail = payload?.error ?? payload?.code ?? payload?.message ?? "Transaction execution failed";
+      return new Response(JSON.stringify({ error: String(detail), status, payload }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (!txid) {
+      return new Response(JSON.stringify({ error: "Jupiter execute did not return a transaction signature" }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        txid,
+        status: status || "Success",
+        totalInputAmount: payload?.totalInputAmount ?? null,
+        totalOutputAmount: payload?.totalOutputAmount ?? null,
+        inputAmountResult: payload?.inputAmountResult ?? null,
+        outputAmountResult: payload?.outputAmountResult ?? null,
+      }),
+      { headers: { "Content-Type": "application/json" } }
+    );
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "Transaction broadcast failed";
+    const message = error instanceof Error ? error.message : "Transaction execution failed";
     return new Response(JSON.stringify({ error: message }), {
       status: 502,
       headers: { "Content-Type": "application/json" },

@@ -37,6 +37,9 @@ type ExecuteSwapResult = {
   outputMint: string;
   inputAmount: number;
   outputAmount?: number;
+  gasless: boolean;
+  signatureFeePayer: string | null;
+  status: string;
 };
 
 type AppWalletContextState = {
@@ -411,10 +414,11 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         const detail = await swapResponse.text().catch(() => "");
         throw new Error(`Swap route failed (${swapResponse.status}) ${detail}`);
       }
-      const swapPayload = await swapResponse.json();
-      const quote = swapPayload?.quote;
-      const base64Tx = String(swapPayload?.swapTransaction ?? "");
+      const swapPayload = await swapResponse.json().catch(() => null);
+      const base64Tx = String(swapPayload?.transaction ?? swapPayload?.swapTransaction ?? "");
+      const requestId = String(swapPayload?.requestId ?? "");
       if (!base64Tx) throw new Error("Jupiter did not return a swap transaction");
+      if (!requestId) throw new Error("Jupiter did not return an order request ID");
 
       const txBytes = fromBase64(base64Tx);
       const transaction = VersionedTransaction.deserialize(txBytes);
@@ -425,8 +429,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           signedTransaction: toBase64(signedTx),
-          skipPreflight: false,
-          maxRetries: 3,
+          requestId,
         }),
       });
       if (!sendResponse.ok) {
@@ -442,7 +445,11 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
         inputMint,
         outputMint,
         inputAmount: uiAmount,
-        outputAmount: Number(quote?.outAmount ?? 0) / (10 ** mintDecimals(outputMint)),
+        outputAmount: Number(swapPayload?.outAmount ?? 0) / (10 ** mintDecimals(outputMint)),
+        gasless: Boolean(swapPayload?.gasless),
+        signatureFeePayer:
+          typeof swapPayload?.signatureFeePayer === "string" ? swapPayload.signatureFeePayer : null,
+        status: String(sendPayload?.status ?? "Success"),
       };
     },
     passthroughWalletContextState,

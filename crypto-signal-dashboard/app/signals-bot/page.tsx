@@ -5,6 +5,7 @@ import Image from "next/image";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
+import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterPerpsPositionWidget } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
@@ -61,6 +62,8 @@ type AutoTradeTokenOption = {
   mint: string;
 };
 
+type AutoTradeMode = "all" | "buy-only";
+
 const AUTO_TRADE_TOKEN_OPTIONS: AutoTradeTokenOption[] = [
   { symbol: "SOL", label: "Solana (SOL)", mint: SOL_MINT },
   { symbol: "ETH", label: "Ethereum (ETH)", mint: ETH_MINT },
@@ -80,6 +83,8 @@ type AutoTradeSettings = {
   takeProfitPercent: number;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
+  mode: AutoTradeMode;
+  disableTpLock: boolean;
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
@@ -91,6 +96,8 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
     { id: "auto-slot-3", token: "BTC" },
   ],
   activeSlotId: null,
+  mode: "all",
+  disableTpLock: false,
 };
 
 type WalletTokenHolding = {
@@ -115,6 +122,11 @@ type StoredTradeRecord = {
   source?: "manual" | "auto";
   signalId?: string;
   signalSummary?: string;
+  symbol?: string;
+  entryPrice?: number;
+  takeProfitPrice?: number | null;
+  tradeDirection?: "buy" | "sell";
+  gasless?: boolean;
 };
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
@@ -136,6 +148,15 @@ type PendingTakeProfit = {
   targetPrice: number;
   signalId: string;
   createdAt: number;
+};
+
+type TradeChartOverlay = {
+  symbol: string;
+  tokenSymbol: string;
+  entryPrice: number;
+  targetPrice: number | null;
+  side: "buy" | "sell";
+  updatedAt: number;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -238,6 +259,7 @@ function DashboardPage() {
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
+  const [tradeChartOverlay, setTradeChartOverlay] = useState<TradeChartOverlay | null>(null);
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
@@ -439,8 +461,13 @@ function DashboardPage() {
               if (autoTradeBusyRef.current) {
                 return;
               }
+              const isBullSignal = signal.direction === "bullish";
+              if (autoTradeSettings.mode === "buy-only" && !isBullSignal) {
+                setAutoTradeStatus(`Buy-only mode skipped bearish signal for ${signal.symbol}`);
+                return;
+              }
               const activeTp = pendingTakeProfitRef.current;
-              if (activeTp) {
+              if (activeTp && !autoTradeSettings.disableTpLock) {
                 setAutoTradeStatus(
                   `TP lock active for ${activeTp.tokenSymbol}: waiting for ${formatUsd(activeTp.targetPrice)} before new trades`
                 );
@@ -449,7 +476,6 @@ function DashboardPage() {
               const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
               const assetSymbol = activeAutoTradeToken.symbol;
               const assetMint = activeAutoTradeToken.mint;
-              const isBullSignal = signal.direction === "bullish";
               const inputMint = isBullSignal ? USDC_MINT : assetMint;
               const outputMint = isBullSignal ? assetMint : USDC_MINT;
               if (wallet.publicKey) {
@@ -469,6 +495,13 @@ function DashboardPage() {
                     outputMint,
                     uiAmount: tradeAmount,
                   }).then((result) => {
+                    const shouldArmTp =
+                      isBullSignal &&
+                      autoTradeSettings.takeProfitPercent > 0 &&
+                      !autoTradeSettings.disableTpLock;
+                    const targetPrice = shouldArmTp && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
+                      ? marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100))
+                      : null;
                     const autoTradeRecord: StoredTradeRecord = {
                       id: `auto-${signal.id}-${Date.now()}`,
                       txid: result.txid,
@@ -481,12 +514,24 @@ function DashboardPage() {
                       inputAmount: result.inputAmount,
                       outputAmount: result.outputAmount,
                       signalSummary: `${signal.summary} · ${isBullSignal ? "buy" : "sell"} ${assetSymbol} · executed ${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol}`,
+                      symbol: signal.symbol,
+                      entryPrice: Number.isFinite(marketEntryPrice) ? marketEntryPrice : undefined,
+                      takeProfitPrice: targetPrice,
+                      tradeDirection: isBullSignal ? "buy" : "sell",
+                      gasless: result.gasless,
                     };
                     persistTradeRecord(autoTradeRecord).catch(() => undefined);
-                    if (isBullSignal && autoTradeSettings.takeProfitPercent > 0) {
+                    setTradeChartOverlay({
+                      symbol: signal.symbol,
+                      tokenSymbol: assetSymbol,
+                      entryPrice: marketEntryPrice,
+                      targetPrice,
+                      side: isBullSignal ? "buy" : "sell",
+                      updatedAt: Date.now(),
+                    });
+                    if (shouldArmTp) {
                       const executedOutputAmount = Number(result.outputAmount ?? 0);
                       if (Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0) {
-                        const targetPrice = marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100));
                         const nextPendingTp: PendingTakeProfit = {
                           id: `tp-${signal.id}-${Date.now()}`,
                           symbol: signal.symbol,
@@ -494,20 +539,22 @@ function DashboardPage() {
                           tokenMint: assetMint,
                           amount: executedOutputAmount,
                           entryPrice: marketEntryPrice,
-                          targetPrice,
+                          targetPrice: targetPrice ?? marketEntryPrice,
                           signalId: signal.id,
                           createdAt: Date.now(),
                         };
                         setPendingTakeProfit(nextPendingTp);
                         pendingTakeProfitRef.current = nextPendingTp;
                         setAutoTradeStatus(
-                          `TP armed for ${assetSymbol}: sell ${executedOutputAmount.toFixed(6)} at ${formatUsd(targetPrice)} (+${autoTradeSettings.takeProfitPercent}%)`
+                          `TP armed for ${assetSymbol}: sell ${executedOutputAmount.toFixed(6)} at ${formatUsd(targetPrice ?? marketEntryPrice)} (+${autoTradeSettings.takeProfitPercent}%)`
                         );
                       } else {
                         setAutoTradeStatus(`Auto-trade executed for ${signal.symbol} (TP not armed: output amount unavailable)`);
                       }
                     } else {
-                      setAutoTradeStatus(`Auto-trade executed for ${signal.symbol}`);
+                      setAutoTradeStatus(
+                        `Auto-trade executed for ${signal.symbol}${result.gasless ? " · gasless" : ""}`
+                      );
                     }
                     if (pushEnabled) {
                       fetch("/api/push/notify", {
@@ -540,9 +587,21 @@ function DashboardPage() {
                   walletAddress: activeWallet,
                   source: "auto",
                   signalId: signal.id,
+                  symbol: signal.symbol,
+                  entryPrice: points[points.length - 1]?.v ?? undefined,
+                  takeProfitPrice: null,
+                  tradeDirection: signal.direction === "bullish" ? "buy" : "sell",
                   signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${autoTradeSettings.walletPercent}% allocation`,
                 };
                 persistTradeRecord(autoTradeRecord).catch(() => undefined);
+                setTradeChartOverlay({
+                  symbol: signal.symbol,
+                  tokenSymbol: assetSymbol,
+                  entryPrice: points[points.length - 1]?.v ?? 0,
+                  targetPrice: null,
+                  side: signal.direction === "bullish" ? "buy" : "sell",
+                  updatedAt: Date.now(),
+                });
                 setAutoTradeStatus(
                   `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${autoTradeSettings.walletPercent}% allocation; connect wallet for live)`
                 );
@@ -569,6 +628,8 @@ function DashboardPage() {
     });
   }, [
     activeAutoTradeToken,
+    autoTradeSettings.disableTpLock,
+    autoTradeSettings.mode,
     autoTradeEnabled,
     autoTradeSettings.walletPercent,
     autoTradeSettings.takeProfitPercent,
@@ -674,6 +735,8 @@ function DashboardPage() {
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
         ? nextTakeProfit
         : DEFAULT_AUTO_TRADE_SETTINGS.takeProfitPercent;
+      const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
+      const disableTpLock = Boolean(parsed.disableTpLock);
       const parsedSlots = Array.isArray(parsed.slots)
         ? parsed.slots
           .map((slot) => {
@@ -706,6 +769,8 @@ function DashboardPage() {
         takeProfitPercent,
         slots: normalizedSlots,
         activeSlotId,
+        mode,
+        disableTpLock,
       });
     } catch (_error) {
       setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
@@ -731,18 +796,32 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    if (!autoTradeSettings.disableTpLock || !pendingTakeProfit) return;
+    setPendingTakeProfit(null);
+    pendingTakeProfitRef.current = null;
+  }, [autoTradeSettings.disableTpLock, pendingTakeProfit]);
+
+  useEffect(() => {
     if (!activeAutoTradeToken) {
       setAutoTradeStatus("Auto-trade is off");
       return;
     }
-    if (pendingTakeProfit) {
+    if (pendingTakeProfit && !autoTradeSettings.disableTpLock) {
       setAutoTradeStatus(
         `TP armed for ${pendingTakeProfit.tokenSymbol}: waiting for ${formatUsd(pendingTakeProfit.targetPrice)} to sell ${pendingTakeProfit.amount.toFixed(6)}`
       );
       return;
     }
-    setAutoTradeStatus(`Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation)`);
-  }, [activeAutoTradeToken, autoTradeSettings.walletPercent, pendingTakeProfit]);
+    setAutoTradeStatus(
+      `Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`
+    );
+  }, [
+    activeAutoTradeToken,
+    autoTradeSettings.disableTpLock,
+    autoTradeSettings.mode,
+    autoTradeSettings.walletPercent,
+    pendingTakeProfit,
+  ]);
 
   async function persistTradeRecord(trade: StoredTradeRecord) {
     const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
@@ -802,11 +881,24 @@ function DashboardPage() {
         outputMint: result.outputMint,
         inputAmount: result.inputAmount,
         outputAmount: result.outputAmount,
+        symbol: pendingTakeProfit.symbol,
+        entryPrice: pendingTakeProfit.entryPrice,
+        takeProfitPrice: pendingTakeProfit.targetPrice,
+        tradeDirection: "sell",
+        gasless: result.gasless,
         signalSummary: `TP sell ${pendingTakeProfit.tokenSymbol} at ${formatUsd(latestPrice)} (target ${formatUsd(pendingTakeProfit.targetPrice)})`,
       };
       persistTradeRecord(tpTradeRecord).catch(() => undefined);
       setPendingTakeProfit(null);
       pendingTakeProfitRef.current = null;
+      setTradeChartOverlay({
+        symbol: pendingTakeProfit.symbol,
+        tokenSymbol: pendingTakeProfit.tokenSymbol,
+        entryPrice: pendingTakeProfit.entryPrice,
+        targetPrice: pendingTakeProfit.targetPrice,
+        side: "sell",
+        updatedAt: Date.now(),
+      });
       setAutoTradeStatus(`TP executed for ${pendingTakeProfit.symbol} at ${formatUsd(latestPrice)}`);
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "swap failed";
@@ -814,7 +906,16 @@ function DashboardPage() {
     }).finally(() => {
       autoTradeBusyRef.current = false;
     });
-  }, [autoTradeEnabled, pendingTakeProfit, priceHistory, trackedMarkets, wallet.executeSwap, wallet.publicKey, walletAddress]);
+  }, [
+    autoTradeEnabled,
+    pendingTakeProfit,
+    persistTradeRecord,
+    priceHistory,
+    trackedMarkets,
+    wallet.executeSwap,
+    wallet.publicKey,
+    walletAddress,
+  ]);
 
   useEffect(() => {
     const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
@@ -1035,6 +1136,34 @@ function DashboardPage() {
 
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
+
+  useEffect(() => {
+    const latestAutoTrade = [...recentTrades]
+      .filter((trade) => trade.source === "auto" && trade.symbol && Number.isFinite(trade.entryPrice))
+      .sort((left, right) => right.timestamp - left.timestamp)[0];
+
+    if (!latestAutoTrade?.symbol || !Number.isFinite(latestAutoTrade.entryPrice)) {
+      if (!pendingTakeProfit) {
+        setTradeChartOverlay(null);
+      }
+      return;
+    }
+
+    const overlayTargetPrice = autoTradeSettings.disableTpLock
+      ? null
+      : pendingTakeProfit?.symbol === latestAutoTrade.symbol
+        ? pendingTakeProfit.targetPrice
+        : latestAutoTrade.takeProfitPrice ?? null;
+
+    setTradeChartOverlay({
+      symbol: latestAutoTrade.symbol,
+      tokenSymbol: latestAutoTrade.symbol.split("/")[0] ?? latestAutoTrade.symbol,
+      entryPrice: Number(latestAutoTrade.entryPrice),
+      targetPrice: overlayTargetPrice,
+      side: latestAutoTrade.tradeDirection === "sell" ? "sell" : "buy",
+      updatedAt: latestAutoTrade.timestamp,
+    });
+  }, [autoTradeSettings.disableTpLock, pendingTakeProfit, recentTrades]);
 
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
@@ -1433,6 +1562,7 @@ function DashboardPage() {
     setRecentTrades([]);
     setPendingTakeProfit(null);
     pendingTakeProfitRef.current = null;
+    setTradeChartOverlay(null);
     setPnlStatus("No recent trades. PnL reset.");
     if (wallet.connected && wallet.publicKey && remoteAuthToken) {
       await fetch("/api/trades", {
@@ -1453,6 +1583,24 @@ function DashboardPage() {
     setLastSignalAt({});
   }
 
+  async function handleManualSwapSuccess(result: ManualSwapSuccess) {
+    const manualTradeRecord: StoredTradeRecord = {
+      id: `manual-${result.txid}-${Date.now()}`,
+      txid: result.txid,
+      timestamp: Date.now(),
+      walletAddress: wallet.publicKey?.toBase58() ?? undefined,
+      source: "manual",
+      inputMint: result.inputMint,
+      outputMint: result.outputMint,
+      inputAmount: result.inputAmount,
+      outputAmount: result.outputAmount,
+      signalSummary: `${result.inputSymbol} -> ${result.outputSymbol}${result.gasless ? " · gasless" : ""}`,
+      gasless: result.gasless,
+    };
+    await persistTradeRecord(manualTradeRecord);
+    refreshWalletPortfolio().catch(() => undefined);
+  }
+
   function persistAutoTradeSettings(next: AutoTradeSettings) {
     setAutoTradeSettings(next);
     try {
@@ -1469,7 +1617,9 @@ function DashboardPage() {
     };
     persistAutoTradeSettings(next);
     if (next.activeSlotId === slotId) {
-      setAutoTradeStatus(`Auto-trade is on (${token}, ${next.walletPercent}% allocation)`);
+      setAutoTradeStatus(
+        `Auto-trade is on (${token}, ${next.walletPercent}% allocation, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+      );
     }
   }
 
@@ -1489,9 +1639,30 @@ function DashboardPage() {
     persistAutoTradeSettings(next);
     setAutoTradeStatus(
       enabled && token
-        ? `Auto-trade is on (${token.symbol}, ${next.walletPercent}% allocation)`
+        ? `Auto-trade is on (${token.symbol}, ${next.walletPercent}% allocation, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
         : "Auto-trade is off"
     );
+  }
+
+  function updateAutoTradeMode(mode: AutoTradeMode) {
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      mode,
+    };
+    persistAutoTradeSettings(next);
+  }
+
+  function toggleDisableTpLock(disabled: boolean) {
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      disableTpLock: disabled,
+    };
+    if (disabled) {
+      setPendingTakeProfit(null);
+      pendingTakeProfitRef.current = null;
+      setTradeChartOverlay((previous) => (previous ? { ...previous, targetPrice: null } : previous));
+    }
+    persistAutoTradeSettings(next);
   }
 
   function saveSignalParams() {
@@ -1507,6 +1678,8 @@ function DashboardPage() {
   function resetSignalParams() {
     setParams(DEFAULT_PARAMS);
     setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
+    setPendingTakeProfit(null);
+    pendingTakeProfitRef.current = null;
     setAutoTradeStatus("Auto-trade is off");
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
@@ -1600,7 +1773,30 @@ function DashboardPage() {
             Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
           </div>
           <div className="tradingview-wrap">
-            <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
+            <TradingViewChart
+              symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
+              pricePoints={selectedChartMarket ? priceHistory[selectedChartMarket.id] ?? [] : []}
+              guides={
+                tradeChartOverlay?.symbol === selectedChartMarket?.pair
+                  ? [
+                      {
+                        label: "Entry",
+                        price: tradeChartOverlay.entryPrice,
+                        tone: "entry" as const,
+                      },
+                      ...(tradeChartOverlay.targetPrice
+                        ? [
+                            {
+                              label: "TP",
+                              price: tradeChartOverlay.targetPrice,
+                              tone: "tp" as const,
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []
+              }
+            />
           </div>
         </>
       );
@@ -1628,8 +1824,20 @@ function DashboardPage() {
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
-          <div style={{ marginTop: 10 }}>
-            <JupiterPerpsPositionWidget />
+          <div className="wallet-trading-grid" style={{ marginTop: 10 }}>
+            <div className="wallet-trading-panel wallet-trading-panel-swap">
+              <ManualSwapWidget
+                connected={wallet.connected}
+                walletAddress={wallet.publicKey?.toBase58() ?? null}
+                solBalance={solBalance}
+                walletTokens={walletTokens}
+                onExecuteSwap={wallet.executeSwap}
+                onTradeSuccess={handleManualSwapSuccess}
+              />
+            </div>
+            <div className="wallet-trading-panel wallet-trading-panel-perps">
+              <JupiterPerpsPositionWidget />
+            </div>
           </div>
           <div className="wallet-holdings">
             <div className="holding-row total-row">
@@ -1791,11 +1999,37 @@ function DashboardPage() {
             <div className="auto-trade-selector-header">
               <strong>Auto-Trade Selector</strong>
               <span className="subtext">Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.</span>
-              {pendingTakeProfit ? (
+              {pendingTakeProfit && !autoTradeSettings.disableTpLock ? (
                 <span className="subtext">
                   TP lock active: sell {pendingTakeProfit.amount.toFixed(6)} {pendingTakeProfit.tokenSymbol} at {formatUsd(pendingTakeProfit.targetPrice)}
                 </span>
               ) : null}
+            </div>
+            <div className="auto-trade-mode-row">
+              <div className="wallet-controls">
+                <button
+                  type="button"
+                  className={autoTradeSettings.mode === "all" ? "" : "secondary"}
+                  onClick={() => updateAutoTradeMode("all")}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={autoTradeSettings.mode === "buy-only" ? "" : "secondary"}
+                  onClick={() => updateAutoTradeMode("buy-only")}
+                >
+                  Buy Only
+                </button>
+              </div>
+              <label className="auto-trade-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={autoTradeSettings.disableTpLock}
+                  onChange={(event) => toggleDisableTpLock(event.target.checked)}
+                />
+                <span>Disable TP Lock</span>
+              </label>
             </div>
             <div className="auto-trade-selector-grid">
               {autoTradeSettings.slots.map((slot) => (

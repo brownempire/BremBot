@@ -425,7 +425,7 @@ function JupiterPerpsPositionWidgetBody() {
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: Jupiter Portfolio API leverage elements. Jupiter&apos;s official Perps docs still mark the lower-level Perps API and account docs as work in progress, so RPC parsing remains intentionally unimplemented until Jupiter publishes a stable contract for it.
+        Data source: direct Jupiter Perps program account reads over Solana RPC, with Jupiter&apos;s Portfolio API used only as a fallback if the live account read cannot complete.
       </div>
     </div>
   );

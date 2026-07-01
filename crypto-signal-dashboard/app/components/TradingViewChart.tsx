@@ -12,6 +12,12 @@ declare global {
 
 type TradingViewChartProps = {
   symbol?: string;
+  pricePoints?: Array<{ t: number; v: number }>;
+  guides?: Array<{
+    label: string;
+    price: number;
+    tone: "entry" | "tp";
+  }>;
 };
 
 const SCRIPT_ID = "tradingview-widget-script";
@@ -45,8 +51,36 @@ function loadTradingViewScript() {
   return scriptLoadingPromise;
 }
 
-export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChartProps) {
+export function TradingViewChart({
+  symbol = "COINBASE:BTCUSD",
+  pricePoints = [],
+  guides = [],
+}: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_main_chart", []);
+  const guidePositions = useMemo(() => {
+    const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+    if (validGuides.length === 0) return [];
+
+    const recentPoints = pricePoints.slice(-240);
+    const values = recentPoints.map((point) => point.v).filter((value) => Number.isFinite(value) && value > 0);
+    if (values.length === 0) return [];
+
+    const minPrice = Math.min(...values);
+    const maxPrice = Math.max(...values);
+    const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
+    const paddedMin = minPrice - span * 0.15;
+    const paddedMax = maxPrice + span * 0.15;
+    const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+    return validGuides.map((guide) => {
+      const relative = (guide.price - paddedMin) / paddedSpan;
+      const top = 100 - Math.min(100, Math.max(0, relative * 100));
+      return {
+        ...guide,
+        top,
+      };
+    });
+  }, [guides, pricePoints]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,5 +166,24 @@ export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChar
     };
   }, [containerId, symbol]);
 
-  return <div id={containerId} className="tradingview-container" />;
+  return (
+    <div className="tradingview-frame">
+      <div id={containerId} className="tradingview-container" />
+      {guidePositions.length > 0 ? (
+        <div className="tradingview-guide-layer" aria-hidden="true">
+          {guidePositions.map((guide) => (
+            <div
+              key={`${guide.label}-${guide.price}-${guide.tone}`}
+              className={`tradingview-guide tradingview-guide-${guide.tone}`}
+              style={{ top: `${guide.top}%` }}
+            >
+              <span className="tradingview-guide-label">
+                {guide.label} {guide.price.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
