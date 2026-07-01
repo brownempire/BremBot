@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Image from "next/image";
+import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
@@ -23,7 +24,7 @@ const ETH_MINT = "7vfCXTUXx5WQXj6Yf8sTG6iM6Aq98J4A4P8M7P8yWfYw";
 const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
-const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v1";
+const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
 
@@ -132,6 +133,7 @@ type StoredTradeRecord = {
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
 type PnlMode = "app" | "chain";
+type RemoteAuthSource = "in-app" | "phantom";
 type DashboardSectionId = "chart" | "wallet" | "pnl" | "params" | "signals" | "trades" | "news";
 type DashboardSectionLayout = {
   id: DashboardSectionId;
@@ -157,6 +159,26 @@ type TradeChartOverlay = {
   targetPrice: number | null;
   side: "buy" | "sell";
   updatedAt: number;
+};
+
+type RemoteAuthChallenge = {
+  address: string;
+  challengeId: string;
+  message: string;
+  expiresInSeconds: number;
+  expiresAt: string;
+};
+
+type PhantomAuthProvider = {
+  isPhantom?: boolean;
+  publicKey?: PublicKey | { toBase58: () => string } | null;
+  isConnected?: boolean;
+  connect: (options?: Record<string, unknown>) => Promise<{ publicKey?: PublicKey | { toBase58: () => string } } | void>;
+  disconnect?: () => Promise<void>;
+  signMessage: (
+    message: Uint8Array,
+    display?: "utf8" | "hex"
+  ) => Promise<{ signature?: Uint8Array } | Uint8Array>;
 };
 
 function urlBase64ToUint8Array(base64String: string) {
@@ -188,6 +210,24 @@ function tradesStorageKey(walletAddress: string) {
 
 function remoteTradesAuthStorageKey(walletAddress: string) {
   return `${REMOTE_AUTH_TOKEN_STORAGE_KEY}.${walletAddress}`;
+}
+
+function getPhantomAuthProvider(): PhantomAuthProvider | null {
+  if (typeof window === "undefined") return null;
+  const candidate =
+    (window as typeof window & { phantom?: { solana?: PhantomAuthProvider }; solana?: PhantomAuthProvider }).phantom
+      ?.solana
+      ?? (window as typeof window & { solana?: PhantomAuthProvider }).solana;
+  if (!candidate?.isPhantom || typeof candidate.connect !== "function" || typeof candidate.signMessage !== "function") {
+    return null;
+  }
+  return candidate;
+}
+
+function extractPhantomPublicKey(provider: PhantomAuthProvider) {
+  const key = provider.publicKey;
+  if (!key) return null;
+  return typeof key.toBase58 === "function" ? key.toBase58() : null;
 }
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
@@ -266,9 +306,12 @@ function DashboardPage() {
   const [pnlMode, setPnlMode] = useState<PnlMode>("app");
   const [pnlTokenMint, setPnlTokenMint] = useState<string>(PNL_DEFAULT_MINT);
   const [pnlStatus, setPnlStatus] = useState("PnL tracking recent trades");
+  const [remoteAuthSource, setRemoteAuthSource] = useState<RemoteAuthSource | null>(null);
   const [remoteAuthStatus, setRemoteAuthStatus] = useState("Remote auth pending");
   const [remoteSyncStatus, setRemoteSyncStatus] = useState("Remote sync idle");
   const [remoteAuthToken, setRemoteAuthToken] = useState<string | null>(null);
+  const [remoteAuthAddress, setRemoteAuthAddress] = useState<string | null>(null);
+  const [phantomAuthAddress, setPhantomAuthAddress] = useState<string | null>(null);
   const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: Date.now(), v: 0 }]);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
@@ -288,10 +331,39 @@ function DashboardPage() {
   );
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
+  const remoteSyncWalletAddress =
+    remoteAuthSource === "phantom"
+      ? phantomAuthAddress
+      : remoteAuthSource === "in-app"
+        ? walletAddress
+        : null;
+  const tradeStorageAddress =
+    remoteAuthSource === "phantom"
+      ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
+      : walletAddress ?? "paper-auto";
 
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
   }, [pendingTakeProfit]);
+
+  useEffect(() => {
+    if (wallet.connected && walletAddress && !remoteAuthSource) {
+      setRemoteAuthSource("in-app");
+    }
+    if (!wallet.connected && remoteAuthSource === "in-app") {
+      setRemoteAuthSource(null);
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+    }
+  }, [remoteAuthSource, wallet.connected, walletAddress]);
+
+  useEffect(() => {
+    const provider = getPhantomAuthProvider();
+    const existingAddress = provider ? extractPhantomPublicKey(provider) : null;
+    if (existingAddress) {
+      setPhantomAuthAddress((current) => current ?? existingAddress);
+    }
+  }, []);
 
   useEffect(() => {
     if (wallet.publicKey || !pendingTakeProfit) return;
@@ -823,8 +895,110 @@ function DashboardPage() {
     pendingTakeProfit,
   ]);
 
+  async function requestRemoteAuthChallenge(address: string) {
+    const response = await fetch("/api/trades/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address }),
+    });
+    const payload = (await response.json().catch(() => null)) as RemoteAuthChallenge | { error?: string } | null;
+    if (!response.ok || !payload || !("challengeId" in payload) || !payload.challengeId || !payload.message) {
+      throw new Error((payload && "error" in payload && payload.error) || "Remote auth challenge failed");
+    }
+    return payload;
+  }
+
+  async function verifyRemoteAuthChallenge(address: string, challengeId: string, signature: string) {
+    const response = await fetch("/api/trades/auth", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address, challengeId, signature }),
+    });
+    const payload = (await response.json().catch(() => null)) as { token?: string; error?: string } | null;
+    if (!response.ok || !payload?.token) {
+      throw new Error(payload?.error || "Remote auth verification failed");
+    }
+    return payload.token;
+  }
+
+  async function signRemoteAuthMessage(source: RemoteAuthSource, message: string) {
+    const encodedMessage = new TextEncoder().encode(message);
+
+    if (source === "in-app") {
+      const signature = await wallet.signMessage(encodedMessage);
+      return bs58.encode(signature);
+    }
+
+    const provider = getPhantomAuthProvider();
+    if (!provider) {
+      throw new Error("Phantom is not available for message signing on this device.");
+    }
+    const signed = await provider.signMessage(encodedMessage, "utf8");
+    const signatureBytes = signed instanceof Uint8Array
+      ? signed
+      : signed?.signature instanceof Uint8Array
+        ? signed.signature
+        : null;
+    if (!signatureBytes) {
+      throw new Error("Phantom did not return a signature.");
+    }
+    return bs58.encode(signatureBytes);
+  }
+
+  async function connectPhantomForRemoteSync() {
+    const provider = getPhantomAuthProvider();
+    if (!provider) {
+      setRemoteAuthStatus("Phantom extension/app browser not detected for remote sync");
+      return;
+    }
+
+    try {
+      setRemoteAuthStatus("Connecting Phantom for remote sync...");
+      const result = await provider.connect({ onlyIfTrusted: false }).catch(() => provider.connect());
+      const nextAddress =
+        extractPhantomPublicKey(provider)
+        ?? (result?.publicKey && typeof result.publicKey.toBase58 === "function" ? result.publicKey.toBase58() : null);
+      if (!nextAddress) {
+        throw new Error("Phantom connected, but no wallet address was returned.");
+      }
+
+      setPhantomAuthAddress(nextAddress);
+      setRemoteAuthSource("phantom");
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+      setRemoteAuthStatus("Phantom connected. Requesting signature...");
+    } catch (connectError) {
+      const message = connectError instanceof Error ? connectError.message : "Phantom connection failed";
+      setRemoteAuthStatus(message);
+    }
+  }
+
+  async function disconnectPhantomForRemoteSync() {
+    const provider = getPhantomAuthProvider();
+    try {
+      await provider?.disconnect?.();
+    } catch {
+      // ignore provider disconnect failures
+    }
+    if (phantomAuthAddress) {
+      try {
+        window.localStorage.removeItem(remoteTradesAuthStorageKey(phantomAuthAddress));
+      } catch {
+        // ignore storage errors
+      }
+    }
+    setPhantomAuthAddress(null);
+    if (remoteAuthSource === "phantom") {
+      setRemoteAuthSource(wallet.connected && walletAddress ? "in-app" : null);
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+      setRemoteAuthStatus(wallet.connected && walletAddress ? "In-app wallet ready for remote auth" : "Remote auth pending");
+      setRemoteSyncStatus(wallet.connected && walletAddress ? "Remote sync waiting for auth" : "Remote sync unavailable");
+    }
+  }
+
   async function persistTradeRecord(trade: StoredTradeRecord) {
-    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+    const activeWallet = trade.walletAddress ?? tradeStorageAddress;
     setRecentTrades((prevTrades) => {
       const nextTrades = [trade, ...prevTrades.filter((item) => item.id !== trade.id)].slice(0, LOCAL_RECENT_TRADES_CAP);
       try {
@@ -835,7 +1009,7 @@ function DashboardPage() {
       return nextTrades;
     });
 
-    if (!wallet.connected || !wallet.publicKey || !remoteAuthToken) return;
+    if (!remoteAuthToken || !remoteAuthAddress || !trade.walletAddress || trade.walletAddress !== remoteAuthAddress) return;
     await fetch("/api/trades", {
       method: "POST",
       headers: {
@@ -843,6 +1017,13 @@ function DashboardPage() {
         Authorization: `Bearer ${remoteAuthToken}`,
       },
       body: JSON.stringify({ trade }),
+    }).then(async (response) => {
+      if (response.ok) return;
+      if (response.status === 401) {
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+        setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+      }
     }).catch(() => undefined);
   }
 
@@ -918,7 +1099,7 @@ function DashboardPage() {
   ]);
 
   useEffect(() => {
-    const activeTradeKey = tradesStorageKey(walletAddress ?? "paper-auto");
+    const activeTradeKey = tradesStorageKey(tradeStorageAddress);
     try {
       const raw = window.localStorage.getItem(activeTradeKey);
       if (!raw) {
@@ -930,83 +1111,105 @@ function DashboardPage() {
     } catch (_error) {
       setRecentTrades([]);
     }
-  }, [walletAddress]);
+  }, [tradeStorageAddress]);
 
   useEffect(() => {
-    if (!walletAddress || !wallet.connected) {
+    if (!remoteAuthSource || !remoteSyncWalletAddress) {
       setRemoteAuthToken(null);
-      setRemoteAuthStatus("Remote auth requires connected wallet");
+      setRemoteAuthAddress(null);
+      setRemoteAuthStatus("Remote auth pending");
       setRemoteSyncStatus("Remote sync unavailable");
       return;
     }
 
+    const walletAddressForAuth = remoteSyncWalletAddress;
+    const authSourceForSync = remoteAuthSource;
     let cancelled = false;
     const cachedToken = typeof window !== "undefined"
-      ? window.localStorage.getItem(remoteTradesAuthStorageKey(walletAddress))
+      ? window.localStorage.getItem(remoteTradesAuthStorageKey(walletAddressForAuth))
       : null;
-    if (cachedToken) {
-      setRemoteAuthToken(cachedToken);
-      setRemoteAuthStatus("Remote auth connected");
+
+    if (cachedToken && remoteAuthAddress === walletAddressForAuth && remoteAuthToken === cachedToken) {
+      setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
       return;
     }
 
-    setRemoteAuthStatus("Authenticating remote trade sync...");
-    fetch("/api/trades/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ address: walletAddress }),
-    }).then(async (response) => {
-      const payload = await response.json().catch(() => null);
-      if (cancelled) return;
-      if (!response.ok || !payload?.token) {
-        setRemoteAuthToken(null);
-        setRemoteAuthStatus("Remote auth failed");
-        return;
-      }
-      setRemoteAuthToken(String(payload.token));
+    async function authenticate() {
       try {
-        window.localStorage.setItem(remoteTradesAuthStorageKey(walletAddress), String(payload.token));
-      } catch (_error) {
-        // ignore storage errors
+        setRemoteAuthStatus(
+          authSourceForSync === "in-app"
+            ? "Requesting in-app wallet signature..."
+            : "Requesting Phantom signature..."
+        );
+        const challenge = await requestRemoteAuthChallenge(walletAddressForAuth);
+        if (cancelled) return;
+        const signature = await signRemoteAuthMessage(authSourceForSync, challenge.message);
+        if (cancelled) return;
+        const nextToken = await verifyRemoteAuthChallenge(walletAddressForAuth, challenge.challengeId, signature);
+        if (cancelled) return;
+        setRemoteAuthToken(nextToken);
+        setRemoteAuthAddress(walletAddressForAuth);
+        try {
+          window.localStorage.setItem(remoteTradesAuthStorageKey(walletAddressForAuth), nextToken);
+        } catch {
+          // ignore storage errors
+        }
+        setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
+      } catch (authError) {
+        if (cancelled) return;
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+        const message = authError instanceof Error ? authError.message : "Remote auth failed";
+        setRemoteAuthStatus(message);
       }
-      setRemoteAuthStatus("Remote auth connected");
-    }).catch(() => {
-      if (cancelled) return;
-      setRemoteAuthToken(null);
-      setRemoteAuthStatus("Remote auth failed");
-    });
+    }
+
+    if (cachedToken) {
+      setRemoteAuthToken(cachedToken);
+      setRemoteAuthAddress(walletAddressForAuth);
+      setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
+      return;
+    }
+
+    void authenticate();
 
     return () => {
       cancelled = true;
     };
-  }, [wallet.connected, walletAddress]);
+  }, [remoteAuthAddress, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.signMessage]);
 
   useEffect(() => {
-    if (!wallet.connected || !walletAddress || !remoteAuthToken) {
-      if (!wallet.connected || !walletAddress) {
-        setRemoteSyncStatus("Remote sync requires wallet connection");
-      } else {
-        setRemoteSyncStatus("Remote sync waiting for auth");
-      }
+    if (!remoteSyncWalletAddress || !remoteAuthToken) {
+      setRemoteSyncStatus(remoteSyncWalletAddress ? "Remote sync waiting for auth" : "Remote sync unavailable");
       return;
     }
 
     let cancelled = false;
     setRemoteSyncStatus("Syncing remote trades...");
-    fetch(`/api/trades?address=${walletAddress}`, {
+    fetch(`/api/trades?address=${remoteSyncWalletAddress}`, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${remoteAuthToken}` },
     }).then(async (response) => {
       const payload = await response.json().catch(() => null);
       if (cancelled) return;
       if (!response.ok) {
+        if (response.status === 401) {
+          try {
+            window.localStorage.removeItem(remoteTradesAuthStorageKey(remoteSyncWalletAddress));
+          } catch {
+            // ignore storage errors
+          }
+          setRemoteAuthToken(null);
+          setRemoteAuthAddress(null);
+          setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+        }
         setRemoteSyncStatus("Remote sync failed");
         return;
       }
       const remoteTrades = Array.isArray(payload?.trades) ? (payload.trades as StoredTradeRecord[]) : [];
       setRecentTrades(remoteTrades);
       try {
-        window.localStorage.setItem(tradesStorageKey(walletAddress), JSON.stringify(remoteTrades));
+        window.localStorage.setItem(tradesStorageKey(tradeStorageAddress), JSON.stringify(remoteTrades));
       } catch (_error) {
         // ignore storage errors
       }
@@ -1019,7 +1222,7 @@ function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [remoteAuthToken, wallet.connected, walletAddress]);
+  }, [remoteAuthToken, remoteSyncWalletAddress, tradeStorageAddress]);
 
   const refreshWalletPortfolio = useCallback(async () => {
     if (!wallet.connected || !wallet.publicKey) {
@@ -1238,12 +1441,12 @@ function DashboardPage() {
   }, [pnlTokenMint, recentTrades, selectedTokenUsdPrice]);
 
   useEffect(() => {
-    if (!walletAddress || !wallet.connected) {
+    if (!remoteSyncWalletAddress || !remoteAuthToken) {
       setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
       return;
     }
 
-    fetch(`/api/wallet/pnl?address=${walletAddress}`, { cache: "no-store" })
+    fetch(`/api/wallet/pnl?address=${remoteSyncWalletAddress}`, { cache: "no-store" })
       .then((response) => response.json())
       .then((payload) => {
         const points = Array.isArray(payload?.points)
@@ -1254,7 +1457,7 @@ function DashboardPage() {
       .catch(() => {
         setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
       });
-  }, [wallet.connected, walletAddress]);
+  }, [remoteAuthToken, remoteSyncWalletAddress]);
 
   useEffect(() => {
     const tokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "token";
@@ -1471,6 +1674,9 @@ function DashboardPage() {
     );
     try {
       await wallet.createWallet((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setRemoteAuthSource("in-app");
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
       setPortfolioStatus("In-app wallet created");
     } catch (_error) {
       setPortfolioStatus("Wallet creation failed");
@@ -1486,6 +1692,9 @@ function DashboardPage() {
     );
     try {
       await wallet.importWallet(secretInput, (passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setRemoteAuthSource("in-app");
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
       setPortfolioStatus("In-app wallet imported");
     } catch (_error) {
       setPortfolioStatus("Wallet import failed");
@@ -1508,6 +1717,18 @@ function DashboardPage() {
 
   async function disconnectInAppWallet() {
     await wallet.disconnect();
+    if (walletAddress) {
+      try {
+        window.localStorage.removeItem(remoteTradesAuthStorageKey(walletAddress));
+      } catch {
+        // ignore storage errors
+      }
+    }
+    if (remoteAuthSource === "in-app") {
+      setRemoteAuthSource(phantomAuthAddress ? "phantom" : null);
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+    }
     setShowDepositModal(false);
     setPortfolioStatus("Wallet disconnected and removed from this device");
   }
@@ -1517,6 +1738,9 @@ function DashboardPage() {
     if (passwordInput === null) return;
     try {
       await wallet.login((passwordInput ?? "").trim() || DEFAULT_WALLET_PASSWORD);
+      setRemoteAuthSource("in-app");
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
       setPortfolioStatus("Wallet unlocked");
     } catch (_error) {
       setPortfolioStatus("Wallet login failed");
@@ -1558,18 +1782,32 @@ function DashboardPage() {
   }
 
   async function clearRecentTrades() {
-    const activeWallet = wallet.publicKey?.toBase58() ?? "paper-auto";
+    const activeWallet = tradeStorageAddress;
     setRecentTrades([]);
     setPendingTakeProfit(null);
     pendingTakeProfitRef.current = null;
     setTradeChartOverlay(null);
     setPnlStatus("No recent trades. PnL reset.");
-    if (wallet.connected && wallet.publicKey && remoteAuthToken) {
+    if (remoteAuthToken) {
       await fetch("/api/trades", {
         method: "DELETE",
         headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      }).then(async (response) => {
+        if (response.ok) {
+          setRemoteSyncStatus("Remote trades cleared");
+          return;
+        }
+        if (response.status === 401 && remoteSyncWalletAddress) {
+          try {
+            window.localStorage.removeItem(remoteTradesAuthStorageKey(remoteSyncWalletAddress));
+          } catch {
+            // ignore storage errors
+          }
+          setRemoteAuthToken(null);
+          setRemoteAuthAddress(null);
+          setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+        }
       }).catch(() => undefined);
-      setRemoteSyncStatus("Remote trades cleared");
     }
     try {
       window.localStorage.removeItem(tradesStorageKey(activeWallet));
@@ -1813,6 +2051,12 @@ function DashboardPage() {
             {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
             {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
+            <button
+              className="secondary"
+              onClick={phantomAuthAddress ? () => void disconnectPhantomForRemoteSync() : () => void connectPhantomForRemoteSync()}
+            >
+              {phantomAuthAddress ? "Disconnect Phantom Sync" : "Connect Phantom Sync"}
+            </button>
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
@@ -1822,6 +2066,14 @@ function DashboardPage() {
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
+          </div>
+          <div className="subtext" style={{ marginTop: 6 }}>
+            {phantomAuthAddress
+              ? `Phantom sync wallet: ${shortAddress(phantomAuthAddress)}`
+              : "Phantom can also sign remote sync auth if you prefer not to use the in-app wallet."}
+          </div>
+          <div className="subtext" style={{ marginTop: 6 }}>
+            Remote sync source: {remoteAuthSource === "in-app" ? "In-app wallet" : remoteAuthSource === "phantom" ? "Phantom" : "Not selected"}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-grid" style={{ marginTop: 10 }}>

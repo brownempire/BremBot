@@ -3,6 +3,7 @@
 import { clusterApiUrl, Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
 import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 const LOCAL_WALLET_STORAGE_KEY = "brembot.local-wallet.encrypted.v2";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
@@ -52,6 +53,7 @@ type AppWalletContextState = {
   importWallet: (secretInput: string, password?: string) => Promise<void>;
   exportWallet: () => string | null;
   changePassword: (currentPassword: string, nextPassword: string) => Promise<void>;
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   executeSwap: (params: ExecuteSwapParams) => Promise<ExecuteSwapResult>;
   passthroughWalletContextState: Record<string, unknown>;
 };
@@ -291,6 +293,10 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
           throw new Error("Unsupported transaction format");
         });
       },
+      signMessage: async (message: Uint8Array) => {
+        if (!keypair) throw new Error("Wallet is not connected");
+        return nacl.sign.detached(message, keypair.secretKey);
+      },
     } : null;
 
     const wallet = adapter ? { adapter, readyState: "Installed" } : null;
@@ -317,7 +323,7 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       sendTransaction: adapter?.sendTransaction,
       signTransaction: adapter?.signTransaction,
       signAllTransactions: adapter?.signAllTransactions,
-      signMessage: undefined,
+      signMessage: adapter?.signMessage,
       signIn: undefined,
     };
   }, [connected, keypair]);
@@ -393,6 +399,10 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       setSecretKey(decoded);
       setConnected(true);
       setHasStoredWallet(true);
+    },
+    signMessage: async (message: Uint8Array) => {
+      if (!keypair || !connected) throw new Error("Wallet is not connected");
+      return nacl.sign.detached(message, keypair.secretKey);
     },
     executeSwap: async ({ inputMint, outputMint, uiAmount, slippageBps = 100 }) => {
       if (!keypair || !connected) throw new Error("Wallet is not connected");
