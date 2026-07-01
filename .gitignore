@@ -15,6 +15,7 @@ node_modules/
 out/
 dist/
 coverage/
+*.tsbuildinfo
 
 # Logs
 *.log
