@@ -1,10 +1,10 @@
 "use client";
 
-import bs58 from "bs58";
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
 
 export type JupiterPerpsPositionSide = "long" | "short";
 export type JupiterPerpsPositionSource = "portfolio-api" | "mock" | "rpc-direct" | "rpc-placeholder";
+export type JupiterPerpsPendingTriggerKind = "take-profit" | "stop-loss";
 
 export type JupiterPerpsPosition = {
   id: string;
@@ -13,6 +13,9 @@ export type JupiterPerpsPosition = {
   marketSymbol: string;
   marketName: string | null;
   marketAddress: string | null;
+  custodyAddress: string | null;
+  collateralCustodyAddress: string | null;
+  collateralSymbol: string | null;
   imageUri: string | null;
   side: JupiterPerpsPositionSide;
   entryPrice: number | null;
@@ -30,6 +33,33 @@ export type JupiterPerpsPosition = {
   stopLoss: number | null;
   accountRef: string | null;
   lastUpdated: number | null;
+};
+
+export type JupiterPerpsPendingTrigger = {
+  id: string;
+  source: Exclude<JupiterPerpsPositionSource, "portfolio-api" | "rpc-placeholder">;
+  platformId: string;
+  marketSymbol: string;
+  marketName: string | null;
+  marketAddress: string | null;
+  custodyAddress: string | null;
+  collateralCustodyAddress: string | null;
+  collateralSymbol: string | null;
+  side: JupiterPerpsPositionSide;
+  kind: JupiterPerpsPendingTriggerKind;
+  triggerPrice: number | null;
+  sizeDeltaUsd: number | null;
+  collateralDelta: number | null;
+  entirePosition: boolean;
+  triggerAboveThreshold: boolean;
+  executed: boolean;
+  accountRef: string | null;
+  lastUpdated: number | null;
+};
+
+export type JupiterPerpsAccountSnapshot = {
+  positions: JupiterPerpsPosition[];
+  pendingTriggers: JupiterPerpsPendingTrigger[];
 };
 
 type PortfolioResponse = {
@@ -89,8 +119,10 @@ const JUPITER_PORTFOLIO_BASE = "https://api.jup.ag/portfolio/v1";
 const JUPITER_EXCHANGE_PLATFORM = "jupiter-exchange";
 const JUPITER_PERPS_PROGRAM_ID = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
 const POSITION_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0xa2, 0xbf, 0x9c, 0x22, 0x97, 0x83, 0x41, 0x8c]);
-const POSITION_ACCOUNT_DISCRIMINATOR_B58 = bs58.encode(POSITION_ACCOUNT_DISCRIMINATOR);
 const USDC_DECIMALS = 6;
+const POSITION_REQUEST_MIN_BYTES = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 1;
+const MIN_PLAUSIBLE_UNIX_SECONDS = 1577836800n;
+const MAX_PLAUSIBLE_UNIX_SECONDS = 4102444800n;
 
 const JUPITER_CUSTODY_MARKETS = new Map([
   [
@@ -159,17 +191,44 @@ function readU128(bytes: Uint8Array, offset: number) {
   return lower + (upper << 64n);
 }
 
+function readBool(bytes: Uint8Array, offset: number) {
+  return bytes[offset] === 1;
+}
+
+function hasDiscriminator(bytes: Uint8Array, discriminator: Uint8Array) {
+  if (bytes.length < discriminator.length) return false;
+  return discriminator.every((value, index) => bytes[index] === value);
+}
+
+function getPositionKey(parts: {
+  custodyAddress: string | null;
+  collateralCustodyAddress: string | null;
+  side: JupiterPerpsPositionSide;
+}) {
+  return `${parts.custodyAddress ?? "unknown-custody"}:${parts.collateralCustodyAddress ?? "unknown-collateral"}:${parts.side}`;
+}
+
+function getTriggerKind(side: JupiterPerpsPositionSide, triggerAboveThreshold: boolean): JupiterPerpsPendingTriggerKind {
+  if (side === "long") {
+    return triggerAboveThreshold ? "take-profit" : "stop-loss";
+  }
+
+  return triggerAboveThreshold ? "stop-loss" : "take-profit";
+}
+
+function isPlausibleUnixSeconds(value: bigint) {
+  return value >= MIN_PLAUSIBLE_UNIX_SECONDS && value <= MAX_PLAUSIBLE_UNIX_SECONDS;
+}
+
 function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPerpsPosition | null {
   if (bytes.length < 8 + 32 + 32 + 32 + 32 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 16 + 8 + 1) {
     throw new Error(`Jupiter Perps position account ${accountRef} is smaller than expected.`);
   }
 
   // This layout follows Jupiter's published Position account fields in order.
-  // If Jupiter updates the on-chain struct, this decoder must be updated to match.
-  const discriminator = bytes.slice(0, 8);
-  if (!discriminator.every((value, index) => value === POSITION_ACCOUNT_DISCRIMINATOR[index])) {
-    throw new Error(`Jupiter Perps position account ${accountRef} has an unexpected discriminator.`);
-  }
+  // We validate the documented field sequence directly instead of trusting a
+  // single account discriminator, because Jupiter's Perps account headers are
+  // still evolving and exact discriminator matching has not been reliable.
 
   let offset = 8;
   const owner = readPublicKey(bytes, offset);
@@ -200,7 +259,16 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
   offset += 8;
   const bump = bytes[offset];
 
-  if (sideDiscriminant === 0 || sizeUsd === 0n) {
+  if (
+    sideDiscriminant === 0 ||
+    sizeUsd === 0n ||
+    owner.equals(PublicKey.default) ||
+    pool.equals(PublicKey.default) ||
+    custody.equals(PublicKey.default) ||
+    collateralCustody.equals(PublicKey.default) ||
+    !isPlausibleUnixSeconds(openTime) ||
+    !isPlausibleUnixSeconds(updateTime)
+  ) {
     return null;
   }
 
@@ -219,6 +287,9 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
     marketSymbol: market?.symbol ?? `${custody.toBase58().slice(0, 4)}...${custody.toBase58().slice(-4)}`,
     marketName: market?.marketName ?? "Jupiter Perps position",
     marketAddress: market?.marketAddress ?? custody.toBase58(),
+    custodyAddress: custody.toBase58(),
+    collateralCustodyAddress: collateralCustody.toBase58(),
+    collateralSymbol,
     imageUri: null,
     side: sideDiscriminant === 2 ? "short" : "long",
     entryPrice,
@@ -236,6 +307,111 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
     stopLoss: null,
     accountRef,
     lastUpdated: Number(updateTime) * 1000,
+  };
+}
+
+function decodePositionRequestAccount(accountRef: string, bytes: Uint8Array): JupiterPerpsPendingTrigger | null {
+  if (bytes.length < POSITION_REQUEST_MIN_BYTES || hasDiscriminator(bytes, POSITION_ACCOUNT_DISCRIMINATOR)) {
+    return null;
+  }
+
+  let offset = 8;
+  const owner = readPublicKey(bytes, offset);
+  offset += 32;
+  const pool = readPublicKey(bytes, offset);
+  offset += 32;
+  const custody = readPublicKey(bytes, offset);
+  offset += 32;
+  const collateralCustody = readPublicKey(bytes, offset);
+  offset += 32;
+  const mint = readPublicKey(bytes, offset);
+  offset += 32;
+  const openTime = readI64(bytes, offset);
+  offset += 8;
+  const updateTime = readI64(bytes, offset);
+  offset += 8;
+  const sizeUsdDelta = readU64(bytes, offset);
+  offset += 8;
+  const collateralDelta = readU64(bytes, offset);
+  offset += 8;
+  const requestChangeDiscriminant = bytes[offset];
+  offset += 1;
+  const requestTypeDiscriminant = bytes[offset];
+  offset += 1;
+  const sideDiscriminant = bytes[offset];
+  offset += 1;
+  const priceSlippage = readU64(bytes, offset);
+  offset += 8;
+  const jupiterMinimumOut = readU64(bytes, offset);
+  offset += 8;
+  const preSwapAmount = readU64(bytes, offset);
+  offset += 8;
+  const triggerPrice = readU64(bytes, offset);
+  offset += 8;
+  const triggerAboveThresholdByte = bytes[offset];
+  const triggerAboveThreshold = readBool(bytes, offset);
+  offset += 1;
+  const entirePositionByte = bytes[offset];
+  const entirePosition = readBool(bytes, offset);
+  offset += 1;
+  const executedByte = bytes[offset];
+  const executed = readBool(bytes, offset);
+  offset += 1;
+  const counter = readU64(bytes, offset);
+  offset += 8;
+  const bump = bytes[offset];
+
+  if (
+    sideDiscriminant === 0 ||
+    triggerPrice === 0n ||
+    executed ||
+    owner.equals(PublicKey.default) ||
+    pool.equals(PublicKey.default) ||
+    custody.equals(PublicKey.default) ||
+    collateralCustody.equals(PublicKey.default) ||
+    mint.equals(PublicKey.default) ||
+    !isPlausibleUnixSeconds(openTime) ||
+    !isPlausibleUnixSeconds(updateTime)
+  ) {
+    return null;
+  }
+
+  // These fields are documented by Jupiter and used here as sanity checks so we
+  // do not mis-classify unrelated owner-scoped accounts as TP/SL requests.
+  if (
+    requestChangeDiscriminant > 2 ||
+    requestTypeDiscriminant > 3 ||
+    (triggerAboveThresholdByte !== 0 && triggerAboveThresholdByte !== 1) ||
+    (entirePositionByte !== 0 && entirePositionByte !== 1) ||
+    (executedByte !== 0 && executedByte !== 1)
+  ) {
+    return null;
+  }
+
+  const side: JupiterPerpsPositionSide = sideDiscriminant === 2 ? "short" : "long";
+  const market = JUPITER_CUSTODY_MARKETS.get(custody.toBase58());
+  const collateralSymbol = JUPITER_COLLATERAL_SYMBOLS.get(collateralCustody.toBase58()) ?? "Unknown";
+
+  return {
+    id: accountRef,
+    source: "rpc-direct",
+    platformId: JUPITER_EXCHANGE_PLATFORM,
+    marketSymbol: market?.symbol ?? `${custody.toBase58().slice(0, 4)}...${custody.toBase58().slice(-4)}`,
+    marketName: market?.marketName ?? "Jupiter Perps trigger request",
+    marketAddress: market?.marketAddress ?? custody.toBase58(),
+    custodyAddress: custody.toBase58(),
+    collateralCustodyAddress: collateralCustody.toBase58(),
+    collateralSymbol,
+    side,
+    kind: getTriggerKind(side, triggerAboveThreshold),
+    triggerPrice: atomicUsdToNumber(triggerPrice),
+    sizeDeltaUsd: atomicUsdToNumber(sizeUsdDelta),
+    collateralDelta: Number(collateralDelta),
+    entirePosition,
+    triggerAboveThreshold,
+    executed,
+    accountRef,
+    lastUpdated: Number(updateTime || openTime) * 1000,
   };
 }
 
@@ -273,6 +449,9 @@ function mapLeveragePosition(
     marketSymbol,
     marketName,
     marketAddress,
+    custodyAddress: null,
+    collateralCustodyAddress: null,
+    collateralSymbol: null,
     imageUri: position.imageUri ?? tokenMeta?.logoURI ?? null,
     side: position.side === "short" ? "short" : "long",
     entryPrice: toFiniteNumber(position.entryPrice),
@@ -293,11 +472,45 @@ function mapLeveragePosition(
   };
 }
 
-export async function fetchJupiterPerpsPositions(walletAddress: string): Promise<JupiterPerpsPosition[]> {
+function applyPendingTriggersToPositions(
+  positions: JupiterPerpsPosition[],
+  pendingTriggers: JupiterPerpsPendingTrigger[]
+) {
+  const triggersByKey = new Map<string, JupiterPerpsPendingTrigger[]>();
+  for (const trigger of pendingTriggers) {
+    const key = getPositionKey(trigger);
+    const existing = triggersByKey.get(key) ?? [];
+    existing.push(trigger);
+    triggersByKey.set(key, existing);
+  }
+
+  return positions.map((position) => {
+    const matches = triggersByKey.get(getPositionKey(position)) ?? [];
+    let takeProfit = position.takeProfit;
+    let stopLoss = position.stopLoss;
+
+    for (const trigger of matches) {
+      if (trigger.kind === "take-profit" && takeProfit === null) {
+        takeProfit = trigger.triggerPrice;
+      }
+      if (trigger.kind === "stop-loss" && stopLoss === null) {
+        stopLoss = trigger.triggerPrice;
+      }
+    }
+
+    return {
+      ...position,
+      takeProfit,
+      stopLoss,
+    };
+  });
+}
+
+export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): Promise<JupiterPerpsAccountSnapshot> {
   const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() || clusterApiUrl("mainnet-beta");
 
   try {
-    return await fetchJupiterPerpsPositionsFromRpc(walletAddress, rpcUrl);
+    return await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
   } catch {
     // Fall back to Jupiter's Portfolio API if the direct reader cannot complete successfully.
   }
@@ -338,24 +551,36 @@ export async function fetchJupiterPerpsPositions(walletAddress: string): Promise
 
   const filteredPositions = extractLeveragePositions(filteredPayload);
   if (filteredPositions.length > 0) {
-    return filteredPositions;
+    return {
+      positions: filteredPositions,
+      pendingTriggers: [],
+    };
   }
 
   const filteredFailure = getFailedReport(filteredPayload);
   if (!filteredFailure?.error) {
-    return [];
+    return {
+      positions: [],
+      pendingTriggers: [],
+    };
   }
 
   try {
     const fallbackPayload = await fetchPortfolio(`${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}`);
     const fallbackPositions = extractLeveragePositions(fallbackPayload);
     if (fallbackPositions.length > 0) {
-      return fallbackPositions;
+      return {
+        positions: fallbackPositions,
+        pendingTriggers: [],
+      };
     }
 
     const fallbackFailure = getFailedReport(fallbackPayload);
     if (!fallbackFailure?.error) {
-      return [];
+      return {
+        positions: [],
+        pendingTriggers: [],
+      };
     }
   } catch {
     // Keep the original fetcher error as the user-facing signal when the broader portfolio retry also fails.
@@ -364,21 +589,20 @@ export async function fetchJupiterPerpsPositions(walletAddress: string): Promise
   throw new Error(getFriendlyPortfolioErrorMessage(filteredFailure.error));
 }
 
-export async function fetchJupiterPerpsPositionsFromRpc(walletAddress: string, rpcUrl: string) {
+export async function fetchJupiterPerpsPositions(walletAddress: string): Promise<JupiterPerpsPosition[]> {
+  const snapshot = await fetchJupiterPerpsAccountSnapshot(walletAddress);
+  return snapshot.positions;
+}
+
+export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: string, rpcUrl: string): Promise<JupiterPerpsAccountSnapshot> {
   const connection = new Connection(rpcUrl, "confirmed");
   const owner = new PublicKey(walletAddress);
 
-  // Read Position accounts directly from the Jupiter Perps program for this wallet owner.
-  // This avoids the beta Portfolio API decoder path that has been returning enum discriminant errors.
-  const accounts = await connection.getProgramAccounts(JUPITER_PERPS_PROGRAM_ID, {
+  // Scan all owner-scoped accounts once, then classify Position vs
+  // PositionRequest by Jupiter's documented field layouts.
+  const ownerScopedAccounts = await connection.getProgramAccounts(JUPITER_PERPS_PROGRAM_ID, {
     commitment: "confirmed",
     filters: [
-      {
-        memcmp: {
-          offset: 0,
-          bytes: POSITION_ACCOUNT_DISCRIMINATOR_B58,
-        },
-      },
       {
         memcmp: {
           offset: 8,
@@ -388,7 +612,7 @@ export async function fetchJupiterPerpsPositionsFromRpc(walletAddress: string, r
     ],
   });
 
-  return accounts
+  const positions = ownerScopedAccounts
     .map(({ pubkey, account }) => {
       try {
         return decodePositionAccount(pubkey.toBase58(), account.data);
@@ -397,6 +621,25 @@ export async function fetchJupiterPerpsPositionsFromRpc(walletAddress: string, r
       }
     })
     .filter((position): position is JupiterPerpsPosition => position !== null);
+
+  const pendingTriggers = ownerScopedAccounts
+    .map(({ pubkey, account }) => {
+      try {
+        return decodePositionRequestAccount(pubkey.toBase58(), account.data);
+      } catch {
+        return null;
+      }
+    })
+    .filter((trigger): trigger is JupiterPerpsPendingTrigger => trigger !== null);
+
+  if (ownerScopedAccounts.length > 0 && positions.length === 0 && pendingTriggers.length === 0) {
+    throw new Error("Direct Jupiter Perps account reads returned owner-scoped data, but none matched the documented Position or PositionRequest layouts.");
+  }
+
+  return {
+    positions: applyPendingTriggersToPositions(positions, pendingTriggers),
+    pendingTriggers,
+  };
 }
 
 export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
@@ -408,6 +651,9 @@ export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
       marketSymbol: "SOL",
       marketName: "Solana Perps",
       marketAddress: "So11111111111111111111111111111111111111112",
+      custodyAddress: "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz",
+      collateralCustodyAddress: "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa",
+      collateralSymbol: "USDC",
       imageUri: null,
       side: "long",
       entryPrice: 148.2,
@@ -433,6 +679,9 @@ export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
       marketSymbol: "BTC",
       marketName: "Bitcoin Perps",
       marketAddress: "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+      custodyAddress: "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm",
+      collateralCustodyAddress: "4vkNeXiYEUizLdrpdPS1eC2mccyM4NUPRtERrk6ZETkk",
+      collateralSymbol: "USDT",
       imageUri: null,
       side: "short",
       entryPrice: 104250,
@@ -450,6 +699,53 @@ export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
       stopLoss: 105500,
       accountRef: "mock-position-btc",
       lastUpdated: Date.now() - 420000,
+    },
+  ];
+}
+
+export function getMockJupiterPerpsPendingTriggers(): JupiterPerpsPendingTrigger[] {
+  return [
+    {
+      id: "mock-sol-tp",
+      source: "mock",
+      platformId: "jupiter-exchange",
+      marketSymbol: "SOL",
+      marketName: "Solana Perps",
+      marketAddress: "So11111111111111111111111111111111111111112",
+      custodyAddress: "7xS2gz2bTp3fwCC7knJvUWTEU9Tycczu6VhJYKgi1wdz",
+      collateralCustodyAddress: "G18jKKXQwBbrHeiK3C9MRXhkHsLHf7XgCSisykV46EZa",
+      collateralSymbol: "USDC",
+      side: "long",
+      kind: "take-profit",
+      triggerPrice: 165,
+      sizeDeltaUsd: 1896.75,
+      collateralDelta: 0,
+      entirePosition: true,
+      triggerAboveThreshold: true,
+      executed: false,
+      accountRef: "mock-sol-tp-ref",
+      lastUpdated: Date.now() - 120000,
+    },
+    {
+      id: "mock-btc-sl",
+      source: "mock",
+      platformId: "jupiter-exchange",
+      marketSymbol: "BTC",
+      marketName: "Bitcoin Perps",
+      marketAddress: "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+      custodyAddress: "5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm",
+      collateralCustodyAddress: "4vkNeXiYEUizLdrpdPS1eC2mccyM4NUPRtERrk6ZETkk",
+      collateralSymbol: "USDT",
+      side: "short",
+      kind: "stop-loss",
+      triggerPrice: 105500,
+      sizeDeltaUsd: 1868.04,
+      collateralDelta: 0,
+      entirePosition: false,
+      triggerAboveThreshold: true,
+      executed: false,
+      accountRef: "mock-btc-sl-ref",
+      lastUpdated: Date.now() - 240000,
     },
   ];
 }

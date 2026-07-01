@@ -14,7 +14,11 @@ import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { usePhantomBrowserSdkWallet } from "@/hooks/usePhantomBrowserSdkWallet";
 import { formatUsd } from "@/lib/utils";
-import { shortenWalletAddress, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
+import {
+  shortenWalletAddress,
+  type JupiterPerpsPendingTrigger,
+  type JupiterPerpsPosition,
+} from "@/lib/jupiterPerps";
 
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
   if (value === null || !Number.isFinite(value)) return "-";
@@ -105,6 +109,8 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
         <PositionMetric label="Value" value={position.positionValue === null ? "-" : formatUsd(position.positionValue)} />
         <PositionMetric label="Collateral" value={position.collateralValue === null ? "-" : formatUsd(position.collateralValue)} />
         <PositionMetric label="Leverage" value={formatPercent(position.leverage)} />
+        <PositionMetric label="Pending TP" value={position.takeProfit === null ? "-" : formatUsd(position.takeProfit)} />
+        <PositionMetric label="Pending SL" value={position.stopLoss === null ? "-" : formatUsd(position.stopLoss)} />
         <PositionMetric
           label="Unrealized PnL"
           value={position.unrealizedPnl === null ? "-" : formatUsd(position.unrealizedPnl)}
@@ -123,6 +129,32 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
         <span className="subtext">
           Funding/Borrow {position.borrowSnapshot ?? position.fundingSnapshot ?? "Not exposed by the current Portfolio API"}
         </span>
+      </div>
+    </article>
+  );
+}
+
+function PendingTriggerCard({ trigger }: { trigger: JupiterPerpsPendingTrigger }) {
+  return (
+    <article className="perps-trigger-card">
+      <div className="perps-trigger-head">
+        <div className="perps-position-symbol-row">
+          <strong>{trigger.marketSymbol}</strong>
+          <span className={`perps-side-badge ${trigger.side === "long" ? "long" : "short"}`}>
+            {trigger.side === "long" ? "Long" : "Short"}
+          </span>
+          <span className={`perps-trigger-badge ${trigger.kind === "take-profit" ? "tp" : "sl"}`}>
+            {trigger.kind === "take-profit" ? "TP" : "SL"}
+          </span>
+        </div>
+        <strong>{trigger.triggerPrice === null ? "-" : formatUsd(trigger.triggerPrice)}</strong>
+      </div>
+      <div className="perps-trigger-meta">
+        <span className="subtext">
+          {trigger.entirePosition ? "Entire position" : "Partial size"}
+          {trigger.sizeDeltaUsd !== null ? `, ${formatUsd(trigger.sizeDeltaUsd)} tracked` : ""}
+        </span>
+        <span className="subtext">Updated {formatTimestamp(trigger.lastUpdated)}</span>
       </div>
     </article>
   );
@@ -168,7 +200,7 @@ function JupiterPerpsPositionWidgetBody() {
   const isConnecting = phantomMobileWallet.isConnecting || adapterConnecting;
   const isDisconnecting = phantomMobileWallet.isDisconnecting || adapterDisconnecting;
   const walletAddress = phantomMobileWallet.walletAddress ?? publicKey?.toBase58() ?? null;
-  const { positions, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
+  const { positions, pendingTriggers, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     walletAddress,
     showMockData,
   });
@@ -262,8 +294,17 @@ function JupiterPerpsPositionWidgetBody() {
     }
   }
 
-  const shouldShowDisconnectedState = !isConnected && !showMockData && positions.length === 0;
-  const hasNoPositions = isConnected && !isLoading && !error && positions.length === 0;
+  const shouldShowDisconnectedState =
+    !isConnected &&
+    !showMockData &&
+    positions.length === 0 &&
+    pendingTriggers.length === 0;
+  const hasNoPerpsState =
+    isConnected &&
+    !isLoading &&
+    !error &&
+    positions.length === 0 &&
+    pendingTriggers.length === 0;
 
   return (
     <div className="perps-widget-shell">
@@ -408,7 +449,7 @@ function JupiterPerpsPositionWidgetBody() {
           </div>
         ) : null}
 
-        {!isLoading && hasNoPositions ? (
+        {!isLoading && hasNoPerpsState ? (
           <div className="perps-empty-state">
             <strong>No open Jupiter Perps positions found.</strong>
             <span className="subtext">If this wallet opens a Jupiter Perps position later, it will appear here on refresh.</span>
@@ -420,12 +461,41 @@ function JupiterPerpsPositionWidgetBody() {
             {positions.map((position) => (
               <PositionCard key={position.id} position={position} />
             ))}
+            {pendingTriggers.length > 0 ? (
+              <section className="perps-trigger-section">
+                <div className="perps-trigger-section-head">
+                  <strong>Pending TP / SL</strong>
+                  <span className="subtext">{pendingTriggers.length} active on-chain request{pendingTriggers.length === 1 ? "" : "s"}</span>
+                </div>
+                <div className="perps-trigger-list">
+                  {pendingTriggers.map((trigger) => (
+                    <PendingTriggerCard key={trigger.id} trigger={trigger} />
+                  ))}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        ) : null}
+
+        {!isLoading && positions.length === 0 && pendingTriggers.length > 0 ? (
+          <div className="perps-list">
+            <section className="perps-trigger-section">
+              <div className="perps-trigger-section-head">
+                <strong>Pending TP / SL</strong>
+                <span className="subtext">No currently open positions decoded, but active trigger requests were found on-chain.</span>
+              </div>
+              <div className="perps-trigger-list">
+                {pendingTriggers.map((trigger) => (
+                  <PendingTriggerCard key={trigger.id} trigger={trigger} />
+                ))}
+              </div>
+            </section>
           </div>
         ) : null}
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: direct Jupiter Perps program account reads over Solana RPC, with Jupiter&apos;s Portfolio API used only as a fallback if the live account read cannot complete.
+        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, with Jupiter&apos;s Portfolio API used only as a fallback if the live account read cannot complete.
       </div>
     </div>
   );

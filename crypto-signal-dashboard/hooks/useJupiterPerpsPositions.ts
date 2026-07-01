@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
-  fetchJupiterPerpsPositions,
+  fetchJupiterPerpsAccountSnapshot,
+  getMockJupiterPerpsPendingTriggers,
   getMockJupiterPerpsPositions,
+  type JupiterPerpsPendingTrigger,
   type JupiterPerpsPosition,
 } from "@/lib/jupiterPerps";
 
@@ -15,6 +17,7 @@ type UseJupiterPerpsPositionsOptions = {
 
 type JupiterPerpsPositionsState = {
   positions: JupiterPerpsPosition[];
+  pendingTriggers: JupiterPerpsPendingTrigger[];
   isLoading: boolean;
   error: string | null;
   isMock: boolean;
@@ -46,6 +49,7 @@ export function useJupiterPerpsPositions({
   showMockData,
 }: UseJupiterPerpsPositionsOptions): JupiterPerpsPositionsState {
   const [positions, setPositions] = useState<JupiterPerpsPosition[]>([]);
+  const [pendingTriggers, setPendingTriggers] = useState<JupiterPerpsPendingTrigger[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isMock, setIsMock] = useState(false);
@@ -56,6 +60,7 @@ export function useJupiterPerpsPositions({
       setIsLoading(false);
       setIsMock(showMockData);
       setPositions(showMockData ? getMockJupiterPerpsPositions() : []);
+      setPendingTriggers(showMockData ? getMockJupiterPerpsPendingTriggers() : []);
       return;
     }
 
@@ -63,17 +68,20 @@ export function useJupiterPerpsPositions({
     setError(null);
 
     try {
-      const next = await fetchJupiterPerpsPositions(walletAddress);
-      setPositions(next);
+      const next = await fetchJupiterPerpsAccountSnapshot(walletAddress);
+      setPositions(next.positions);
+      setPendingTriggers(next.pendingTriggers);
       setIsMock(false);
     } catch (loadError) {
       const friendlyError = getFriendlyErrorMessage(loadError);
       setError(friendlyError);
       if (showMockData) {
         setPositions(getMockJupiterPerpsPositions());
+        setPendingTriggers(getMockJupiterPerpsPendingTriggers());
         setIsMock(true);
       } else {
         setPositions([]);
+        setPendingTriggers([]);
         setIsMock(false);
       }
     } finally {
@@ -87,6 +95,7 @@ export function useJupiterPerpsPositions({
 
   return {
     positions,
+    pendingTriggers,
     isLoading,
     error,
     isMock,
