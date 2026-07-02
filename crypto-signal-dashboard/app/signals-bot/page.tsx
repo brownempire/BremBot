@@ -12,6 +12,7 @@ import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/Manua
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { JupiterPerpsPositionWidget } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
+import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -286,6 +287,10 @@ function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const walletAddress = wallet.publicKey?.toBase58() ?? null;
+  const { positions: livePerpsPositions, pendingTriggers: livePerpsPendingTriggers } = useJupiterPerpsPositions({
+    walletAddress,
+    showMockData: false,
+  });
 
   const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
@@ -1432,6 +1437,45 @@ function DashboardPage() {
   }, [refreshWalletPortfolio]);
 
   useEffect(() => {
+    const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
+    const selectedTokenSymbol = selectedMarket?.pair.split("/")[0] ?? null;
+
+    if (selectedTokenSymbol) {
+      const latestPerpsPosition = [...livePerpsPositions]
+        .filter(
+          (position) =>
+            position.marketSymbol === selectedTokenSymbol &&
+            Number.isFinite(position.entryPrice) &&
+            position.entryPrice !== null
+        )
+        .sort((left, right) => (right.lastUpdated ?? 0) - (left.lastUpdated ?? 0))[0];
+
+      if (latestPerpsPosition?.entryPrice) {
+        const pendingTp =
+          latestPerpsPosition.takeProfit ??
+          [...livePerpsPendingTriggers]
+            .filter(
+              (trigger) =>
+                trigger.marketSymbol === selectedTokenSymbol &&
+                trigger.kind === "take-profit" &&
+                Number.isFinite(trigger.triggerPrice) &&
+                trigger.triggerPrice !== null
+            )
+            .sort((left, right) => (right.lastUpdated ?? 0) - (left.lastUpdated ?? 0))[0]?.triggerPrice ??
+          null;
+
+        setTradeChartOverlay({
+          symbol: selectedMarket?.pair ?? `${selectedTokenSymbol}/USD`,
+          tokenSymbol: selectedTokenSymbol,
+          entryPrice: latestPerpsPosition.entryPrice,
+          targetPrice: pendingTp,
+          side: latestPerpsPosition.side === "short" ? "sell" : "buy",
+          updatedAt: latestPerpsPosition.lastUpdated ?? Date.now(),
+        });
+        return;
+      }
+    }
+
     const latestAutoTrade = [...recentTrades]
       .filter((trade) => trade.source === "auto" && trade.symbol && Number.isFinite(trade.entryPrice))
       .sort((left, right) => right.timestamp - left.timestamp)[0];
@@ -1457,7 +1501,15 @@ function DashboardPage() {
       side: latestAutoTrade.tradeDirection === "sell" ? "sell" : "buy",
       updatedAt: latestAutoTrade.timestamp,
     });
-  }, [autoTradeSettings.disableTpLock, pendingTakeProfit, recentTrades]);
+  }, [
+    autoTradeSettings.disableTpLock,
+    livePerpsPendingTriggers,
+    livePerpsPositions,
+    pendingTakeProfit,
+    recentTrades,
+    selectedChartSlotId,
+    trackedMarkets,
+  ]);
 
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
