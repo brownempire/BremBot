@@ -119,6 +119,7 @@ const JUPITER_PORTFOLIO_BASE = "https://api.jup.ag/portfolio/v1";
 const JUPITER_EXCHANGE_PLATFORM = "jupiter-exchange";
 const JUPITER_PERPS_PROGRAM_ID = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
 const POSITION_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0xa2, 0xbf, 0x9c, 0x22, 0x97, 0x83, 0x41, 0x8c]);
+const INSTANT_TPSL_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0x0c, 0x26, 0xfa, 0xc7, 0x2e, 0x9a, 0x20, 0xd8]);
 const USDC_DECIMALS = 6;
 const POSITION_REQUEST_MIN_BYTES = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 1;
 const MIN_PLAUSIBLE_UNIX_SECONDS = 1577836800n;
@@ -311,7 +312,11 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
 }
 
 function decodePositionRequestAccount(accountRef: string, bytes: Uint8Array): JupiterPerpsPendingTrigger | null {
-  if (bytes.length < POSITION_REQUEST_MIN_BYTES || hasDiscriminator(bytes, POSITION_ACCOUNT_DISCRIMINATOR)) {
+  if (
+    bytes.length < POSITION_REQUEST_MIN_BYTES ||
+    hasDiscriminator(bytes, POSITION_ACCOUNT_DISCRIMINATOR) ||
+    hasDiscriminator(bytes, INSTANT_TPSL_ACCOUNT_DISCRIMINATOR)
+  ) {
     return null;
   }
 
@@ -410,6 +415,113 @@ function decodePositionRequestAccount(accountRef: string, bytes: Uint8Array): Ju
     entirePosition,
     triggerAboveThreshold,
     executed,
+    accountRef,
+    lastUpdated: Number(updateTime || openTime) * 1000,
+  };
+}
+
+function inferTriggerKindFromPrice(
+  side: JupiterPerpsPositionSide,
+  entryPrice: number | null,
+  triggerPrice: number | null
+): JupiterPerpsPendingTriggerKind {
+  if (entryPrice === null || triggerPrice === null) {
+    return side === "long" ? "take-profit" : "stop-loss";
+  }
+
+  if (side === "long") {
+    return triggerPrice >= entryPrice ? "take-profit" : "stop-loss";
+  }
+
+  return triggerPrice <= entryPrice ? "take-profit" : "stop-loss";
+}
+
+function decodeInstantTpslAccount(
+  accountRef: string,
+  bytes: Uint8Array,
+  positionsByAccountRef: Map<string, JupiterPerpsPosition>
+): JupiterPerpsPendingTrigger | null {
+  if (bytes.length < 232 || !hasDiscriminator(bytes, INSTANT_TPSL_ACCOUNT_DISCRIMINATOR)) {
+    return null;
+  }
+
+  let offset = 8;
+  const owner = readPublicKey(bytes, offset);
+  offset += 32;
+  const pool = readPublicKey(bytes, offset);
+  offset += 32;
+  const custody = readPublicKey(bytes, offset);
+  offset += 32;
+  const positionAccount = readPublicKey(bytes, offset);
+  offset += 32;
+  const collateralMint = readPublicKey(bytes, offset);
+  offset += 32;
+  const openTime = readI64(bytes, offset);
+  offset += 8;
+  const updateTime = readI64(bytes, offset);
+  offset += 8;
+  const sizeUsdDelta = readU64(bytes, offset);
+  offset += 8;
+  const collateralDelta = readU64(bytes, offset);
+  offset += 8;
+  const requestChangeDiscriminant = bytes[offset];
+  offset += 1;
+  const requestTypeDiscriminant = bytes[offset];
+  offset += 1;
+  const sideDiscriminant = bytes[offset];
+  offset += 1;
+
+  // The live InstantCreateTpsl account uses a packed header after the enum bytes.
+  // Mainnet account inspection shows the trigger price begins at byte 207.
+  // We anchor to the account discriminator and shared header above, then decode
+  // only the fields that have been verified against live owner-scoped accounts.
+  const triggerPrice = atomicUsdToNumber(readU64(bytes, 207));
+  const executionFeeOrPriorityBps = readU64(bytes, 220);
+  const maxSlippageBps = readU64(bytes, 228);
+
+  if (
+    owner.equals(PublicKey.default) ||
+    pool.equals(PublicKey.default) ||
+    custody.equals(PublicKey.default) ||
+    positionAccount.equals(PublicKey.default) ||
+    collateralMint.equals(PublicKey.default) ||
+    !isPlausibleUnixSeconds(openTime) ||
+    !isPlausibleUnixSeconds(updateTime) ||
+    sideDiscriminant === 0 ||
+    !Number.isFinite(triggerPrice) ||
+    triggerPrice <= 0
+  ) {
+    return null;
+  }
+
+  const market = JUPITER_CUSTODY_MARKETS.get(custody.toBase58());
+  const linkedPosition = positionsByAccountRef.get(positionAccount.toBase58());
+  const side: JupiterPerpsPositionSide = sideDiscriminant === 2 ? "short" : "long";
+  const inferredSizeUsd = atomicUsdToNumber(sizeUsdDelta) || atomicUsdToNumber(executionFeeOrPriorityBps);
+  const inferredCollateralDelta = atomicUsdToNumber(collateralDelta) || Number(maxSlippageBps);
+  const kind = inferTriggerKindFromPrice(side, linkedPosition?.entryPrice ?? null, triggerPrice);
+
+  return {
+    id: accountRef,
+    source: "rpc-direct",
+    platformId: JUPITER_EXCHANGE_PLATFORM,
+    marketSymbol: linkedPosition?.marketSymbol ?? market?.symbol ?? `${custody.toBase58().slice(0, 4)}...${custody.toBase58().slice(-4)}`,
+    marketName: linkedPosition?.marketName ?? market?.marketName ?? "Jupiter Perps TP/SL request",
+    marketAddress: linkedPosition?.marketAddress ?? market?.marketAddress ?? custody.toBase58(),
+    custodyAddress: linkedPosition?.custodyAddress ?? custody.toBase58(),
+    collateralCustodyAddress: linkedPosition?.collateralCustodyAddress ?? null,
+    collateralSymbol: linkedPosition?.collateralSymbol ?? JUPITER_COLLATERAL_SYMBOLS.get(collateralMint.toBase58()) ?? "Unknown",
+    side,
+    kind,
+    triggerPrice,
+    sizeDeltaUsd: inferredSizeUsd > 0 ? inferredSizeUsd : null,
+    collateralDelta: inferredCollateralDelta > 0 ? inferredCollateralDelta : null,
+    entirePosition: linkedPosition?.positionValue !== null && inferredSizeUsd > 0
+      ? Math.abs((linkedPosition?.positionValue ?? 0) - inferredSizeUsd) < 0.01
+      : false,
+    triggerAboveThreshold:
+      linkedPosition?.entryPrice !== null ? triggerPrice >= (linkedPosition?.entryPrice ?? 0) : kind === "take-profit",
+    executed: false,
     accountRef,
     lastUpdated: Number(updateTime || openTime) * 1000,
   };
@@ -622,10 +734,19 @@ export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: str
     })
     .filter((position): position is JupiterPerpsPosition => position !== null);
 
+  const positionsByAccountRef = new Map(
+    positions
+      .filter((position) => typeof position.accountRef === "string" && position.accountRef.length > 0)
+      .map((position) => [position.accountRef as string, position])
+  );
+
   const pendingTriggers = ownerScopedAccounts
     .map(({ pubkey, account }) => {
       try {
-        return decodePositionRequestAccount(pubkey.toBase58(), account.data);
+        return (
+          decodeInstantTpslAccount(pubkey.toBase58(), account.data, positionsByAccountRef) ??
+          decodePositionRequestAccount(pubkey.toBase58(), account.data)
+        );
       } catch {
         return null;
       }
