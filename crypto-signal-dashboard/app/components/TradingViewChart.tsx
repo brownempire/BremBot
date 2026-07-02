@@ -19,6 +19,7 @@ type TradingViewGuide = {
 type TradingViewChartProps = {
   symbol?: string;
   guides?: TradingViewGuide[];
+  pricePoints?: Array<{ t: number; v: number }>;
 };
 
 type IntervalSubscription = {
@@ -98,6 +99,7 @@ function getGuideColor(tone: TradingViewGuide["tone"]) {
 export function TradingViewChart({
   symbol = "COINBASE:BTCUSD",
   guides = [],
+  pricePoints = [],
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const widgetRef = useRef<WidgetApi | null>(null);
@@ -105,6 +107,29 @@ export function TradingViewChart({
   const latestGuidesRef = useRef<TradingViewGuide[]>(guides);
 
   latestGuidesRef.current = guides;
+
+  function buildGuidePositions(
+    guideSet: TradingViewGuide[],
+    values: number[]
+  ): Array<TradingViewGuide & { top: number }> {
+    if (guideSet.length === 0 || values.length === 0) return [];
+
+    const minPrice = Math.min(...values);
+    const maxPrice = Math.max(...values);
+    const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
+    const paddedMin = minPrice - span * 0.15;
+    const paddedMax = maxPrice + span * 0.15;
+    const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+    return guideSet.map((guide) => {
+      const relative = (guide.price - paddedMin) / paddedSpan;
+      const top = 100 - Math.min(100, Math.max(0, relative * 100));
+      return {
+        ...guide,
+        top,
+      };
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +147,10 @@ export function TradingViewChart({
         return;
       }
 
+      const fallbackValues = pricePoints
+        .map((point) => point.v)
+        .filter((value): value is number => Number.isFinite(value) && value > 0);
+
       try {
         const exported = await chart.exportData({
           includedStudies: [],
@@ -133,31 +162,17 @@ export function TradingViewChart({
           .flatMap((point) => [point.value, point.close, point.high, point.low])
           .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
 
-        if (values.length === 0) {
+        const effectiveValues = values.length > 0 ? values : fallbackValues;
+
+        if (effectiveValues.length === 0) {
           setGuidePositions([]);
           return;
         }
 
-        const minPrice = Math.min(...values);
-        const maxPrice = Math.max(...values);
-        const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
-        const paddedMin = minPrice - span * 0.15;
-        const paddedMax = maxPrice + span * 0.15;
-        const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
-
-        setGuidePositions(
-          validGuides.map((guide) => {
-            const relative = (guide.price - paddedMin) / paddedSpan;
-            const top = 100 - Math.min(100, Math.max(0, relative * 100));
-            return {
-              ...guide,
-              top,
-            };
-          })
-        );
+        setGuidePositions(buildGuidePositions(validGuides, effectiveValues));
       } catch {
         if (!cancelled) {
-          setGuidePositions([]);
+          setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
         }
       }
     };
@@ -243,7 +258,7 @@ export function TradingViewChart({
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol]);
+  }, [containerId, pricePoints, symbol]);
 
   useEffect(() => {
     let cancelled = false;
@@ -261,6 +276,10 @@ export function TradingViewChart({
         return;
       }
 
+      const fallbackValues = pricePoints
+        .map((point) => point.v)
+        .filter((value): value is number => Number.isFinite(value) && value > 0);
+
       try {
         const exported = await chart.exportData({
           includedStudies: [],
@@ -272,31 +291,17 @@ export function TradingViewChart({
           .flatMap((point) => [point.value, point.close, point.high, point.low])
           .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
 
-        if (values.length === 0) {
+        const effectiveValues = values.length > 0 ? values : fallbackValues;
+
+        if (effectiveValues.length === 0) {
           setGuidePositions([]);
           return;
         }
 
-        const minPrice = Math.min(...values);
-        const maxPrice = Math.max(...values);
-        const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
-        const paddedMin = minPrice - span * 0.15;
-        const paddedMax = maxPrice + span * 0.15;
-        const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
-
-        setGuidePositions(
-          validGuides.map((guide) => {
-            const relative = (guide.price - paddedMin) / paddedSpan;
-            const top = 100 - Math.min(100, Math.max(0, relative * 100));
-            return {
-              ...guide,
-              top,
-            };
-          })
-        );
+        setGuidePositions(buildGuidePositions(validGuides, effectiveValues));
       } catch {
         if (!cancelled) {
-          setGuidePositions([]);
+          setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
         }
       }
     };
@@ -306,7 +311,7 @@ export function TradingViewChart({
     return () => {
       cancelled = true;
     };
-  }, [guides]);
+  }, [guides, pricePoints]);
 
   return (
     <div className="tradingview-frame">
