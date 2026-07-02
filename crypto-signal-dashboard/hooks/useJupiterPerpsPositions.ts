@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import {
-  fetchJupiterPerpsAccountSnapshot,
   getMockJupiterPerpsPendingTriggers,
   getMockJupiterPerpsPositions,
   type JupiterPerpsPendingTrigger,
@@ -44,6 +43,26 @@ function getFriendlyErrorMessage(error: unknown) {
   return "Unable to load Jupiter Perps positions right now.";
 }
 
+async function fetchPerpsSnapshotFromApi(walletAddress: string) {
+  const response = await fetch(`/api/jupiter/perps?wallet=${encodeURIComponent(walletAddress)}`, {
+    cache: "no-store",
+  });
+
+  const payload = (await response.json()) as
+    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[] }
+    | { error?: string };
+
+  if (!response.ok) {
+    throw new Error("error" in payload && payload.error ? payload.error : "Unable to load Jupiter Perps positions right now.");
+  }
+
+  if (!("positions" in payload) || !("pendingTriggers" in payload)) {
+    throw new Error("Invalid Jupiter Perps response.");
+  }
+
+  return payload;
+}
+
 export function useJupiterPerpsPositions({
   walletAddress,
   showMockData,
@@ -68,7 +87,7 @@ export function useJupiterPerpsPositions({
     setError(null);
 
     try {
-      const next = await fetchJupiterPerpsAccountSnapshot(walletAddress);
+      const next = await fetchPerpsSnapshotFromApi(walletAddress);
       setPositions(next.positions);
       setPendingTriggers(next.pendingTriggers);
       setIsMock(false);

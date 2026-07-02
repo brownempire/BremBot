@@ -2151,7 +2151,6 @@ function DashboardPage() {
           <div className="tradingview-wrap">
             <TradingViewChart
               symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
-              pricePoints={selectedChartMarket ? priceHistory[selectedChartMarket.id] ?? [] : []}
               guides={
                 tradeChartOverlay?.symbol === selectedChartMarket?.pair
                   ? [

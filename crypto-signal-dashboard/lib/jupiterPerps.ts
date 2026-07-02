@@ -1,5 +1,3 @@
-"use client";
-
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
 
 export type JupiterPerpsPositionSide = "long" | "short";
@@ -619,7 +617,10 @@ function applyPendingTriggersToPositions(
 }
 
 export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): Promise<JupiterPerpsAccountSnapshot> {
-  const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() || clusterApiUrl("mainnet-beta");
+  const rpcUrl =
+    process.env.SOLANA_RPC_URL?.trim() ||
+    process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() ||
+    clusterApiUrl("mainnet-beta");
 
   try {
     return await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
