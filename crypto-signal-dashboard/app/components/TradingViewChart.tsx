@@ -136,11 +136,6 @@ export function TradingViewChart({
 
     const recomputeGuidePositions = async () => {
       const chart = widgetRef.current?.activeChart?.();
-      if (!chart?.exportData) {
-        setGuidePositions([]);
-        return;
-      }
-
       const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
       if (validGuides.length === 0) {
         setGuidePositions([]);
@@ -150,6 +145,11 @@ export function TradingViewChart({
       const fallbackValues = pricePoints
         .map((point) => point.v)
         .filter((value): value is number => Number.isFinite(value) && value > 0);
+
+      if (!chart?.exportData) {
+        setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
+        return;
+      }
 
       try {
         const exported = await chart.exportData({
@@ -258,18 +258,13 @@ export function TradingViewChart({
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, pricePoints, symbol]);
+  }, [containerId, symbol]);
 
   useEffect(() => {
     let cancelled = false;
 
     const recomputeGuidePositions = async () => {
       const chart = widgetRef.current?.activeChart?.();
-      if (!chart?.exportData) {
-        setGuidePositions([]);
-        return;
-      }
-
       const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
       if (validGuides.length === 0) {
         setGuidePositions([]);
@@ -279,6 +274,11 @@ export function TradingViewChart({
       const fallbackValues = pricePoints
         .map((point) => point.v)
         .filter((value): value is number => Number.isFinite(value) && value > 0);
+
+      if (!chart?.exportData) {
+        setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
+        return;
+      }
 
       try {
         const exported = await chart.exportData({

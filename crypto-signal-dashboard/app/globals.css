@@ -747,6 +747,7 @@ button:disabled {
 .tradingview-guide-layer {
   position: absolute;
   inset: 0;
+  z-index: 3;
   pointer-events: none;
   overflow: hidden;
 }
@@ -780,6 +781,7 @@ button:disabled {
   position: absolute;
   top: -14px;
   right: 10px;
+  z-index: 4;
   padding: 4px 8px;
   border-radius: 999px;
   background: rgba(10, 14, 24, 0.88);
