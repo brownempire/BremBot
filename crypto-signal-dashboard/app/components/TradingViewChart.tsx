@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 declare global {
   interface Window {
@@ -34,9 +34,14 @@ type VisibleRangeSubscription = {
   subscribe?: (context: unknown, callback: (range: VisibleRange | null) => void) => void;
 };
 
+type CrosshairSubscription = {
+  subscribe?: (context: unknown, callback: (params: { price?: number | null }) => void) => void;
+};
+
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   onVisibleRangeChanged?: () => VisibleRangeSubscription;
+  crossHairMoved?: () => CrosshairSubscription;
   resolution?: () => string;
   getVisibleRange?: () => VisibleRange | null;
   createMultipointShape?: (
@@ -44,6 +49,9 @@ type WidgetChart = {
     options: Record<string, unknown>
   ) => Promise<string | number>;
   removeEntity?: (entityId: string | number) => void;
+  exportData?: (options?: Record<string, unknown>) => Promise<{
+    data?: Array<{ value?: number; close?: number; high?: number; low?: number }>;
+  }>;
 };
 
 type WidgetApi = {
@@ -93,67 +101,60 @@ export function TradingViewChart({
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const widgetRef = useRef<WidgetApi | null>(null);
-  const guideEntityIdsRef = useRef<Array<string | number>>([]);
-  const latestGuidesRef = useRef<TradingViewGuide[]>(guides);
-
-  latestGuidesRef.current = guides;
+  const [guidePositions, setGuidePositions] = useState<Array<TradingViewGuide & { top: number }>>([]);
 
   useEffect(() => {
     let cancelled = false;
 
-    const clearGuideEntities = () => {
+    const recomputeGuidePositions = async () => {
       const chart = widgetRef.current?.activeChart?.();
-      if (!chart?.removeEntity) {
-        guideEntityIdsRef.current = [];
+      if (!chart?.exportData) {
+        setGuidePositions([]);
         return;
       }
 
-      for (const entityId of guideEntityIdsRef.current) {
-        try {
-          chart.removeEntity(entityId);
-        } catch {
-          // Ignore stale entity IDs during redraws.
-        }
+      const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+      if (validGuides.length === 0) {
+        setGuidePositions([]);
+        return;
       }
-      guideEntityIdsRef.current = [];
-    };
 
-    const drawGuides = async () => {
-      const chart = widgetRef.current?.activeChart?.();
-      if (!chart?.createMultipointShape || !chart?.getVisibleRange) return;
+      try {
+        const exported = await chart.exportData({
+          includedStudies: [],
+          includeDisplayedValues: true,
+        });
+        if (cancelled) return;
 
-      clearGuideEntities();
+        const values = (exported.data ?? [])
+          .flatMap((point) => [point.value, point.close, point.high, point.low])
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
 
-      const visibleRange = chart.getVisibleRange();
-      if (!visibleRange) return;
+        if (values.length === 0) {
+          setGuidePositions([]);
+          return;
+        }
 
-      const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
-      for (const guide of validGuides) {
-        try {
-          const entityId = await chart.createMultipointShape(
-            [
-              { time: visibleRange.from, price: guide.price },
-              { time: visibleRange.to, price: guide.price },
-            ],
-            {
-              shape: "trend_line",
-              lock: true,
-              disableSelection: true,
-              disableSave: true,
-              disableUndo: true,
-              overrides: {
-                linecolor: getGuideColor(guide.tone),
-                linewidth: 2,
-                linestyle: 2,
-                showLabel: true,
-                textcolor: getGuideColor(guide.tone),
-              },
-              text: `${guide.label} ${guide.price.toFixed(2)}`,
-            }
-          );
-          guideEntityIdsRef.current.push(entityId);
-        } catch {
-          // Keep the chart usable even if a drawing API call fails.
+        const minPrice = Math.min(...values);
+        const maxPrice = Math.max(...values);
+        const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
+        const paddedMin = minPrice - span * 0.15;
+        const paddedMax = maxPrice + span * 0.15;
+        const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+        setGuidePositions(
+          validGuides.map((guide) => {
+            const relative = (guide.price - paddedMin) / paddedSpan;
+            const top = 100 - Math.min(100, Math.max(0, relative * 100));
+            return {
+              ...guide,
+              top,
+            };
+          })
+        );
+      } catch {
+        if (!cancelled) {
+          setGuidePositions([]);
         }
       }
     };
@@ -163,7 +164,6 @@ export function TradingViewChart({
       if (!container) return;
 
       container.innerHTML = "";
-      clearGuideEntities();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
 
@@ -216,14 +216,18 @@ export function TradingViewChart({
             if (interval) {
               window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
             }
-            void drawGuides();
+            void recomputeGuidePositions();
           });
 
           chart?.onVisibleRangeChanged?.().subscribe?.(null, () => {
-            void drawGuides();
+            void recomputeGuidePositions();
           });
 
-          void drawGuides();
+          chart?.crossHairMoved?.().subscribe?.(null, () => {
+            void recomputeGuidePositions();
+          });
+
+          void recomputeGuidePositions();
         });
       } catch {
         if (!cancelled) {
@@ -237,66 +241,35 @@ export function TradingViewChart({
 
     return () => {
       cancelled = true;
-      clearGuideEntities();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol]);
-
-  useEffect(() => {
-    const rerenderGuides = async () => {
-      const chart = widgetRef.current?.activeChart?.();
-      if (!chart?.getVisibleRange || !chart?.createMultipointShape) return;
-
-      const visibleRange = chart.getVisibleRange();
-      if (!visibleRange) return;
-
-      for (const entityId of guideEntityIdsRef.current) {
-        try {
-          chart.removeEntity?.(entityId);
-        } catch {
-          // Ignore stale entity IDs during redraws.
-        }
-      }
-      guideEntityIdsRef.current = [];
-
-      const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
-      for (const guide of validGuides) {
-        try {
-          const entityId = await chart.createMultipointShape(
-            [
-              { time: visibleRange.from, price: guide.price },
-              { time: visibleRange.to, price: guide.price },
-            ],
-            {
-              shape: "trend_line",
-              lock: true,
-              disableSelection: true,
-              disableSave: true,
-              disableUndo: true,
-              overrides: {
-                linecolor: getGuideColor(guide.tone),
-                linewidth: 2,
-                linestyle: 2,
-                showLabel: true,
-                textcolor: getGuideColor(guide.tone),
-              },
-              text: `${guide.label} ${guide.price.toFixed(2)}`,
-            }
-          );
-          guideEntityIdsRef.current.push(entityId);
-        } catch {
-          // Ignore drawing failures and leave the chart usable.
-        }
-      }
-    };
-
-    void rerenderGuides();
-  }, [guides]);
+  }, [containerId, symbol, guides]);
 
   return (
     <div className="tradingview-frame">
       <div id={containerId} className="tradingview-container" />
+      {guidePositions.length > 0 ? (
+        <div className="tradingview-guide-layer" aria-hidden="true">
+          {guidePositions.map((guide) => (
+            <div
+              key={`${guide.label}-${guide.price}-${guide.tone}`}
+              className={`tradingview-guide tradingview-guide-${guide.tone}`}
+              style={{ top: `${guide.top}%` }}
+            >
+              <span
+                className="tradingview-guide-label"
+                style={{
+                  color: getGuideColor(guide.tone),
+                  borderColor: `${getGuideColor(guide.tone)}66`,
+                }}
+              >
+                {guide.label} {guide.price.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
