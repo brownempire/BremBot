@@ -744,6 +744,7 @@ button:disabled {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
+  background: linear-gradient(180deg, rgba(15, 22, 34, 0.96) 0%, rgba(7, 11, 18, 0.98) 100%);
 }
 
 .tradingview-container {
@@ -753,31 +754,109 @@ button:disabled {
   flex: 1 1 auto;
 }
 
-.lightweight-chart-toolbar {
+.lightweight-chart-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding-top: 2px;
 }
 
-.lightweight-chart-symbol {
+.lightweight-chart-topbar-left,
+.lightweight-chart-topbar-right {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.lightweight-chart-symbol-block {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  color: var(--text);
+  color: var(--subtext);
   font-size: 13px;
 }
 
-.lightweight-chart-symbol span {
-  color: var(--subtext);
-  font-weight: 600;
+.lightweight-chart-symbol-block strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 800;
   letter-spacing: 0.03em;
 }
 
-.lightweight-chart-symbol strong {
-  font-size: 16px;
+.lightweight-chart-symbol-block span {
+  font-weight: 700;
+}
+
+.lightweight-chart-symbol-block .positive {
+  color: #4ce38a;
+}
+
+.lightweight-chart-symbol-block .negative {
+  color: #ff7e7e;
+}
+
+.lightweight-chart-ohlc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--subtext);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lightweight-chart-main {
+  display: flex;
+  gap: 10px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.lightweight-chart-sidebar {
+  width: 54px;
+  flex: 0 0 54px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 144, 184, 0.18);
+  background: rgba(9, 14, 24, 0.92);
+}
+
+.lightweight-chart-sidebar button,
+.lightweight-chart-toolbar-button {
+  border: 1px solid rgba(101, 217, 255, 0.18);
+  background: rgba(15, 25, 39, 0.92);
+  color: var(--subtext);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.lightweight-chart-sidebar button.active,
+.lightweight-chart-toolbar-button.active,
+.lightweight-chart-sidebar button:hover,
+.lightweight-chart-toolbar-button:hover {
   color: var(--text);
+  border-color: rgba(101, 217, 255, 0.48);
+  background: rgba(27, 55, 79, 0.95);
+}
+
+.lightweight-chart-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 144, 184, 0.18);
+  background: linear-gradient(180deg, rgba(15, 20, 31, 0.98) 0%, rgba(8, 12, 18, 0.98) 100%);
+  overflow: hidden;
 }
 
 .lightweight-chart-range-group {
@@ -806,11 +885,6 @@ button:disabled {
 }
 
 .lightweight-chart-empty {
-  position: absolute;
-  left: 24px;
-  right: 24px;
-  bottom: 18px;
-  z-index: 2;
   border-radius: 12px;
   border: 1px solid rgba(101, 217, 255, 0.16);
   background: rgba(8, 12, 20, 0.86);
@@ -819,51 +893,83 @@ button:disabled {
   font-size: 12px;
 }
 
-.tradingview-guide-layer {
+.lightweight-chart-settings {
   position: absolute;
-  inset: 0;
+  top: 14px;
+  right: 14px;
   z-index: 3;
-  pointer-events: none;
-  overflow: hidden;
+  width: min(260px, calc(100% - 28px));
+  border-radius: 12px;
+  border: 1px solid rgba(101, 217, 255, 0.18);
+  background: rgba(8, 12, 20, 0.94);
+  color: var(--subtext);
+  padding: 12px;
+  font-size: 12px;
 }
 
-.tradingview-guide {
-  position: absolute;
-  left: 0;
-  right: 0;
-  border-top: 1px dashed rgba(126, 148, 189, 0.5);
+.lightweight-chart-settings strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 13px;
 }
 
-.tradingview-guide::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: -1px;
-  border-top: 1px solid currentColor;
-  opacity: 0.55;
+.lightweight-chart-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-weight: 600;
 }
 
-.tradingview-guide-entry {
-  color: var(--accent);
+.lightweight-chart-settings p {
+  margin: 8px 0 0;
+  line-height: 1.45;
 }
 
-.tradingview-guide-tp {
-  color: var(--accent-3);
+@media (max-width: 900px) {
+  .lightweight-chart-main {
+    gap: 8px;
+  }
+
+  .lightweight-chart-sidebar {
+    width: 48px;
+    flex-basis: 48px;
+    padding: 6px 4px;
+  }
+
+  .lightweight-chart-sidebar button {
+    padding: 7px 6px;
+    font-size: 11px;
+  }
 }
 
-.tradingview-guide-label {
-  position: absolute;
-  top: -14px;
-  right: 10px;
-  z-index: 4;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(10, 14, 24, 0.88);
-  border: 1px solid rgba(126, 148, 189, 0.3);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+@media (max-width: 640px) {
+  .lightweight-chart-shell {
+    padding: 10px;
+  }
+
+  .lightweight-chart-main {
+    flex-direction: column;
+  }
+
+  .lightweight-chart-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .lightweight-chart-stage {
+    min-height: 360px;
+  }
+
+  .lightweight-chart-ohlc {
+    width: 100%;
+    gap: 8px;
+    font-size: 11px;
+    overflow-x: auto;
+  }
 }
 
 .wallet-holdings {
