@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-
-declare global {
-  interface Window {
-    TradingView?: {
-      widget: new (config: Record<string, unknown>) => unknown;
-    };
-  }
-}
+import {
+  AreaSeries,
+  ColorType,
+  CrosshairMode,
+  LineStyle,
+  createChart,
+  type AreaData,
+  type IChartApi,
+  type IPriceLine,
+  type ISeriesApi,
+  type Time,
+  type UTCTimestamp,
+} from "lightweight-charts";
 
 type TradingViewGuide = {
   label: string;
@@ -22,78 +27,58 @@ type TradingViewChartProps = {
   pricePoints?: Array<{ t: number; v: number }>;
 };
 
-type IntervalSubscription = {
-  subscribe?: (context: unknown, callback: (interval: unknown) => void) => void;
+type ChartRangeKey = "15m" | "1h" | "6h" | "24h" | "all";
+
+const RANGE_STORAGE_KEY = "brembot.lightweight.range.v1";
+const DEFAULT_RANGE: ChartRangeKey = "1h";
+const RANGE_WINDOW_MS: Record<Exclude<ChartRangeKey, "all">, number> = {
+  "15m": 15 * 60 * 1000,
+  "1h": 60 * 60 * 1000,
+  "6h": 6 * 60 * 60 * 1000,
+  "24h": 24 * 60 * 60 * 1000,
 };
-
-type VisibleRange = {
-  from: number;
-  to: number;
-};
-
-type VisibleRangeSubscription = {
-  subscribe?: (context: unknown, callback: (range: VisibleRange | null) => void) => void;
-};
-
-type CrosshairSubscription = {
-  subscribe?: (context: unknown, callback: (params: { price?: number | null }) => void) => void;
-};
-
-type WidgetChart = {
-  onIntervalChanged?: () => IntervalSubscription;
-  onVisibleRangeChanged?: () => VisibleRangeSubscription;
-  crossHairMoved?: () => CrosshairSubscription;
-  resolution?: () => string;
-  getVisibleRange?: () => VisibleRange | null;
-  createMultipointShape?: (
-    points: Array<{ time: number; price: number }>,
-    options: Record<string, unknown>
-  ) => Promise<string | number>;
-  removeEntity?: (entityId: string | number) => void;
-  exportData?: (options?: Record<string, unknown>) => Promise<{
-    data?: Array<{ value?: number; close?: number; high?: number; low?: number }>;
-  }>;
-};
-
-type WidgetApi = {
-  onChartReady?: (callback: () => void) => void;
-  activeChart?: () => WidgetChart;
-  remove?: () => void;
-};
-
-const SCRIPT_ID = "tradingview-widget-script";
-const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v1";
-const DEFAULT_INTERVAL = "5";
-let scriptLoadingPromise: Promise<void> | null = null;
-
-function loadTradingViewScript() {
-  if (window.TradingView?.widget) return Promise.resolve();
-  if (scriptLoadingPromise) return scriptLoadingPromise;
-
-  scriptLoadingPromise = new Promise<void>((resolve, reject) => {
-    const existingScript = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
-    if (existingScript) {
-      existingScript.addEventListener("load", () => resolve(), { once: true });
-      existingScript.addEventListener("error", () => reject(new Error("TradingView script failed")), {
-        once: true,
-      });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = SCRIPT_ID;
-    script.src = "https://s3.tradingview.com/tv.js";
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("TradingView script failed"));
-    document.head.appendChild(script);
-  });
-
-  return scriptLoadingPromise;
-}
 
 function getGuideColor(tone: TradingViewGuide["tone"]) {
   return tone === "tp" ? "#4ce38a" : "#3ba7ff";
+}
+
+function normalizeSymbolLabel(symbol: string) {
+  if (!symbol) return "Market";
+  const normalized = symbol.includes(":") ? symbol.split(":").at(-1) ?? symbol : symbol;
+  return normalized.replace("USD", "/USD");
+}
+
+function buildSeriesData(
+  pricePoints: Array<{ t: number; v: number }>,
+  selectedRange: ChartRangeKey
+): AreaData<Time>[] {
+  const validPoints = pricePoints.filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0);
+  if (validPoints.length === 0) return [];
+
+  const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
+  const filteredPoints =
+    selectedRange === "all"
+      ? validPoints
+      : validPoints.filter((point) => point.t >= latestTimestamp - RANGE_WINDOW_MS[selectedRange]);
+
+  const targetPointCount =
+    selectedRange === "15m" ? 180 : selectedRange === "1h" ? 240 : selectedRange === "6h" ? 360 : 480;
+  const stride = Math.max(1, Math.ceil(filteredPoints.length / targetPointCount));
+  const reduced: typeof filteredPoints = [];
+
+  for (let index = 0; index < filteredPoints.length; index += stride) {
+    reduced.push(filteredPoints[index]);
+  }
+
+  const lastPoint = filteredPoints[filteredPoints.length - 1];
+  if (lastPoint && reduced[reduced.length - 1]?.t !== lastPoint.t) {
+    reduced.push(lastPoint);
+  }
+
+  return reduced.map((point) => ({
+    time: Math.floor(point.t / 1000) as UTCTimestamp,
+    value: point.v,
+  }));
 }
 
 export function TradingViewChart({
@@ -101,241 +86,177 @@ export function TradingViewChart({
   guides = [],
   pricePoints = [],
 }: TradingViewChartProps) {
-  const containerId = useMemo(() => "tradingview_main_chart", []);
-  const widgetRef = useRef<WidgetApi | null>(null);
-  const [guidePositions, setGuidePositions] = useState<Array<TradingViewGuide & { top: number }>>([]);
-  const latestGuidesRef = useRef<TradingViewGuide[]>(guides);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<"Area", Time> | null>(null);
+  const guideLinesRef = useRef<IPriceLine[]>([]);
+  const [selectedRange, setSelectedRange] = useState<ChartRangeKey>(DEFAULT_RANGE);
 
-  latestGuidesRef.current = guides;
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const storedRange = window.localStorage.getItem(RANGE_STORAGE_KEY) as ChartRangeKey | null;
+    if (storedRange && ["15m", "1h", "6h", "24h", "all"].includes(storedRange)) {
+      setSelectedRange(storedRange);
+    }
+  }, []);
 
-  function buildGuidePositions(
-    guideSet: TradingViewGuide[],
-    values: number[]
-  ): Array<TradingViewGuide & { top: number }> {
-    if (guideSet.length === 0 || values.length === 0) return [];
+  const seriesData = useMemo(() => buildSeriesData(pricePoints, selectedRange), [pricePoints, selectedRange]);
 
-    const minPrice = Math.min(...values);
-    const maxPrice = Math.max(...values);
-    const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
-    const paddedMin = minPrice - span * 0.15;
-    const paddedMax = maxPrice + span * 0.15;
-    const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-    return guideSet.map((guide) => {
-      const relative = (guide.price - paddedMin) / paddedSpan;
-      const top = 100 - Math.min(100, Math.max(0, relative * 100));
-      return {
-        ...guide,
-        top,
-      };
+    const chart = createChart(container, {
+      autoSize: true,
+      layout: {
+        background: { type: ColorType.Solid, color: "#0d1119" },
+        textColor: "#9aa7c7",
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "rgba(120, 144, 184, 0.12)" },
+        horzLines: { color: "rgba(120, 144, 184, 0.12)" },
+      },
+      crosshair: {
+        mode: CrosshairMode.Magnet,
+        vertLine: {
+          color: "rgba(101, 217, 255, 0.35)",
+          labelBackgroundColor: "#0f2030",
+        },
+        horzLine: {
+          color: "rgba(101, 217, 255, 0.35)",
+          labelBackgroundColor: "#0f2030",
+        },
+      },
+      rightPriceScale: {
+        borderColor: "rgba(120, 144, 184, 0.2)",
+        minimumWidth: 90,
+        scaleMargins: {
+          top: 0.12,
+          bottom: 0.12,
+        },
+      },
+      timeScale: {
+        borderColor: "rgba(120, 144, 184, 0.2)",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 8,
+        fixLeftEdge: true,
+      },
+      localization: {
+        priceFormatter: (value: number) => `$${value.toFixed(value >= 1000 ? 2 : 4)}`,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
     });
-  }
 
-  useEffect(() => {
-    let cancelled = false;
+    const series = chart.addSeries(AreaSeries, {
+      lineColor: "#65d9ff",
+      topColor: "rgba(101, 217, 255, 0.30)",
+      bottomColor: "rgba(101, 217, 255, 0.03)",
+      lineWidth: 2,
+      crosshairMarkerRadius: 4,
+      priceLineVisible: true,
+      lastValueVisible: true,
+      priceFormat: {
+        type: "price",
+        precision: 4,
+        minMove: 0.0001,
+      },
+    });
 
-    const recomputeGuidePositions = async () => {
-      const chart = widgetRef.current?.activeChart?.();
-      const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
-      if (validGuides.length === 0) {
-        setGuidePositions([]);
-        return;
-      }
+    chartRef.current = chart;
+    seriesRef.current = series;
 
-      const fallbackValues = pricePoints
-        .map((point) => point.v)
-        .filter((value): value is number => Number.isFinite(value) && value > 0);
-
-      if (!chart?.exportData) {
-        setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
-        return;
-      }
-
-      try {
-        const exported = await chart.exportData({
-          includedStudies: [],
-          includeDisplayedValues: true,
-        });
-        if (cancelled) return;
-
-        const values = (exported.data ?? [])
-          .flatMap((point) => [point.value, point.close, point.high, point.low])
-          .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
-
-        const effectiveValues = values.length > 0 ? values : fallbackValues;
-
-        if (effectiveValues.length === 0) {
-          setGuidePositions([]);
-          return;
-        }
-
-        setGuidePositions(buildGuidePositions(validGuides, effectiveValues));
-      } catch {
-        if (!cancelled) {
-          setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
-        }
-      }
-    };
-
-    const renderWidget = async () => {
-      const container = document.getElementById(containerId);
-      if (!container) return;
-
-      container.innerHTML = "";
-      widgetRef.current?.remove?.();
-      widgetRef.current = null;
-
-      try {
-        await loadTradingViewScript();
-        if (cancelled || !window.TradingView?.widget) return;
-
-        const storedInterval =
-          typeof window !== "undefined"
-            ? window.localStorage.getItem(INTERVAL_STORAGE_KEY) ?? DEFAULT_INTERVAL
-            : DEFAULT_INTERVAL;
-
-        const widget = new window.TradingView.widget({
-          autosize: true,
-          symbol,
-          interval: storedInterval,
-          timezone: "exchange",
-          theme: "dark",
-          style: "1",
-          locale: "en_US",
-          enable_publishing: false,
-          allow_symbol_change: true,
-          hide_side_toolbar: false,
-          withdateranges: true,
-          load_last_chart: true,
-          enabled_features: [
-            "use_localstorage_for_settings",
-            "save_chart_properties_to_local_storage",
-          ],
-          time_hours_format: "12-hours",
-          container_id: containerId,
-        }) as WidgetApi;
-
-        widgetRef.current = widget;
-
-        widget.onChartReady?.(() => {
-          const chart = widget.activeChart?.();
-          const currentResolution = chart?.resolution?.();
-          if (typeof currentResolution === "string" && currentResolution.length > 0) {
-            window.localStorage.setItem(INTERVAL_STORAGE_KEY, currentResolution);
-          }
-
-          chart?.onIntervalChanged?.().subscribe?.(null, (nextInterval) => {
-            const interval =
-              typeof nextInterval === "string"
-                ? nextInterval
-                : typeof nextInterval === "object" && nextInterval
-                  ? String(nextInterval)
-                  : "";
-            if (interval) {
-              window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
-            }
-            void recomputeGuidePositions();
-          });
-
-          chart?.onVisibleRangeChanged?.().subscribe?.(null, () => {
-            void recomputeGuidePositions();
-          });
-
-          void recomputeGuidePositions();
-        });
-      } catch {
-        if (!cancelled) {
-          container.innerHTML =
-            "<div style='padding:12px;color:#9aa7c7;font-size:13px'>Chart failed to load. Refresh page.</div>";
-        }
-      }
-    };
-
-    void renderWidget();
+    const resizeObserver = new ResizeObserver(() => {
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      chart.resize(width, height);
+    });
+    resizeObserver.observe(container);
 
     return () => {
-      cancelled = true;
-      widgetRef.current?.remove?.();
-      widgetRef.current = null;
+      resizeObserver.disconnect();
+      guideLinesRef.current = [];
+      seriesRef.current = null;
+      chartRef.current = null;
+      chart.remove();
     };
-  }, [containerId, symbol]);
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(RANGE_STORAGE_KEY, selectedRange);
+    }
+  }, [selectedRange]);
 
-    const recomputeGuidePositions = async () => {
-      const chart = widgetRef.current?.activeChart?.();
-      const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
-      if (validGuides.length === 0) {
-        setGuidePositions([]);
-        return;
-      }
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
 
-      const fallbackValues = pricePoints
-        .map((point) => point.v)
-        .filter((value): value is number => Number.isFinite(value) && value > 0);
+    series.setData(seriesData);
 
-      if (!chart?.exportData) {
-        setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
-        return;
-      }
+    guideLinesRef.current.forEach((line) => {
+      series.removePriceLine(line);
+    });
+    guideLinesRef.current = [];
 
-      try {
-        const exported = await chart.exportData({
-          includedStudies: [],
-          includeDisplayedValues: true,
+    guides
+      .filter((guide) => Number.isFinite(guide.price) && guide.price > 0)
+      .forEach((guide) => {
+        const priceLine = series.createPriceLine({
+          price: guide.price,
+          color: getGuideColor(guide.tone),
+          lineWidth: 2,
+          lineStyle: guide.tone === "tp" ? LineStyle.Dashed : LineStyle.Solid,
+          axisLabelVisible: true,
+          lineVisible: true,
+          title: guide.label,
         });
-        if (cancelled) return;
+        guideLinesRef.current.push(priceLine);
+      });
 
-        const values = (exported.data ?? [])
-          .flatMap((point) => [point.value, point.close, point.high, point.low])
-          .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+    if (seriesData.length > 1) {
+      chart.timeScale().fitContent();
+    }
+  }, [guides, seriesData]);
 
-        const effectiveValues = values.length > 0 ? values : fallbackValues;
-
-        if (effectiveValues.length === 0) {
-          setGuidePositions([]);
-          return;
-        }
-
-        setGuidePositions(buildGuidePositions(validGuides, effectiveValues));
-      } catch {
-        if (!cancelled) {
-          setGuidePositions(buildGuidePositions(validGuides, fallbackValues));
-        }
-      }
-    };
-
-    void recomputeGuidePositions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [guides, pricePoints]);
+  const latestPoint = seriesData[seriesData.length - 1];
+  const latestValue = typeof latestPoint?.value === "number" ? latestPoint.value : null;
 
   return (
-    <div className="tradingview-frame">
-      <div id={containerId} className="tradingview-container" />
-      {guidePositions.length > 0 ? (
-        <div className="tradingview-guide-layer" aria-hidden="true">
-          {guidePositions.map((guide) => (
-            <div
-              key={`${guide.label}-${guide.price}-${guide.tone}`}
-              className={`tradingview-guide tradingview-guide-${guide.tone}`}
-              style={{ top: `${guide.top}%` }}
+    <div className="tradingview-frame lightweight-chart-shell">
+      <div className="lightweight-chart-toolbar">
+        <div className="lightweight-chart-symbol">
+          <span>{normalizeSymbolLabel(symbol)}</span>
+          {latestValue ? <strong>{`$${latestValue.toFixed(latestValue >= 1000 ? 2 : 4)}`}</strong> : null}
+        </div>
+        <div className="lightweight-chart-range-group">
+          {(["15m", "1h", "6h", "24h", "all"] as ChartRangeKey[]).map((range) => (
+            <button
+              key={range}
+              type="button"
+              className={range === selectedRange ? "active" : undefined}
+              onClick={() => setSelectedRange(range)}
             >
-              <span
-                className="tradingview-guide-label"
-                style={{
-                  color: getGuideColor(guide.tone),
-                  borderColor: `${getGuideColor(guide.tone)}66`,
-                }}
-              >
-                {guide.label} {guide.price.toFixed(2)}
-              </span>
-            </div>
+              {range === "all" ? "All" : range}
+            </button>
           ))}
         </div>
+      </div>
+      <div ref={containerRef} className="tradingview-container" />
+      {seriesData.length === 0 ? (
+        <div className="lightweight-chart-empty">Chart data is loading. Price lines will appear as soon as market data arrives.</div>
       ) : null}
     </div>
   );

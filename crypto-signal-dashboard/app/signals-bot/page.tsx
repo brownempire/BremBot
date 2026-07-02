@@ -433,6 +433,36 @@ function DashboardPage() {
     pendingTakeProfitRef.current = null;
   }, [pendingTakeProfit, wallet.publicKey]);
 
+  const persistTradeRecord = useCallback(async (trade: StoredTradeRecord) => {
+    const activeWallet = trade.walletAddress ?? tradeStorageAddress;
+    setRecentTrades((prevTrades) => {
+      const nextTrades = [trade, ...prevTrades.filter((item) => item.id !== trade.id)].slice(0, LOCAL_RECENT_TRADES_CAP);
+      try {
+        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
+      } catch (_error) {
+        // ignore storage errors
+      }
+      return nextTrades;
+    });
+
+    if (!remoteAuthToken || !remoteAuthAddress || !trade.walletAddress || trade.walletAddress !== remoteAuthAddress) return;
+    await fetch("/api/trades", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${remoteAuthToken}`,
+      },
+      body: JSON.stringify({ trade }),
+    }).then(async (response) => {
+      if (response.ok) return;
+      if (response.status === 401) {
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+        setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+      }
+    }).catch(() => undefined);
+  }, [remoteAuthAddress, remoteAuthToken, tradeStorageAddress]);
+
   useEffect(() => {
     let cancelled = false;
     let simulateInterval: ReturnType<typeof setInterval> | null = null;
@@ -1109,36 +1139,6 @@ function DashboardPage() {
       setRemoteAuthStatus(wallet.connected && walletAddress ? "In-app wallet ready for remote auth" : "Remote auth pending");
       setRemoteSyncStatus(wallet.connected && walletAddress ? "Remote sync waiting for auth" : "Remote sync unavailable");
     }
-  }
-
-  async function persistTradeRecord(trade: StoredTradeRecord) {
-    const activeWallet = trade.walletAddress ?? tradeStorageAddress;
-    setRecentTrades((prevTrades) => {
-      const nextTrades = [trade, ...prevTrades.filter((item) => item.id !== trade.id)].slice(0, LOCAL_RECENT_TRADES_CAP);
-      try {
-        window.localStorage.setItem(tradesStorageKey(activeWallet), JSON.stringify(nextTrades));
-      } catch (_error) {
-        // ignore storage errors
-      }
-      return nextTrades;
-    });
-
-    if (!remoteAuthToken || !remoteAuthAddress || !trade.walletAddress || trade.walletAddress !== remoteAuthAddress) return;
-    await fetch("/api/trades", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${remoteAuthToken}`,
-      },
-      body: JSON.stringify({ trade }),
-    }).then(async (response) => {
-      if (response.ok) return;
-      if (response.status === 401) {
-        setRemoteAuthToken(null);
-        setRemoteAuthAddress(null);
-        setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
-      }
-    }).catch(() => undefined);
   }
 
   useEffect(() => {
