@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Capacitor } from "@capacitor/core";
+import { LocalNotifications } from "@capacitor/local-notifications";
 import Image from "next/image";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
@@ -25,6 +27,7 @@ const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
+const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
 
@@ -212,6 +215,20 @@ function remoteTradesAuthStorageKey(walletAddress: string) {
   return `${REMOTE_AUTH_TOKEN_STORAGE_KEY}.${walletAddress}`;
 }
 
+function isNativeShellApp() {
+  return typeof window !== "undefined" && Capacitor.isNativePlatform();
+}
+
+function readNativeAlertsEnabled() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(NATIVE_ALERTS_ENABLED_STORAGE_KEY) === "true";
+}
+
+function writeNativeAlertsEnabled(enabled: boolean) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(NATIVE_ALERTS_ENABLED_STORAGE_KEY, enabled ? "true" : "false");
+}
+
 function getPhantomAuthProvider(): PhantomAuthProvider | null {
   if (typeof window === "undefined") return null;
   const candidate =
@@ -341,6 +358,33 @@ function DashboardPage() {
     remoteAuthSource === "phantom"
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
+  const nativeShell = isNativeShellApp();
+
+  const sendSignalNotification = useCallback(async (title: string, body: string, url?: string) => {
+    if (!pushEnabled) return;
+
+    if (nativeShell) {
+      try {
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              id: Date.now() % 2147483000,
+              title,
+              body,
+              extra: url ? { url } : undefined,
+            },
+          ],
+        });
+      } catch {
+        // ignore native notification delivery failures
+      }
+      return;
+    }
+
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body });
+    }
+  }, [nativeShell, pushEnabled]);
 
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
@@ -525,9 +569,7 @@ function DashboardPage() {
             if (next.some((existing) => existing.id === signal.id)) return;
             next = [signal, ...next].slice(0, 12);
 
-            if (typeof window !== "undefined" && Notification.permission === "granted") {
-              new Notification(`Signal: ${signal.symbol}`, { body: signal.summary });
-            }
+            void sendSignalNotification(`Signal: ${signal.symbol}`, signal.summary);
 
             if (autoTradeEnabled && activeAutoTradeToken) {
               if (autoTradeBusyRef.current) {
@@ -628,7 +670,7 @@ function DashboardPage() {
                         `Auto-trade executed for ${signal.symbol}${result.gasless ? " · gasless" : ""}`
                       );
                     }
-                    if (pushEnabled) {
+                    if (!nativeShell && pushEnabled) {
                       fetch("/api/push/notify", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -680,7 +722,7 @@ function DashboardPage() {
               }
             }
 
-            if (pushEnabled) {
+            if (!nativeShell && pushEnabled) {
               fetch("/api/push/notify", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -707,10 +749,12 @@ function DashboardPage() {
     autoTradeSettings.takeProfitPercent,
     lastSignalAt,
     newsItems,
+    nativeShell,
     params,
     priceHistory,
     pushEnabled,
     receiveSignalsForSlotId,
+    sendSignalNotification,
     subscription,
     trackedMarkets,
     persistTradeRecord,
@@ -722,6 +766,38 @@ function DashboardPage() {
   ]);
 
   useEffect(() => {
+    if (nativeShell) {
+      let cancelled = false;
+
+      async function initNativeNotifications() {
+        try {
+          const permission = await LocalNotifications.checkPermissions();
+          if (cancelled) return;
+          const enabledPreference = readNativeAlertsEnabled();
+          setPushReady(true);
+          if (permission.display === "granted" && enabledPreference) {
+            setPushEnabled(true);
+            setPushStatus("Native alerts enabled");
+          } else if (permission.display === "granted") {
+            setPushEnabled(false);
+            setPushStatus("Native alerts available");
+          } else {
+            setPushEnabled(false);
+            setPushStatus("Native alerts disabled");
+          }
+        } catch {
+          if (cancelled) return;
+          setPushReady(false);
+          setPushStatus("Native notifications unavailable");
+        }
+      }
+
+      void initNativeNotifications();
+      return () => {
+        cancelled = true;
+      };
+    }
+
     if (!window.isSecureContext) {
       setPushStatus("Push requires HTTPS (or localhost)");
       return;
@@ -750,7 +826,7 @@ function DashboardPage() {
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
-  }, []);
+  }, [nativeShell]);
 
   useEffect(() => {
     let cancelled = false;
@@ -945,6 +1021,26 @@ function DashboardPage() {
     return bs58.encode(signatureBytes);
   }
 
+  async function completeRemoteAuth(address: string, source: RemoteAuthSource) {
+    setRemoteAuthStatus(
+      source === "in-app"
+        ? "Requesting in-app wallet signature..."
+        : "Requesting Phantom signature..."
+    );
+    const challenge = await requestRemoteAuthChallenge(address);
+    const signature = await signRemoteAuthMessage(source, challenge.message);
+    const nextToken = await verifyRemoteAuthChallenge(address, challenge.challengeId, signature);
+    setRemoteAuthToken(nextToken);
+    setRemoteAuthAddress(address);
+    try {
+      window.localStorage.setItem(remoteTradesAuthStorageKey(address), nextToken);
+    } catch {
+      // ignore storage errors
+    }
+    setRemoteAuthStatus(`Remote auth connected via ${source === "in-app" ? "in-app wallet" : "Phantom"}`);
+    return nextToken;
+  }
+
   async function connectPhantomForRemoteSync() {
     const provider = getPhantomAuthProvider();
     if (!provider) {
@@ -964,10 +1060,10 @@ function DashboardPage() {
 
       setPhantomAuthAddress(nextAddress);
       setRemoteAuthSource("phantom");
+      await completeRemoteAuth(nextAddress, "phantom");
+    } catch (connectError) {
       setRemoteAuthToken(null);
       setRemoteAuthAddress(null);
-      setRemoteAuthStatus("Phantom connected. Requesting signature...");
-    } catch (connectError) {
       const message = connectError instanceof Error ? connectError.message : "Phantom connection failed";
       setRemoteAuthStatus(message);
     }
@@ -1134,27 +1230,22 @@ function DashboardPage() {
       return;
     }
 
+    if (authSourceForSync === "phantom") {
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+      setRemoteAuthStatus(
+        phantomAuthAddress
+          ? "Tap Sign In with Phantom Sync to finish remote auth."
+          : "Connect Phantom Sync to use Phantom for remote auth."
+      );
+      return;
+    }
+
     async function authenticate() {
       try {
-        setRemoteAuthStatus(
-          authSourceForSync === "in-app"
-            ? "Requesting in-app wallet signature..."
-            : "Requesting Phantom signature..."
-        );
-        const challenge = await requestRemoteAuthChallenge(walletAddressForAuth);
-        if (cancelled) return;
-        const signature = await signRemoteAuthMessage(authSourceForSync, challenge.message);
-        if (cancelled) return;
-        const nextToken = await verifyRemoteAuthChallenge(walletAddressForAuth, challenge.challengeId, signature);
+        const nextToken = await completeRemoteAuth(walletAddressForAuth, authSourceForSync);
         if (cancelled) return;
         setRemoteAuthToken(nextToken);
-        setRemoteAuthAddress(walletAddressForAuth);
-        try {
-          window.localStorage.setItem(remoteTradesAuthStorageKey(walletAddressForAuth), nextToken);
-        } catch {
-          // ignore storage errors
-        }
-        setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
       } catch (authError) {
         if (cancelled) return;
         setRemoteAuthToken(null);
@@ -1176,7 +1267,7 @@ function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [remoteAuthAddress, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.signMessage]);
+  }, [phantomAuthAddress, remoteAuthAddress, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.signMessage]);
 
   useEffect(() => {
     if (!remoteSyncWalletAddress || !remoteAuthToken) {
@@ -1563,6 +1654,24 @@ function DashboardPage() {
 
   async function enablePush() {
     if (!pushReady) return;
+    if (nativeShell) {
+      try {
+        const permission = await LocalNotifications.requestPermissions();
+        if (permission.display !== "granted") {
+          writeNativeAlertsEnabled(false);
+          setPushEnabled(false);
+          setPushStatus("Native alerts disabled");
+          return;
+        }
+        writeNativeAlertsEnabled(true);
+        setPushEnabled(true);
+        setPushStatus("Native alerts enabled");
+      } catch (error) {
+        setPushStatus(error instanceof Error ? error.message : "Native alerts could not be enabled");
+      }
+      return;
+    }
+
     if (!("Notification" in window)) {
       setPushStatus("Notifications not supported");
       return;
@@ -1613,6 +1722,13 @@ function DashboardPage() {
   }
 
   async function disablePush() {
+    if (nativeShell) {
+      writeNativeAlertsEnabled(false);
+      setPushEnabled(false);
+      setPushStatus("Native alerts disabled");
+      return;
+    }
+
     try {
       const registration = await navigator.serviceWorker.ready;
       const active = await registration.pushManager.getSubscription();
@@ -1644,6 +1760,28 @@ function DashboardPage() {
   }
 
   async function sendTestPush() {
+    if (nativeShell) {
+      if (!pushEnabled) {
+        setPushStatus("Enable native alerts first");
+        return;
+      }
+      try {
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              id: Date.now() % 2147483000,
+              title: "BremLogic",
+              body: "Test notification from your native Signals Bot app.",
+            },
+          ],
+        });
+        setPushStatus("Native test alert sent");
+      } catch (error) {
+        setPushStatus(error instanceof Error ? error.message : "Native test alert failed");
+      }
+      return;
+    }
+
     if (!pushEnabled || !subscription) {
       setPushStatus("Enable push first");
       return;
@@ -2051,12 +2189,6 @@ function DashboardPage() {
             {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
             {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
             {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
-            <button
-              className="secondary"
-              onClick={phantomAuthAddress ? () => void disconnectPhantomForRemoteSync() : () => void connectPhantomForRemoteSync()}
-            >
-              {phantomAuthAddress ? "Disconnect Phantom Sync" : "Connect Phantom Sync"}
-            </button>
             <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
@@ -2066,14 +2198,6 @@ function DashboardPage() {
             {wallet.publicKey
               ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
-          </div>
-          <div className="subtext" style={{ marginTop: 6 }}>
-            {phantomAuthAddress
-              ? `Phantom sync wallet: ${shortAddress(phantomAuthAddress)}`
-              : "Phantom can also sign remote sync auth if you prefer not to use the in-app wallet."}
-          </div>
-          <div className="subtext" style={{ marginTop: 6 }}>
-            Remote sync source: {remoteAuthSource === "in-app" ? "In-app wallet" : remoteAuthSource === "phantom" ? "Phantom" : "Not selected"}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-grid" style={{ marginTop: 10 }}>

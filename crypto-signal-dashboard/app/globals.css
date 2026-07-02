@@ -2,6 +2,10 @@
 
 :root {
   color-scheme: light;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
   --bg: #0a0c10;
   --bg-2: #0f1626;
   --panel: #121826;
@@ -41,8 +45,8 @@ html {
 
 .top-menu {
   position: fixed;
-  top: 16px;
-  right: 16px;
+  top: calc(var(--safe-top) + 16px);
+  right: calc(var(--safe-right) + 16px);
   z-index: 2147483647;
   pointer-events: auto;
   display: flex;
@@ -144,7 +148,7 @@ a {
 }
 
 main {
-  padding: 32px 32px 80px;
+  padding: calc(var(--safe-top) + 32px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 80px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }

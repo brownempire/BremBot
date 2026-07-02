@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { Capacitor } from "@capacitor/core";
 import { clusterApiUrl } from "@solana/web3.js";
 import { WalletReadyState, type WalletName } from "@solana/wallet-adapter-base";
 import {
@@ -8,11 +9,8 @@ import {
   WalletProvider,
   useWallet,
 } from "@solana/wallet-adapter-react";
-import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";
-import { SolflareWalletAdapter } from "@solana/wallet-adapter-solflare";
 
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
-import { usePhantomBrowserSdkWallet } from "@/hooks/usePhantomBrowserSdkWallet";
 import { formatUsd } from "@/lib/utils";
 import {
   shortenWalletAddress,
@@ -50,7 +48,7 @@ function getWalletReadinessLabel(readyState: WalletReadyState) {
 
 function ReadOnlyWalletProvider({ children }: PropsWithChildren) {
   const endpoint = process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() || clusterApiUrl("mainnet-beta");
-  const wallets = useMemo(() => [new PhantomWalletAdapter(), new SolflareWalletAdapter()], []);
+  const wallets = useMemo(() => [], []);
 
   return (
     <ConnectionProvider endpoint={endpoint}>
@@ -190,32 +188,28 @@ function JupiterPerpsPositionWidgetBody() {
     connect,
     disconnect,
   } = useWallet();
-  const phantomMobileWallet = usePhantomBrowserSdkWallet();
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [selectedWalletName, setSelectedWalletName] = useState<WalletName<string> | null>(null);
   const [walletFeedback, setWalletFeedback] = useState<string | null>(null);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
+  const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
+  const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const shouldRecommendJupiterMobile = nativeShell || mobileUserAgent;
 
-  const isConnected = phantomMobileWallet.isConnected || adapterConnected;
-  const isConnecting = phantomMobileWallet.isConnecting || adapterConnecting;
-  const isDisconnecting = phantomMobileWallet.isDisconnecting || adapterDisconnecting;
-  const walletAddress = phantomMobileWallet.walletAddress ?? publicKey?.toBase58() ?? null;
+  const isConnected = adapterConnected;
+  const isConnecting = adapterConnecting;
+  const isDisconnecting = adapterDisconnecting;
+  const walletAddress = publicKey?.toBase58() ?? null;
   const { positions, pendingTriggers, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     walletAddress,
     showMockData,
   });
 
   const visibleWallets = useMemo(() => {
-    const preferred = ["Phantom", "Solflare"];
     return [...wallets]
       .filter((entry) => entry.readyState !== "Unsupported")
-      .filter((entry) => !(phantomMobileWallet.canUseInAppApproval && entry.adapter.name === "Phantom"))
-      .sort((left, right) => {
-        const leftScore = preferred.indexOf(left.adapter.name);
-        const rightScore = preferred.indexOf(right.adapter.name);
-        return (leftScore === -1 ? 99 : leftScore) - (rightScore === -1 ? 99 : rightScore);
-      });
-  }, [phantomMobileWallet.canUseInAppApproval, wallets]);
+      .filter((entry) => entry.adapter.name === "Jupiter");
+  }, [wallets]);
 
   useEffect(() => {
     if (!selectedWalletName || wallet?.adapter.name !== selectedWalletName) return;
@@ -248,14 +242,9 @@ function JupiterPerpsPositionWidgetBody() {
     };
   }, [connect, selectedWalletName, wallet?.adapter.name]);
 
-  useEffect(() => {
-    if (!phantomMobileWallet.error) return;
-    setWalletFeedback(phantomMobileWallet.error);
-  }, [phantomMobileWallet.error]);
-
   async function handleWalletPick(name: WalletName<string>, readyState: WalletReadyState) {
     if (readyState === "NotDetected") {
-      setWalletFeedback("Wallet extension not detected. Install Phantom or Solflare, then try again.");
+      setWalletFeedback("No compatible wallet was detected in this browser. Open BremLogic inside Jupiter Mobile's dApp browser, or install a supported wallet and try again.");
       return;
     }
 
@@ -264,29 +253,9 @@ function JupiterPerpsPositionWidgetBody() {
     select(name);
   }
 
-  async function handlePhantomMobileConnect() {
-    try {
-      setWalletFeedback(
-        phantomMobileWallet.isReady
-          ? "Opening Phantom for approval..."
-          : "Preparing Phantom mobile connection..."
-      );
-      await phantomMobileWallet.connect();
-      setWalletFeedback(null);
-      setWalletMenuOpen(false);
-    } catch (connectError) {
-      const message = connectError instanceof Error ? connectError.message : "Wallet connection was not completed.";
-      setWalletFeedback(message);
-    }
-  }
-
   async function handleDisconnect() {
     try {
-      if (phantomMobileWallet.isConnected) {
-        await phantomMobileWallet.disconnect();
-      } else {
-        await disconnect();
-      }
+      await disconnect();
       setWalletFeedback("Wallet disconnected.");
     } catch (disconnectError) {
       const message = disconnectError instanceof Error ? disconnectError.message : "Unable to disconnect the wallet.";
@@ -345,10 +314,7 @@ function JupiterPerpsPositionWidgetBody() {
       {isConnected ? (
         <div className="perps-wallet-status">
           <span>Connected wallet</span>
-          <strong>
-            {walletAddress ? shortenWalletAddress(walletAddress) : "-"}
-            {phantomMobileWallet.isConnected ? " via Phantom app" : ""}
-          </strong>
+          <strong>{walletAddress ? shortenWalletAddress(walletAddress) : "-"}</strong>
         </div>
       ) : (
         <div className="perps-wallet-status">
@@ -365,46 +331,33 @@ function JupiterPerpsPositionWidgetBody() {
               Close
             </button>
           </div>
-          {phantomMobileWallet.isMobile ? (
+          {shouldRecommendJupiterMobile ? (
             <div className="perps-wallet-note">
-              Phantom opens its app for approval, then returns users to BremLogic. Solflare may still open its wallet browser on mobile.
+              Jupiter Mobile works best when BremLogic is opened inside Jupiter Mobile&apos;s dApp browser. External app handoffs from the native iPhone shell may still leave you in a mobile browser.
             </div>
           ) : null}
           <div className="perps-wallet-grid">
-            {visibleWallets.length === 0 && !phantomMobileWallet.canUseInAppApproval ? (
+            {visibleWallets.length === 0 ? (
               <div className="perps-message-card">
-                <strong>No supported wallet found</strong>
-                <span className="subtext">Install Phantom or Solflare to connect a wallet in read-only mode.</span>
+                <strong>Jupiter wallet not found</strong>
+                <span className="subtext">Open BremLogic inside Jupiter Mobile&apos;s dApp browser to connect the Jupiter wallet in read-only mode.</span>
               </div>
             ) : (
-              <>
-                {phantomMobileWallet.canUseInAppApproval ? (
-                  <button
-                    type="button"
-                    className="perps-wallet-option"
-                    onClick={() => void handlePhantomMobileConnect()}
-                    disabled={phantomMobileWallet.isConnecting}
-                  >
-                    <span>Phantom</span>
-                    <span className="subtext">Approve in the Phantom app, then return here</span>
-                  </button>
-                ) : null}
-                {visibleWallets.map((entry) => (
-                  <button
-                    key={entry.adapter.name}
-                    type="button"
-                    className="perps-wallet-option"
-                    onClick={() => void handleWalletPick(entry.adapter.name, entry.readyState)}
-                  >
-                    <span>{entry.adapter.name}</span>
-                    <span className="subtext">
-                      {entry.adapter.name === "Solflare" && phantomMobileWallet.isMobile
-                        ? "May open the Solflare wallet browser on mobile"
-                        : getWalletReadinessLabel(entry.readyState)}
-                    </span>
-                  </button>
-                ))}
-              </>
+              visibleWallets.map((entry) => (
+                <button
+                  key={entry.adapter.name}
+                  type="button"
+                  className="perps-wallet-option"
+                  onClick={() => void handleWalletPick(entry.adapter.name, entry.readyState)}
+                >
+                  <span>{entry.adapter.name}</span>
+                  <span className="subtext">
+                    {entry.adapter.name === "Jupiter"
+                      ? "Recommended when using Jupiter Mobile's dApp browser"
+                      : getWalletReadinessLabel(entry.readyState)}
+                  </span>
+                </button>
+              ))
             )}
           </div>
         </div>

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 
@@ -41,6 +43,7 @@ const PENDING_CONNECT_STORAGE_KEY = "bremlogic.phantom.pending-connect.v1";
 const SESSION_STORAGE_KEY = "bremlogic.phantom.session.v1";
 const CALLBACK_PARAM = "phantom_callback";
 const CONNECT_CALLBACK = "connect";
+const NATIVE_PHANTOM_REDIRECT_URL = "bremlogic://phantom/connect";
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
@@ -54,9 +57,15 @@ function serializeCurrentUrl() {
   return url.toString();
 }
 
+function isNativeShell() {
+  return typeof window !== "undefined" && Capacitor.isNativePlatform();
+}
+
 function getRedirectUrl() {
   const configured = process.env.NEXT_PUBLIC_PHANTOM_REDIRECT_URL?.trim();
   if (configured) return configured;
+
+  if (isNativeShell()) return NATIVE_PHANTOM_REDIRECT_URL;
 
   if (typeof window === "undefined") return "";
 
@@ -147,10 +156,10 @@ function decodeConnectPayload(
   return JSON.parse(new TextDecoder().decode(decrypted)) as PhantomConnectPayload;
 }
 
-function stripPhantomParamsFromUrl() {
-  if (typeof window === "undefined") return;
+function stripPhantomParamsFromUrl(urlString?: string) {
+  if (typeof window === "undefined") return "";
 
-  const currentUrl = new URL(window.location.href);
+  const currentUrl = new URL(urlString ?? window.location.href);
   currentUrl.searchParams.delete(CALLBACK_PARAM);
   currentUrl.searchParams.delete("phantom_encryption_public_key");
   currentUrl.searchParams.delete("nonce");
@@ -159,7 +168,79 @@ function stripPhantomParamsFromUrl() {
   currentUrl.searchParams.delete("errorMessage");
   currentUrl.hash = "";
 
-  window.history.replaceState({}, "", currentUrl.toString());
+  const cleanedUrl = currentUrl.toString();
+  if (!urlString) {
+    window.history.replaceState({}, "", cleanedUrl);
+  }
+  return cleanedUrl;
+}
+
+function normalizeCallbackUrl(urlString: string) {
+  if (typeof window === "undefined") return urlString;
+
+  const callbackUrl = new URL(urlString);
+  if (callbackUrl.protocol.startsWith("http")) return callbackUrl.toString();
+
+  const browserUrl = new URL(window.location.href);
+  browserUrl.search = callbackUrl.search;
+  browserUrl.hash = "";
+  return browserUrl.toString();
+}
+
+function processConnectCallback(urlString: string) {
+  const currentUrl = new URL(normalizeCallbackUrl(urlString));
+  const pendingConnect = loadPendingConnect();
+
+  try {
+    if (!pendingConnect) {
+      throw new Error("Phantom returned to BremLogic, but the connection session could not be resumed.");
+    }
+
+    const errorCode = currentUrl.searchParams.get("errorCode");
+    const errorMessage = currentUrl.searchParams.get("errorMessage");
+
+    if (errorCode) {
+      throw new Error(errorMessage || "Wallet connection was not approved.");
+    }
+
+    const phantomEncryptionPublicKey = currentUrl.searchParams.get("phantom_encryption_public_key");
+    const nonce = currentUrl.searchParams.get("nonce");
+    const data = currentUrl.searchParams.get("data");
+
+    if (!phantomEncryptionPublicKey || !nonce || !data) {
+      throw new Error("Phantom returned an incomplete connection response.");
+    }
+
+    const payload = decodeConnectPayload(
+      data,
+      nonce,
+      phantomEncryptionPublicKey,
+      pendingConnect.dappEncryptionSecretKey
+    );
+
+    saveStoredSession({
+      connectedAt: Date.now(),
+      session: payload.session,
+      walletAddress: payload.public_key,
+    });
+
+    clearPendingConnect();
+    stripPhantomParamsFromUrl(currentUrl.toString());
+
+    return {
+      walletAddress: payload.public_key,
+      error: null,
+    };
+  } catch (callbackError) {
+    clearStoredSession();
+    clearPendingConnect();
+    stripPhantomParamsFromUrl(currentUrl.toString());
+
+    return {
+      walletAddress: null,
+      error: getFriendlyErrorMessage(callbackError),
+    };
+  }
 }
 
 export function usePhantomBrowserSdkWallet(): PhantomBrowserSdkWalletState {
@@ -188,59 +269,44 @@ export function usePhantomBrowserSdkWallet(): PhantomBrowserSdkWalletState {
     }
 
     const currentUrl = new URL(window.location.href);
-    if (currentUrl.searchParams.get(CALLBACK_PARAM) !== CONNECT_CALLBACK) {
-      setIsReady(true);
-      return;
+    if (currentUrl.searchParams.get(CALLBACK_PARAM) === CONNECT_CALLBACK) {
+      const callbackResult = processConnectCallback(currentUrl.toString());
+      setIsConnected(Boolean(callbackResult.walletAddress));
+      setWalletAddress(callbackResult.walletAddress);
+      setError(callbackResult.error);
     }
 
-    const pendingConnect = loadPendingConnect();
+    let cancelled = false;
+    let removeListener: (() => void) | undefined;
 
-    try {
-      if (!pendingConnect) {
-        throw new Error("Phantom returned to BremLogic, but the connection session could not be resumed.");
+    async function registerNativeCallbackListener() {
+      if (!isNativeShell()) {
+        if (!cancelled) setIsReady(true);
+        return;
       }
 
-      const errorCode = currentUrl.searchParams.get("errorCode");
-      const errorMessage = currentUrl.searchParams.get("errorMessage");
-
-      if (errorCode) {
-        throw new Error(errorMessage || "Wallet connection was not approved.");
-      }
-
-      const phantomEncryptionPublicKey = currentUrl.searchParams.get("phantom_encryption_public_key");
-      const nonce = currentUrl.searchParams.get("nonce");
-      const data = currentUrl.searchParams.get("data");
-
-      if (!phantomEncryptionPublicKey || !nonce || !data) {
-        throw new Error("Phantom returned an incomplete connection response.");
-      }
-
-      const payload = decodeConnectPayload(
-        data,
-        nonce,
-        phantomEncryptionPublicKey,
-        pendingConnect.dappEncryptionSecretKey
-      );
-
-      saveStoredSession({
-        connectedAt: Date.now(),
-        session: payload.session,
-        walletAddress: payload.public_key,
+      const handle = await App.addListener("appUrlOpen", ({ url }) => {
+        if (!url.includes(CALLBACK_PARAM) || !url.includes(CONNECT_CALLBACK)) return;
+        const callbackResult = processConnectCallback(url);
+        setIsConnected(Boolean(callbackResult.walletAddress));
+        setWalletAddress(callbackResult.walletAddress);
+        setError(callbackResult.error);
+        setIsConnecting(false);
       });
 
-      setIsConnected(true);
-      setWalletAddress(payload.public_key);
-      setError(null);
-    } catch (callbackError) {
-      clearStoredSession();
-      setIsConnected(false);
-      setWalletAddress(null);
-      setError(getFriendlyErrorMessage(callbackError));
-    } finally {
-      clearPendingConnect();
-      stripPhantomParamsFromUrl();
-      setIsReady(true);
+      removeListener = () => {
+        void handle.remove();
+      };
+
+      if (!cancelled) setIsReady(true);
     }
+
+    void registerNativeCallbackListener();
+
+    return () => {
+      cancelled = true;
+      removeListener?.();
+    };
   }, []);
 
   const connect = useCallback(async () => {
