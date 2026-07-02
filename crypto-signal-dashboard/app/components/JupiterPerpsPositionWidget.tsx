@@ -211,6 +211,11 @@ function JupiterPerpsPositionWidgetBody() {
       .filter((entry) => entry.adapter.name === "Jupiter");
   }, [wallets]);
 
+  function openJupiterExperience() {
+    if (typeof window === "undefined") return;
+    window.location.assign("https://jup.ag");
+  }
+
   useEffect(() => {
     if (!selectedWalletName || wallet?.adapter.name !== selectedWalletName) return;
 
@@ -338,10 +343,14 @@ function JupiterPerpsPositionWidgetBody() {
           ) : null}
           <div className="perps-wallet-grid">
             {visibleWallets.length === 0 ? (
-              <div className="perps-message-card">
+              <button
+                type="button"
+                className="perps-message-card perps-message-card-link"
+                onClick={openJupiterExperience}
+              >
                 <strong>Jupiter wallet not found</strong>
                 <span className="subtext">Open BremLogic inside Jupiter Mobile&apos;s dApp browser to connect the Jupiter wallet in read-only mode.</span>
-              </div>
+              </button>
             ) : (
               visibleWallets.map((entry) => (
                 <button

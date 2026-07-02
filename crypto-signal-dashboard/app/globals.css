@@ -6,6 +6,7 @@
   --safe-right: env(safe-area-inset-right, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
+  --native-top-buffer: max(var(--safe-top), 52px);
   --bg: #0a0c10;
   --bg-2: #0f1626;
   --panel: #121826;
@@ -45,7 +46,7 @@ html {
 
 .top-menu {
   position: fixed;
-  top: calc(var(--safe-top) + 16px);
+  top: calc(var(--native-top-buffer) + 8px);
   right: calc(var(--safe-right) + 16px);
   z-index: 2147483647;
   pointer-events: auto;
@@ -148,7 +149,7 @@ a {
 }
 
 main {
-  padding: calc(var(--safe-top) + 32px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 80px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 80px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -894,6 +895,19 @@ button:disabled {
   display: grid;
   gap: 8px;
   padding: 12px;
+}
+
+.perps-message-card-link {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.perps-message-card-link:hover {
+  border-color: rgba(101, 217, 255, 0.34);
+  background: rgba(16, 21, 32, 0.9);
+  transform: translateY(-1px);
 }
 
 .perps-wallet-picker {
