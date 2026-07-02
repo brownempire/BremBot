@@ -102,6 +102,9 @@ export function TradingViewChart({
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const widgetRef = useRef<WidgetApi | null>(null);
   const [guidePositions, setGuidePositions] = useState<Array<TradingViewGuide & { top: number }>>([]);
+  const latestGuidesRef = useRef<TradingViewGuide[]>(guides);
+
+  latestGuidesRef.current = guides;
 
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +116,7 @@ export function TradingViewChart({
         return;
       }
 
-      const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+      const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
       if (validGuides.length === 0) {
         setGuidePositions([]);
         return;
@@ -223,10 +226,6 @@ export function TradingViewChart({
             void recomputeGuidePositions();
           });
 
-          chart?.crossHairMoved?.().subscribe?.(null, () => {
-            void recomputeGuidePositions();
-          });
-
           void recomputeGuidePositions();
         });
       } catch {
@@ -244,7 +243,70 @@ export function TradingViewChart({
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol, guides]);
+  }, [containerId, symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const recomputeGuidePositions = async () => {
+      const chart = widgetRef.current?.activeChart?.();
+      if (!chart?.exportData) {
+        setGuidePositions([]);
+        return;
+      }
+
+      const validGuides = latestGuidesRef.current.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+      if (validGuides.length === 0) {
+        setGuidePositions([]);
+        return;
+      }
+
+      try {
+        const exported = await chart.exportData({
+          includedStudies: [],
+          includeDisplayedValues: true,
+        });
+        if (cancelled) return;
+
+        const values = (exported.data ?? [])
+          .flatMap((point) => [point.value, point.close, point.high, point.low])
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
+
+        if (values.length === 0) {
+          setGuidePositions([]);
+          return;
+        }
+
+        const minPrice = Math.min(...values);
+        const maxPrice = Math.max(...values);
+        const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
+        const paddedMin = minPrice - span * 0.15;
+        const paddedMax = maxPrice + span * 0.15;
+        const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+        setGuidePositions(
+          validGuides.map((guide) => {
+            const relative = (guide.price - paddedMin) / paddedSpan;
+            const top = 100 - Math.min(100, Math.max(0, relative * 100));
+            return {
+              ...guide,
+              top,
+            };
+          })
+        );
+      } catch {
+        if (!cancelled) {
+          setGuidePositions([]);
+        }
+      }
+    };
+
+    void recomputeGuidePositions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [guides]);
 
   return (
     <div className="tradingview-frame">
