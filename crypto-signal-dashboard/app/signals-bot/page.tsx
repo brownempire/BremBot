@@ -165,6 +165,12 @@ type TradeChartOverlay = {
   updatedAt: number;
 };
 
+function normalizeMarketTokenSymbol(value: string | null | undefined) {
+  return (value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
 type RemoteAuthChallenge = {
   address: string;
   challengeId: string;
@@ -1439,12 +1445,13 @@ function DashboardPage() {
   useEffect(() => {
     const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
     const selectedTokenSymbol = selectedMarket?.pair.split("/")[0] ?? null;
+    const normalizedSelectedSymbol = normalizeMarketTokenSymbol(selectedTokenSymbol);
 
-    if (selectedTokenSymbol) {
+    if (normalizedSelectedSymbol) {
       const latestPerpsPosition = [...livePerpsPositions]
         .filter(
           (position) =>
-            position.marketSymbol === selectedTokenSymbol &&
+            normalizeMarketTokenSymbol(position.marketSymbol) === normalizedSelectedSymbol &&
             Number.isFinite(position.entryPrice) &&
             position.entryPrice !== null
         )
@@ -1456,7 +1463,7 @@ function DashboardPage() {
           [...livePerpsPendingTriggers]
             .filter(
               (trigger) =>
-                trigger.marketSymbol === selectedTokenSymbol &&
+                normalizeMarketTokenSymbol(trigger.marketSymbol) === normalizedSelectedSymbol &&
                 trigger.kind === "take-profit" &&
                 Number.isFinite(trigger.triggerPrice) &&
                 trigger.triggerPrice !== null
@@ -1465,8 +1472,8 @@ function DashboardPage() {
           null;
 
         setTradeChartOverlay({
-          symbol: selectedMarket?.pair ?? `${selectedTokenSymbol}/USD`,
-          tokenSymbol: selectedTokenSymbol,
+          symbol: selectedMarket?.pair ?? `${selectedTokenSymbol ?? latestPerpsPosition.marketSymbol}/USD`,
+          tokenSymbol: selectedTokenSymbol ?? latestPerpsPosition.marketSymbol,
           entryPrice: latestPerpsPosition.entryPrice,
           targetPrice: pendingTp,
           side: latestPerpsPosition.side === "short" ? "sell" : "buy",
