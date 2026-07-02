@@ -7,6 +7,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --native-top-buffer: max(var(--safe-top), 52px);
+  --native-content-top-buffer: var(--native-top-buffer);
   --bg: #0a0c10;
   --bg-2: #0f1626;
   --panel: #121826;
@@ -38,6 +39,10 @@ body {
     radial-gradient(900px 500px at 90% 10%, rgba(255, 164, 92, 0.14), transparent 55%),
     linear-gradient(160deg, var(--bg), var(--bg-2));
   min-height: 100vh;
+}
+
+body.native-ios-shell {
+  --native-content-top-buffer: max(var(--safe-top), 84px);
 }
 
 html {
@@ -149,7 +154,7 @@ a {
 }
 
 main {
-  padding: calc(var(--native-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 80px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 80px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }

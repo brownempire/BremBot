@@ -19,6 +19,7 @@
     "@capacitor/core": "^8.4.1",
     "@capacitor/ios": "^8.4.1",
     "@capacitor/local-notifications": "^8.2.0",
+    "@capacitor/status-bar": "^8.0.2",
     "@jup-ag/plugin": "^1.0.13",
     "@solana/wallet-adapter-base": "^0.9.27",
     "@solana/wallet-adapter-phantom": "^0.9.29",

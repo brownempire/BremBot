@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import { NativeShellConfigurator } from "@/app/components/NativeShellConfigurator";
 import { TopMenu } from "@/app/components/TopMenu";
 
 export const metadata: Metadata = {
@@ -60,6 +61,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <NativeShellConfigurator />
         <TopMenu />
         {children}
       </body>

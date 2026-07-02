@@ -8,6 +8,10 @@ const config: CapacitorConfig = {
     LocalNotifications: {
       presentationOptions: ["badge", "sound", "banner", "list"],
     },
+    StatusBar: {
+      overlaysWebView: false,
+      style: "DARK",
+    },
   },
   server: {
     url: "https://app.bremlogic.com/signals-bot",
