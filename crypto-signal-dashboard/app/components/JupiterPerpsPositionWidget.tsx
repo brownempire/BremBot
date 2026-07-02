@@ -1,5 +1,6 @@
 "use client";
 
+import { Browser } from "@capacitor/browser";
 import { useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { Capacitor } from "@capacitor/core";
 import { clusterApiUrl } from "@solana/web3.js";
@@ -213,6 +214,12 @@ function JupiterPerpsPositionWidgetBody() {
 
   function openJupiterExperience() {
     if (typeof window === "undefined") return;
+
+    if (nativeShell) {
+      void Browser.open({ url: "https://jup.ag" });
+      return;
+    }
+
     window.location.assign("https://jup.ag");
   }
 
