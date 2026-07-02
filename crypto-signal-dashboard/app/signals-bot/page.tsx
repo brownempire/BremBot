@@ -10,9 +10,11 @@ import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider"
 
 import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { JupiterPerpsPositionWidget } from "@/app/components/JupiterPerpsPositionWidget";
+import {
+  JupiterPerpsPositionWidget,
+  type JupiterPerpsWidgetSnapshot,
+} from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
-import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -293,10 +295,6 @@ function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const walletAddress = wallet.publicKey?.toBase58() ?? null;
-  const { positions: livePerpsPositions, pendingTriggers: livePerpsPendingTriggers } = useJupiterPerpsPositions({
-    walletAddress,
-    showMockData: false,
-  });
 
   const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
@@ -328,6 +326,15 @@ function DashboardPage() {
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [tradeChartOverlay, setTradeChartOverlay] = useState<TradeChartOverlay | null>(null);
+  const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
+    walletAddress: null,
+    positions: [],
+    pendingTriggers: [],
+    isLoading: false,
+    error: null,
+    isMock: false,
+    connected: false,
+  });
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
@@ -1448,7 +1455,7 @@ function DashboardPage() {
     const normalizedSelectedSymbol = normalizeMarketTokenSymbol(selectedTokenSymbol);
 
     if (normalizedSelectedSymbol) {
-      const latestPerpsPosition = [...livePerpsPositions]
+      const latestPerpsPosition = [...readOnlyPerpsSnapshot.positions]
         .filter(
           (position) =>
             normalizeMarketTokenSymbol(position.marketSymbol) === normalizedSelectedSymbol &&
@@ -1460,7 +1467,7 @@ function DashboardPage() {
       if (latestPerpsPosition?.entryPrice) {
         const pendingTp =
           latestPerpsPosition.takeProfit ??
-          [...livePerpsPendingTriggers]
+          [...readOnlyPerpsSnapshot.pendingTriggers]
             .filter(
               (trigger) =>
                 normalizeMarketTokenSymbol(trigger.marketSymbol) === normalizedSelectedSymbol &&
@@ -1510,9 +1517,9 @@ function DashboardPage() {
     });
   }, [
     autoTradeSettings.disableTpLock,
-    livePerpsPendingTriggers,
-    livePerpsPositions,
     pendingTakeProfit,
+    readOnlyPerpsSnapshot.pendingTriggers,
+    readOnlyPerpsSnapshot.positions,
     recentTrades,
     selectedChartSlotId,
     trackedMarkets,
@@ -2271,7 +2278,7 @@ function DashboardPage() {
               />
             </div>
             <div className="wallet-trading-panel wallet-trading-panel-perps">
-              <JupiterPerpsPositionWidget />
+              <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />
             </div>
           </div>
           <div className="wallet-holdings">

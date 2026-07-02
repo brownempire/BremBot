@@ -19,6 +19,16 @@ import {
   type JupiterPerpsPosition,
 } from "@/lib/jupiterPerps";
 
+export type JupiterPerpsWidgetSnapshot = {
+  walletAddress: string | null;
+  positions: JupiterPerpsPosition[];
+  pendingTriggers: JupiterPerpsPendingTrigger[];
+  isLoading: boolean;
+  error: string | null;
+  isMock: boolean;
+  connected: boolean;
+};
+
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
   if (value === null || !Number.isFinite(value)) return "-";
   return value.toLocaleString("en-US", { maximumFractionDigits });
@@ -177,7 +187,11 @@ function LoadingState() {
   );
 }
 
-function JupiterPerpsPositionWidgetBody() {
+function JupiterPerpsPositionWidgetBody({
+  onSnapshotChange,
+}: {
+  onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
+}) {
   const {
     publicKey,
     connected: adapterConnected,
@@ -211,6 +225,18 @@ function JupiterPerpsPositionWidgetBody() {
       .filter((entry) => entry.readyState !== "Unsupported")
       .filter((entry) => entry.adapter.name === "Jupiter");
   }, [wallets]);
+
+  useEffect(() => {
+    onSnapshotChange?.({
+      walletAddress,
+      positions,
+      pendingTriggers,
+      isLoading,
+      error,
+      isMock,
+      connected: isConnected,
+    });
+  }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, walletAddress]);
 
   function openJupiterExperience() {
     if (typeof window === "undefined") return;
@@ -470,10 +496,14 @@ function JupiterPerpsPositionWidgetBody() {
   );
 }
 
-export function JupiterPerpsPositionWidget() {
+export function JupiterPerpsPositionWidget({
+  onSnapshotChange,
+}: {
+  onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
+}) {
   return (
     <ReadOnlyWalletProvider>
-      <JupiterPerpsPositionWidgetBody />
+      <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} />
     </ReadOnlyWalletProvider>
   );
 }
