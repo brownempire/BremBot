@@ -37,7 +37,7 @@ type CandleWithVolume = CandlestickData<Time> & {
 };
 
 const INTERVAL_STORAGE_KEY = "brembot.lightweight.interval.v2";
-const DEFAULT_INTERVAL: CandleIntervalKey = "5m";
+const DEFAULT_INTERVAL: CandleIntervalKey = "15m";
 const CANDLE_INTERVALS: Array<{ key: CandleIntervalKey; label: string; seconds: number }> = [
   { key: "1m", label: "1m", seconds: 60 },
   { key: "5m", label: "5m", seconds: 5 * 60 },
