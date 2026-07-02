@@ -46,6 +46,20 @@ const CANDLE_INTERVALS: Array<{ key: CandleIntervalKey; label: string; seconds: 
   { key: "1d", label: "1D", seconds: 24 * 60 * 60 },
 ];
 
+const TV_THEME = {
+  background: "#131722",
+  grid: "rgba(240, 243, 250, 0.06)",
+  text: "#B2B5BE",
+  crosshair: "#9598A1",
+  crosshairLabel: "#363A45",
+  separator: "#2A2E39",
+  up: "#089981",
+  down: "#F23645",
+  wick: "#737375",
+  volumeUp: "rgba(8, 153, 129, 0.5)",
+  volumeDown: "rgba(242, 54, 69, 0.5)",
+};
+
 function getGuideColor(tone: TradingViewGuide["tone"]) {
   return tone === "tp" ? "#4ce38a" : "#3ba7ff";
 }
@@ -153,7 +167,7 @@ export function TradingViewChart({
     return candles.map((candle) => ({
       time: candle.time,
       value: candle.volume,
-      color: candle.close >= candle.open ? "rgba(76, 227, 138, 0.68)" : "rgba(255, 96, 96, 0.68)",
+      color: candle.close >= candle.open ? TV_THEME.volumeUp : TV_THEME.volumeDown,
     }));
   }, [candles, showVolume]);
 
@@ -172,27 +186,27 @@ export function TradingViewChart({
     const chart = createChart(container, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: "#0b0f17" },
-        textColor: "#9aa7c7",
+        background: { type: ColorType.Solid, color: TV_THEME.background },
+        textColor: TV_THEME.text,
         attributionLogo: false,
       },
       grid: {
-        vertLines: { color: "rgba(120, 144, 184, 0.12)", visible: true },
-        horzLines: { color: "rgba(120, 144, 184, 0.12)", visible: true },
+        vertLines: { color: TV_THEME.grid, visible: true },
+        horzLines: { color: TV_THEME.grid, visible: true },
       },
       crosshair: {
         mode: CrosshairMode.Magnet,
         vertLine: {
-          color: "rgba(101, 217, 255, 0.32)",
-          labelBackgroundColor: "#0f2030",
+          color: TV_THEME.crosshair,
+          labelBackgroundColor: TV_THEME.crosshairLabel,
         },
         horzLine: {
-          color: "rgba(101, 217, 255, 0.32)",
-          labelBackgroundColor: "#0f2030",
+          color: TV_THEME.crosshair,
+          labelBackgroundColor: TV_THEME.crosshairLabel,
         },
       },
       rightPriceScale: {
-        borderColor: "rgba(120, 144, 184, 0.16)",
+        borderColor: TV_THEME.separator,
         minimumWidth: 96,
         mode: PriceScaleMode.Normal,
         autoScale: true,
@@ -205,11 +219,11 @@ export function TradingViewChart({
         visible: false,
       },
       timeScale: {
-        borderColor: "rgba(120, 144, 184, 0.16)",
+        borderColor: TV_THEME.separator,
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 12,
-        barSpacing: 12,
+        rightOffset: 10,
+        barSpacing: 10,
         minBarSpacing: 4,
         fixLeftEdge: true,
       },
@@ -230,14 +244,15 @@ export function TradingViewChart({
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#22c55e",
-      downColor: "#ff5f5f",
+      upColor: TV_THEME.up,
+      downColor: TV_THEME.down,
       borderVisible: true,
       wickVisible: true,
-      borderUpColor: "#22c55e",
-      borderDownColor: "#ff5f5f",
-      wickUpColor: "#63f59b",
-      wickDownColor: "#ff8585",
+      borderUpColor: TV_THEME.up,
+      borderDownColor: TV_THEME.down,
+      wickColor: TV_THEME.wick,
+      wickUpColor: TV_THEME.up,
+      wickDownColor: TV_THEME.down,
       priceLineVisible: true,
       lastValueVisible: true,
       priceFormat: {
@@ -323,11 +338,11 @@ export function TradingViewChart({
 
     chart.applyOptions({
       grid: {
-        vertLines: { color: "rgba(120, 144, 184, 0.12)", visible: showGrid },
-        horzLines: { color: "rgba(120, 144, 184, 0.12)", visible: showGrid },
+        vertLines: { color: TV_THEME.grid, visible: showGrid },
+        horzLines: { color: TV_THEME.grid, visible: showGrid },
       },
       rightPriceScale: {
-        borderColor: "rgba(120, 144, 184, 0.16)",
+        borderColor: TV_THEME.separator,
         minimumWidth: 96,
         mode: PriceScaleMode.Normal,
         autoScale: true,

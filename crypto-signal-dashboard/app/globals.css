@@ -744,7 +744,7 @@ button:disabled {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  background: linear-gradient(180deg, rgba(15, 22, 34, 0.96) 0%, rgba(7, 11, 18, 0.98) 100%);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 1) 0%, rgba(0, 51, 42, 1) 100%);
 }
 
 .tradingview-container {
@@ -775,12 +775,12 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--subtext);
+  color: #b2b5be;
   font-size: 13px;
 }
 
 .lightweight-chart-symbol-block strong {
-  color: var(--text);
+  color: #d1d4dc;
   font-size: 18px;
   font-weight: 800;
   letter-spacing: 0.03em;
@@ -791,18 +791,18 @@ button:disabled {
 }
 
 .lightweight-chart-symbol-block .positive {
-  color: #4ce38a;
+  color: #089981;
 }
 
 .lightweight-chart-symbol-block .negative {
-  color: #ff7e7e;
+  color: #f23645;
 }
 
 .lightweight-chart-ohlc {
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--subtext);
+  color: #b2b5be;
   font-size: 12px;
   font-weight: 700;
 }
@@ -822,15 +822,15 @@ button:disabled {
   gap: 8px;
   padding: 8px 6px;
   border-radius: 12px;
-  border: 1px solid rgba(120, 144, 184, 0.18);
-  background: rgba(9, 14, 24, 0.92);
+  border: 1px solid #2a2e39;
+  background: rgba(19, 23, 34, 0.96);
 }
 
 .lightweight-chart-sidebar button,
 .lightweight-chart-toolbar-button {
-  border: 1px solid rgba(101, 217, 255, 0.18);
-  background: rgba(15, 25, 39, 0.92);
-  color: var(--subtext);
+  border: 1px solid rgba(240, 243, 250, 0.06);
+  background: rgba(25, 30, 42, 0.98);
+  color: #b2b5be;
   border-radius: 10px;
   padding: 8px 10px;
   font-size: 12px;
@@ -843,9 +843,9 @@ button:disabled {
 .lightweight-chart-toolbar-button.active,
 .lightweight-chart-sidebar button:hover,
 .lightweight-chart-toolbar-button:hover {
-  color: var(--text);
-  border-color: rgba(101, 217, 255, 0.48);
-  background: rgba(27, 55, 79, 0.95);
+  color: #d1d4dc;
+  border-color: rgba(41, 98, 255, 0.4);
+  background: rgba(41, 98, 255, 0.18);
 }
 
 .lightweight-chart-stage {
@@ -854,8 +854,8 @@ button:disabled {
   min-height: 0;
   flex: 1 1 auto;
   border-radius: 12px;
-  border: 1px solid rgba(120, 144, 184, 0.18);
-  background: linear-gradient(180deg, rgba(15, 20, 31, 0.98) 0%, rgba(8, 12, 18, 0.98) 100%);
+  border: 1px solid #2a2e39;
+  background: #131722;
   overflow: hidden;
 }
 
@@ -867,9 +867,9 @@ button:disabled {
 }
 
 .lightweight-chart-range-group button {
-  border: 1px solid rgba(101, 217, 255, 0.24);
-  background: rgba(12, 23, 36, 0.88);
-  color: var(--subtext);
+  border: 1px solid rgba(240, 243, 250, 0.06);
+  background: rgba(25, 30, 42, 0.98);
+  color: #b2b5be;
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
@@ -879,16 +879,16 @@ button:disabled {
 }
 
 .lightweight-chart-range-group button.active {
-  background: rgba(36, 82, 110, 0.95);
-  border-color: rgba(101, 217, 255, 0.5);
-  color: var(--text);
+  background: rgba(41, 98, 255, 0.18);
+  border-color: rgba(41, 98, 255, 0.4);
+  color: #d1d4dc;
 }
 
 .lightweight-chart-empty {
   border-radius: 12px;
-  border: 1px solid rgba(101, 217, 255, 0.16);
-  background: rgba(8, 12, 20, 0.86);
-  color: var(--subtext);
+  border: 1px solid #2a2e39;
+  background: rgba(19, 23, 34, 0.9);
+  color: #b2b5be;
   padding: 10px 12px;
   font-size: 12px;
 }
@@ -900,9 +900,9 @@ button:disabled {
   z-index: 3;
   width: min(260px, calc(100% - 28px));
   border-radius: 12px;
-  border: 1px solid rgba(101, 217, 255, 0.18);
-  background: rgba(8, 12, 20, 0.94);
-  color: var(--subtext);
+  border: 1px solid #2a2e39;
+  background: rgba(19, 23, 34, 0.96);
+  color: #b2b5be;
   padding: 12px;
   font-size: 12px;
 }
@@ -910,7 +910,7 @@ button:disabled {
 .lightweight-chart-settings strong {
   display: block;
   margin-bottom: 10px;
-  color: var(--text);
+  color: #d1d4dc;
   font-size: 13px;
 }
 
