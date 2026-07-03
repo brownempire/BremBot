@@ -44,6 +44,7 @@ For local Jupiter plugin rendering, keep:
 For live feed setup:
 - set `CHAOS_EDGE_API_KEY` and three `CHAOS_EDGE_FEED_*` ids
 - set `NEXT_PUBLIC_SOLANA_RPC_URL` for wallet balance sync / Jupiter connection
+- set `NEXT_PUBLIC_REOWN_PROJECT_ID` to enable Jupiter's official Mobile Adapter flow inside the native iOS shell
 - optionally set `NEXT_PUBLIC_PHANTOM_REDIRECT_URL` if you want a fixed post-approval callback URL instead of the current page
 
 ## Roadmap
