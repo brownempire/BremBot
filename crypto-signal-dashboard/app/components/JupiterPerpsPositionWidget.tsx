@@ -6,8 +6,6 @@ import { Capacitor } from "@capacitor/core";
 import { clusterApiUrl } from "@solana/web3.js";
 import { useWrappedReownAdapter } from "@jup-ag/jup-mobile-adapter";
 import {
-  UnifiedWalletButton,
-  UnifiedWalletProvider,
   WalletReadyState,
   useWallet,
   type Adapter,
@@ -96,26 +94,9 @@ function JupiterNativeWalletProvider({
 
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <UnifiedWalletProvider
-        wallets={nativeWallets}
-        config={{
-          autoConnect: false,
-          env: "mainnet-beta",
-          metadata: {
-            name: "BremLogic",
-            description: "BremLogic Signals Bot read-only Jupiter Perps wallet connection",
-            url: "https://app.bremlogic.com",
-            iconUrls: ["https://app.bremlogic.com/favicon.ico"],
-          },
-          walletlistExplanation: {
-            href: "https://developers.jup.ag/docs/tool-kits/wallet-kit/jupiter-mobile-adapter",
-          },
-          theme: "dark",
-          lang: "en",
-        }}
-      >
+      <WalletProvider wallets={nativeWallets} autoConnect={false}>
         {children}
-      </UnifiedWalletProvider>
+      </WalletProvider>
     </ConnectionProvider>
   );
 }
@@ -296,8 +277,12 @@ function JupiterPerpsPositionWidgetBody({
   const visibleWallets = useMemo(() => {
     return [...wallets]
       .filter((entry) => entry.readyState !== "Unsupported")
-      .filter((entry) => entry.adapter.name === "Jupiter");
+      .filter((entry) => String(entry.adapter.name).toLowerCase().includes("jupiter"));
   }, [wallets]);
+  const nativeJupiterWallet = useMemo(
+    () => visibleWallets.find((entry) => String(entry.adapter.name).toLowerCase().includes("jupiter")) ?? null,
+    [visibleWallets]
+  );
 
   useEffect(() => {
     onSnapshotChange?.({
@@ -459,13 +444,26 @@ function JupiterPerpsPositionWidgetBody({
               <div className="perps-message-card">
                 <strong>Connect with Jupiter Mobile</strong>
                 <span className="subtext">
-                  Use Jupiter&apos;s official wallet modal. It should hand off to Jupiter Mobile instead of falling back to the plain `jup.ag` page.
+                  Use Jupiter&apos;s direct mobile adapter path. This should target Jupiter Mobile itself instead of falling back to the broader wallet onboarding modal.
                 </span>
                 <div className="wallet-controls" style={{ marginTop: 12 }}>
-                  <UnifiedWalletButton
-                    buttonClassName="perps-wallet-option perps-wallet-option-native"
-                    overrideContent={<span>Open Jupiter Mobile</span>}
-                  />
+                  {nativeJupiterWallet ? (
+                    <button
+                      type="button"
+                      className="perps-wallet-option perps-wallet-option-native"
+                      onClick={() => void handleWalletPick(nativeJupiterWallet.adapter.name, nativeJupiterWallet.readyState)}
+                    >
+                      <span>Open Jupiter Mobile</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="perps-wallet-option perps-wallet-option-native"
+                      onClick={openJupiterExperience}
+                    >
+                      <span>Open Jupiter Mobile</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

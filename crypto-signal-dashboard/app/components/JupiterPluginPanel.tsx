@@ -58,7 +58,7 @@ export function JupiterPluginPanel({
         .then((mod) => mod.close())
         .catch(() => undefined);
     };
-  }, [fixedMint, targetId]);
+  }, [fixedMint, passthroughWalletContextState, targetId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

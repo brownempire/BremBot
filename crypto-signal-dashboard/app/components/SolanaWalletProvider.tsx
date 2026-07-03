@@ -1,7 +1,7 @@
 "use client";
 
 import { clusterApiUrl, Connection, Keypair, PublicKey, VersionedTransaction } from "@solana/web3.js";
-import { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 
@@ -339,6 +339,70 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
     }
   }, [keypair, secretKey]);
 
+  const signMessage = useCallback(async (message: Uint8Array) => {
+    if (!keypair || !connected) throw new Error("Wallet is not connected");
+    return nacl.sign.detached(message, keypair.secretKey);
+  }, [connected, keypair]);
+
+  const executeSwap = useCallback(async ({ inputMint, outputMint, uiAmount, slippageBps = 100 }: ExecuteSwapParams) => {
+    if (!keypair || !connected) throw new Error("Wallet is not connected");
+    const amount = uiToAtomicAmount(uiAmount, mintDecimals(inputMint));
+    if (BigInt(amount) <= 0n) throw new Error("Trade amount must be greater than zero");
+
+    const swapResponse = await fetch("/api/trade/jupiter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        inputMint,
+        outputMint,
+        amount,
+        slippageBps,
+        userPublicKey: keypair.publicKey.toBase58(),
+      }),
+    });
+    if (!swapResponse.ok) {
+      const detail = await swapResponse.text().catch(() => "");
+      throw new Error(`Swap route failed (${swapResponse.status}) ${detail}`);
+    }
+    const swapPayload = await swapResponse.json().catch(() => null);
+    const base64Tx = String(swapPayload?.transaction ?? swapPayload?.swapTransaction ?? "");
+    const requestId = String(swapPayload?.requestId ?? "");
+    if (!base64Tx) throw new Error("Jupiter did not return a swap transaction");
+    if (!requestId) throw new Error("Jupiter did not return an order request ID");
+
+    const txBytes = fromBase64(base64Tx);
+    const transaction = VersionedTransaction.deserialize(txBytes);
+    transaction.sign([keypair]);
+    const signedTx = transaction.serialize();
+    const sendResponse = await fetch("/api/trade/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        signedTransaction: toBase64(signedTx),
+        requestId,
+      }),
+    });
+    if (!sendResponse.ok) {
+      const detail = await sendResponse.text().catch(() => "");
+      throw new Error(`Broadcast failed (${sendResponse.status}) ${detail}`);
+    }
+    const sendPayload = await sendResponse.json().catch(() => ({}));
+    const txid = String(sendPayload?.txid ?? "");
+    if (!txid) throw new Error("Broadcast route did not return a transaction signature");
+
+    return {
+      txid,
+      inputMint,
+      outputMint,
+      inputAmount: uiAmount,
+      outputAmount: Number(swapPayload?.outAmount ?? 0) / (10 ** mintDecimals(outputMint)),
+      gasless: Boolean(swapPayload?.gasless),
+      signatureFeePayer:
+        typeof swapPayload?.signatureFeePayer === "string" ? swapPayload.signatureFeePayer : null,
+      status: String(sendPayload?.status ?? "Success"),
+    };
+  }, [connected, keypair]);
+
   const wallet = useMemo<AppWalletContextState>(() => ({
     connected: connected && !!keypair,
     publicKey: connected && keypair ? keypair.publicKey : null,
@@ -400,70 +464,10 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
       setConnected(true);
       setHasStoredWallet(true);
     },
-    signMessage: async (message: Uint8Array) => {
-      if (!keypair || !connected) throw new Error("Wallet is not connected");
-      return nacl.sign.detached(message, keypair.secretKey);
-    },
-    executeSwap: async ({ inputMint, outputMint, uiAmount, slippageBps = 100 }) => {
-      if (!keypair || !connected) throw new Error("Wallet is not connected");
-      const amount = uiToAtomicAmount(uiAmount, mintDecimals(inputMint));
-      if (BigInt(amount) <= 0n) throw new Error("Trade amount must be greater than zero");
-
-      const swapResponse = await fetch("/api/trade/jupiter", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          inputMint,
-          outputMint,
-          amount,
-          slippageBps,
-          userPublicKey: keypair.publicKey.toBase58(),
-        }),
-      });
-      if (!swapResponse.ok) {
-        const detail = await swapResponse.text().catch(() => "");
-        throw new Error(`Swap route failed (${swapResponse.status}) ${detail}`);
-      }
-      const swapPayload = await swapResponse.json().catch(() => null);
-      const base64Tx = String(swapPayload?.transaction ?? swapPayload?.swapTransaction ?? "");
-      const requestId = String(swapPayload?.requestId ?? "");
-      if (!base64Tx) throw new Error("Jupiter did not return a swap transaction");
-      if (!requestId) throw new Error("Jupiter did not return an order request ID");
-
-      const txBytes = fromBase64(base64Tx);
-      const transaction = VersionedTransaction.deserialize(txBytes);
-      transaction.sign([keypair]);
-      const signedTx = transaction.serialize();
-      const sendResponse = await fetch("/api/trade/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          signedTransaction: toBase64(signedTx),
-          requestId,
-        }),
-      });
-      if (!sendResponse.ok) {
-        const detail = await sendResponse.text().catch(() => "");
-        throw new Error(`Broadcast failed (${sendResponse.status}) ${detail}`);
-      }
-      const sendPayload = await sendResponse.json().catch(() => ({}));
-      const txid = String(sendPayload?.txid ?? "");
-      if (!txid) throw new Error("Broadcast route did not return a transaction signature");
-
-      return {
-        txid,
-        inputMint,
-        outputMint,
-        inputAmount: uiAmount,
-        outputAmount: Number(swapPayload?.outAmount ?? 0) / (10 ** mintDecimals(outputMint)),
-        gasless: Boolean(swapPayload?.gasless),
-        signatureFeePayer:
-          typeof swapPayload?.signatureFeePayer === "string" ? swapPayload.signatureFeePayer : null,
-        status: String(sendPayload?.status ?? "Success"),
-      };
-    },
+    signMessage,
+    executeSwap,
     passthroughWalletContextState,
-  }), [connected, hasStoredWallet, keypair, passthroughWalletContextState]);
+  }), [connected, executeSwap, hasStoredWallet, keypair, passthroughWalletContextState, signMessage]);
 
   return (
     <SolanaContext.Provider value={{ connection, wallet }}>

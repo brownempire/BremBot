@@ -4,16 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import {
-  JupiterPerpsPositionWidget,
-  type JupiterPerpsWidgetSnapshot,
-} from "@/app/components/JupiterPerpsPositionWidget";
+import type { JupiterPerpsWidgetSnapshot } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -52,6 +50,11 @@ const DEFAULT_TRACKED_MARKETS: TrackedMarket[] = [
   { id: "slot-eth", pair: "ETH/USD", coinbaseProduct: "ETH-USD", tvSymbol: "COINBASE:ETHUSD" },
   { id: "slot-btc", pair: "BTC/USD", coinbaseProduct: "BTC-USD", tvSymbol: "COINBASE:BTCUSD" },
 ];
+
+const JupiterPerpsPositionWidget = dynamic(
+  () => import("@/app/components/JupiterPerpsPositionWidget").then((mod) => mod.JupiterPerpsPositionWidget),
+  { ssr: false }
+);
 
 const DEFAULT_PARAMS: UserParams = {
   trendWindow: 5,
@@ -280,6 +283,9 @@ function DashboardPage() {
   const { connection } = useConnection();
   const wallet = useWallet();
   const walletAddress = wallet.publicKey?.toBase58() ?? null;
+  const walletExecuteSwap = wallet.executeSwap;
+  const walletPublicKey = wallet.publicKey;
+  const walletSignMessage = wallet.signMessage;
 
   const [trackedMarkets, setTrackedMarkets] = useState<TrackedMarket[]>(DEFAULT_TRACKED_MARKETS);
   const [priceHistory, setPriceHistory] = useState<Record<string, PricePoint[]>>({});
@@ -987,7 +993,7 @@ function DashboardPage() {
     pendingTakeProfit,
   ]);
 
-  async function requestRemoteAuthChallenge(address: string) {
+  const requestRemoteAuthChallenge = useCallback(async (address: string) => {
     const response = await fetch("/api/trades/auth", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -998,9 +1004,9 @@ function DashboardPage() {
       throw new Error((payload && "error" in payload && payload.error) || "Remote auth challenge failed");
     }
     return payload;
-  }
+  }, []);
 
-  async function verifyRemoteAuthChallenge(address: string, challengeId: string, signature: string) {
+  const verifyRemoteAuthChallenge = useCallback(async (address: string, challengeId: string, signature: string) => {
     const response = await fetch("/api/trades/auth", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1011,13 +1017,13 @@ function DashboardPage() {
       throw new Error(payload?.error || "Remote auth verification failed");
     }
     return payload.token;
-  }
+  }, []);
 
-  async function signRemoteAuthMessage(source: RemoteAuthSource, message: string) {
+  const signRemoteAuthMessage = useCallback(async (source: RemoteAuthSource, message: string) => {
     const encodedMessage = new TextEncoder().encode(message);
 
     if (source === "in-app") {
-      const signature = await wallet.signMessage(encodedMessage);
+      const signature = await walletSignMessage(encodedMessage);
       return bs58.encode(signature);
     }
 
@@ -1035,9 +1041,9 @@ function DashboardPage() {
       throw new Error("Phantom did not return a signature.");
     }
     return bs58.encode(signatureBytes);
-  }
+  }, [walletSignMessage]);
 
-  async function completeRemoteAuth(address: string, source: RemoteAuthSource) {
+  const completeRemoteAuth = useCallback(async (address: string, source: RemoteAuthSource) => {
     setRemoteAuthStatus(
       source === "in-app"
         ? "Requesting in-app wallet signature..."
@@ -1055,7 +1061,7 @@ function DashboardPage() {
     }
     setRemoteAuthStatus(`Remote auth connected via ${source === "in-app" ? "in-app wallet" : "Phantom"}`);
     return nextToken;
-  }
+  }, [requestRemoteAuthChallenge, signRemoteAuthMessage, verifyRemoteAuthChallenge]);
 
   async function connectPhantomForRemoteSync() {
     const provider = getPhantomAuthProvider();
@@ -1128,16 +1134,16 @@ function DashboardPage() {
       `TP hit for ${pendingTakeProfit.tokenSymbol}: selling ${pendingTakeProfit.amount.toFixed(6)} at ${formatUsd(latestPrice)}`
     );
 
-    wallet.executeSwap({
-      inputMint: pendingTakeProfit.tokenMint,
-      outputMint: USDC_MINT,
-      uiAmount: pendingTakeProfit.amount,
+      walletExecuteSwap({
+        inputMint: pendingTakeProfit.tokenMint,
+        outputMint: USDC_MINT,
+        uiAmount: pendingTakeProfit.amount,
     }).then((result) => {
       const tpTradeRecord: StoredTradeRecord = {
         id: `tp-${pendingTakeProfit.id}-${Date.now()}`,
         txid: result.txid,
         timestamp: Date.now(),
-        walletAddress: wallet.publicKey?.toBase58() ?? "paper-auto",
+        walletAddress: walletPublicKey?.toBase58() ?? "paper-auto",
         source: "auto",
         signalId: pendingTakeProfit.signalId,
         inputMint: result.inputMint,
@@ -1167,8 +1173,9 @@ function DashboardPage() {
     persistTradeRecord,
     priceHistory,
     trackedMarkets,
-    wallet.executeSwap,
     wallet.publicKey,
+    walletExecuteSwap,
+    walletPublicKey,
     walletAddress,
   ]);
 
@@ -1245,7 +1252,7 @@ function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [phantomAuthAddress, remoteAuthAddress, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.signMessage]);
+  }, [completeRemoteAuth, phantomAuthAddress, remoteAuthAddress, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress]);
 
   useEffect(() => {
     if (!remoteSyncWalletAddress || !remoteAuthToken) {
@@ -2574,10 +2581,13 @@ function DashboardPage() {
           <div className="modal-card" onClick={(event) => event.stopPropagation()}>
             <h3>Deposit Funds</h3>
             <div className="subtext">Send SOL or SPL tokens to this wallet.</div>
-            <img
+            <Image
               className="deposit-qr"
               src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(wallet.publicKey.toBase58())}`}
               alt="Deposit address QR code"
+              width={240}
+              height={240}
+              unoptimized
             />
             <code className="deposit-address">{wallet.publicKey.toBase58()}</code>
             <div className="wallet-controls">
