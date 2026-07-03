@@ -6,6 +6,7 @@ import { Capacitor } from "@capacitor/core";
 import { clusterApiUrl } from "@solana/web3.js";
 import { useWrappedReownAdapter } from "@jup-ag/jup-mobile-adapter";
 import {
+  UnifiedWalletButton,
   UnifiedWalletProvider,
   WalletReadyState,
   useWallet,
@@ -453,6 +454,22 @@ function JupiterPerpsPositionWidgetBody({
                 : "Jupiter Mobile works best when BremLogic is opened inside Jupiter Mobile's dApp browser. External app handoffs from the native iPhone shell may still leave you in a mobile browser unless the native Jupiter Mobile Adapter is configured."}
             </div>
           ) : null}
+          {nativeShell && nativeJupiterAdapterEnabled ? (
+            <div className="perps-wallet-grid">
+              <div className="perps-message-card">
+                <strong>Connect with Jupiter Mobile</strong>
+                <span className="subtext">
+                  Use Jupiter&apos;s official wallet modal. It should hand off to Jupiter Mobile instead of falling back to the plain `jup.ag` page.
+                </span>
+                <div className="wallet-controls" style={{ marginTop: 12 }}>
+                  <UnifiedWalletButton
+                    buttonClassName="perps-wallet-option perps-wallet-option-native"
+                    overrideContent={<span>Open Jupiter Mobile</span>}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className="perps-wallet-grid">
             {visibleWallets.length === 0 ? (
               <button
@@ -487,6 +504,7 @@ function JupiterPerpsPositionWidgetBody({
               ))
             )}
           </div>
+          )}
         </div>
       ) : null}
 
