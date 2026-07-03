@@ -1,7 +1,7 @@
 "use client";
 
 import { Browser } from "@capacitor/browser";
-import { useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { Capacitor } from "@capacitor/core";
 import { clusterApiUrl } from "@solana/web3.js";
 import { useWrappedReownAdapter } from "@jup-ag/jup-mobile-adapter";
@@ -33,6 +33,16 @@ export type JupiterPerpsWidgetSnapshot = {
   isMock: boolean;
   connected: boolean;
 };
+
+type NativeJupiterContextValue = {
+  connectJupiterMobile: (() => Promise<void>) | null;
+  directAdapterLabel: string | null;
+};
+
+const NativeJupiterContext = createContext<NativeJupiterContextValue>({
+  connectJupiterMobile: null,
+  directAdapterLabel: null,
+});
 
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
   if (value === null || !Number.isFinite(value)) return "-";
@@ -91,11 +101,19 @@ function JupiterNativeWalletProvider({
   const nativeWallets = useMemo<Adapter[]>(() => {
     return [jupiterAdapter].filter((item) => item && item.name && item.icon) as Adapter[];
   }, [jupiterAdapter]);
+  const nativeAdapterContextValue = useMemo<NativeJupiterContextValue>(() => ({
+    connectJupiterMobile: async () => {
+      await jupiterAdapter.connect();
+    },
+    directAdapterLabel: typeof jupiterAdapter.name === "string" ? jupiterAdapter.name : "Jupiter Mobile",
+  }), [jupiterAdapter]);
 
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={nativeWallets} autoConnect={false}>
-        {children}
+        <NativeJupiterContext.Provider value={nativeAdapterContextValue}>
+          {children}
+        </NativeJupiterContext.Provider>
       </WalletProvider>
     </ConnectionProvider>
   );
@@ -244,6 +262,7 @@ function JupiterPerpsPositionWidgetBody({
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
 }) {
+  const { connectJupiterMobile, directAdapterLabel } = useContext(NativeJupiterContext);
   const {
     publicKey,
     connected: adapterConnected,
@@ -354,6 +373,28 @@ function JupiterPerpsPositionWidgetBody({
     select(name);
   }
 
+  async function handleNativeJupiterConnect() {
+    if (!nativeJupiterAdapterEnabled) {
+      setWalletFeedback("Jupiter Mobile adapter is not configured for the native app yet. Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable direct Jupiter Mobile connection.");
+      return;
+    }
+
+    if (!connectJupiterMobile) {
+      setWalletFeedback("Jupiter Mobile's direct adapter is not ready yet in this session. Close the wallet picker and try again.");
+      return;
+    }
+
+    try {
+      setWalletFeedback("Opening Jupiter Mobile...");
+      await connectJupiterMobile();
+      setWalletFeedback(null);
+      setWalletMenuOpen(false);
+    } catch (connectError) {
+      const message = connectError instanceof Error ? connectError.message : "Jupiter Mobile connection was not completed.";
+      setWalletFeedback(message);
+    }
+  }
+
   async function handleDisconnect() {
     try {
       await disconnect();
@@ -447,24 +488,17 @@ function JupiterPerpsPositionWidgetBody({
                   Use Jupiter&apos;s direct mobile adapter path. This should target Jupiter Mobile itself instead of falling back to the broader wallet onboarding modal.
                 </span>
                 <div className="wallet-controls" style={{ marginTop: 12 }}>
-                  {nativeJupiterWallet ? (
-                    <button
-                      type="button"
-                      className="perps-wallet-option perps-wallet-option-native"
-                      onClick={() => void handleWalletPick(nativeJupiterWallet.adapter.name, nativeJupiterWallet.readyState)}
-                    >
-                      <span>Open Jupiter Mobile</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="perps-wallet-option perps-wallet-option-native"
-                      onClick={openJupiterExperience}
-                    >
-                      <span>Open Jupiter Mobile</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="perps-wallet-option perps-wallet-option-native"
+                    onClick={() => void handleNativeJupiterConnect()}
+                  >
+                    <span>Open Jupiter Mobile</span>
+                  </button>
                 </div>
+                <span className="subtext" style={{ marginTop: 12 }}>
+                  Adapter: {nativeJupiterWallet?.adapter.name ?? directAdapterLabel ?? "Jupiter Mobile"}
+                </span>
               </div>
             </div>
           ) : (
