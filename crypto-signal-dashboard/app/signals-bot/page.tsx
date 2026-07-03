@@ -158,21 +158,6 @@ type PendingTakeProfit = {
   createdAt: number;
 };
 
-type TradeChartOverlay = {
-  symbol: string;
-  tokenSymbol: string;
-  entryPrice: number;
-  targetPrice: number | null;
-  side: "buy" | "sell";
-  updatedAt: number;
-};
-
-function normalizeMarketTokenSymbol(value: string | null | undefined) {
-  return (value ?? "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "");
-}
-
 type RemoteAuthChallenge = {
   address: string;
   challengeId: string;
@@ -325,7 +310,6 @@ function DashboardPage() {
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
-  const [tradeChartOverlay, setTradeChartOverlay] = useState<TradeChartOverlay | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
     walletAddress: null,
     positions: [],
@@ -683,14 +667,6 @@ function DashboardPage() {
                       gasless: result.gasless,
                     };
                     persistTradeRecord(autoTradeRecord).catch(() => undefined);
-                    setTradeChartOverlay({
-                      symbol: signal.symbol,
-                      tokenSymbol: assetSymbol,
-                      entryPrice: marketEntryPrice,
-                      targetPrice,
-                      side: isBullSignal ? "buy" : "sell",
-                      updatedAt: Date.now(),
-                    });
                     if (shouldArmTp) {
                       const executedOutputAmount = Number(result.outputAmount ?? 0);
                       if (Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0) {
@@ -756,14 +732,6 @@ function DashboardPage() {
                   signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${autoTradeSettings.walletPercent}% allocation`,
                 };
                 persistTradeRecord(autoTradeRecord).catch(() => undefined);
-                setTradeChartOverlay({
-                  symbol: signal.symbol,
-                  tokenSymbol: assetSymbol,
-                  entryPrice: points[points.length - 1]?.v ?? 0,
-                  targetPrice: null,
-                  side: signal.direction === "bullish" ? "buy" : "sell",
-                  updatedAt: Date.now(),
-                });
                 setAutoTradeStatus(
                   `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${autoTradeSettings.walletPercent}% allocation; connect wallet for live)`
                 );
@@ -1186,14 +1154,6 @@ function DashboardPage() {
       persistTradeRecord(tpTradeRecord).catch(() => undefined);
       setPendingTakeProfit(null);
       pendingTakeProfitRef.current = null;
-      setTradeChartOverlay({
-        symbol: pendingTakeProfit.symbol,
-        tokenSymbol: pendingTakeProfit.tokenSymbol,
-        entryPrice: pendingTakeProfit.entryPrice,
-        targetPrice: pendingTakeProfit.targetPrice,
-        side: "sell",
-        updatedAt: Date.now(),
-      });
       setAutoTradeStatus(`TP executed for ${pendingTakeProfit.symbol} at ${formatUsd(latestPrice)}`);
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "swap failed";
@@ -1448,82 +1408,6 @@ function DashboardPage() {
 
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
-
-  useEffect(() => {
-    const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
-    const selectedTokenSymbol = selectedMarket?.pair.split("/")[0] ?? null;
-    const normalizedSelectedSymbol = normalizeMarketTokenSymbol(selectedTokenSymbol);
-
-    if (normalizedSelectedSymbol) {
-      const latestPerpsPosition = [...readOnlyPerpsSnapshot.positions]
-        .filter(
-          (position) =>
-            normalizeMarketTokenSymbol(position.marketSymbol) === normalizedSelectedSymbol &&
-            Number.isFinite(position.entryPrice) &&
-            position.entryPrice !== null
-        )
-        .sort((left, right) => (right.lastUpdated ?? 0) - (left.lastUpdated ?? 0))[0];
-
-      if (latestPerpsPosition?.entryPrice) {
-        const pendingTp =
-          latestPerpsPosition.takeProfit ??
-          [...readOnlyPerpsSnapshot.pendingTriggers]
-            .filter(
-              (trigger) =>
-                normalizeMarketTokenSymbol(trigger.marketSymbol) === normalizedSelectedSymbol &&
-                trigger.kind === "take-profit" &&
-                Number.isFinite(trigger.triggerPrice) &&
-                trigger.triggerPrice !== null
-            )
-            .sort((left, right) => (right.lastUpdated ?? 0) - (left.lastUpdated ?? 0))[0]?.triggerPrice ??
-          null;
-
-        setTradeChartOverlay({
-          symbol: selectedMarket?.pair ?? `${selectedTokenSymbol ?? latestPerpsPosition.marketSymbol}/USD`,
-          tokenSymbol: selectedTokenSymbol ?? latestPerpsPosition.marketSymbol,
-          entryPrice: latestPerpsPosition.entryPrice,
-          targetPrice: pendingTp,
-          side: latestPerpsPosition.side === "short" ? "sell" : "buy",
-          updatedAt: latestPerpsPosition.lastUpdated ?? Date.now(),
-        });
-        return;
-      }
-    }
-
-    const latestAutoTrade = [...recentTrades]
-      .filter((trade) => trade.source === "auto" && trade.symbol && Number.isFinite(trade.entryPrice))
-      .sort((left, right) => right.timestamp - left.timestamp)[0];
-
-    if (!latestAutoTrade?.symbol || !Number.isFinite(latestAutoTrade.entryPrice)) {
-      if (!pendingTakeProfit) {
-        setTradeChartOverlay(null);
-      }
-      return;
-    }
-
-    const overlayTargetPrice = autoTradeSettings.disableTpLock
-      ? null
-      : pendingTakeProfit?.symbol === latestAutoTrade.symbol
-        ? pendingTakeProfit.targetPrice
-        : latestAutoTrade.takeProfitPrice ?? null;
-
-    setTradeChartOverlay({
-      symbol: latestAutoTrade.symbol,
-      tokenSymbol: latestAutoTrade.symbol.split("/")[0] ?? latestAutoTrade.symbol,
-      entryPrice: Number(latestAutoTrade.entryPrice),
-      targetPrice: overlayTargetPrice,
-      side: latestAutoTrade.tradeDirection === "sell" ? "sell" : "buy",
-      updatedAt: latestAutoTrade.timestamp,
-    });
-  }, [
-    autoTradeSettings.disableTpLock,
-    pendingTakeProfit,
-    readOnlyPerpsSnapshot.pendingTriggers,
-    readOnlyPerpsSnapshot.positions,
-    recentTrades,
-    selectedChartSlotId,
-    trackedMarkets,
-  ]);
 
   const latestNews = useMemo(() => newsItems, [newsItems]);
 
@@ -1990,7 +1874,6 @@ function DashboardPage() {
     setRecentTrades([]);
     setPendingTakeProfit(null);
     pendingTakeProfitRef.current = null;
-    setTradeChartOverlay(null);
     setPnlStatus("No recent trades. PnL reset.");
     if (remoteAuthToken) {
       await fetch("/api/trades", {
@@ -2102,7 +1985,6 @@ function DashboardPage() {
     if (disabled) {
       setPendingTakeProfit(null);
       pendingTakeProfitRef.current = null;
-      setTradeChartOverlay((previous) => (previous ? { ...previous, targetPrice: null } : previous));
     }
     persistAutoTradeSettings(next);
   }
@@ -2215,30 +2097,7 @@ function DashboardPage() {
             Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
           </div>
           <div className="tradingview-wrap">
-            <TradingViewChart
-              symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
-              pricePoints={selectedChartMarket ? priceHistory[selectedChartMarket.id] ?? [] : []}
-              guides={
-                tradeChartOverlay?.symbol === selectedChartMarket?.pair
-                  ? [
-                      {
-                        label: "Entry",
-                        price: tradeChartOverlay.entryPrice,
-                        tone: "entry" as const,
-                      },
-                      ...(tradeChartOverlay.targetPrice
-                        ? [
-                            {
-                              label: "TP",
-                              price: tradeChartOverlay.targetPrice,
-                              tone: "tp" as const,
-                            },
-                          ]
-                        : []),
-                    ]
-                  : []
-              }
-            />
+            <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
           </div>
         </>
       );
