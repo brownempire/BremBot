@@ -1,6 +1,5 @@
 "use client";
 
-import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
 import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { Capacitor } from "@capacitor/core";
@@ -44,28 +43,6 @@ const NativeJupiterContext = createContext<NativeJupiterContextValue>({
   connectJupiterMobile: null,
   directAdapterLabel: null,
 });
-
-const PENDING_NATIVE_JUPITER_CONNECT_KEY = "bremlogic.jupiter-native-connect.pending.v1";
-const APPKIT_CONNECTION_STATUS_KEY = "@appkit/connection_status";
-
-function readPendingNativeJupiterConnect() {
-  if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(PENDING_NATIVE_JUPITER_CONNECT_KEY) === "true";
-}
-
-function writePendingNativeJupiterConnect(value: boolean) {
-  if (typeof window === "undefined") return;
-  if (value) {
-    window.localStorage.setItem(PENDING_NATIVE_JUPITER_CONNECT_KEY, "true");
-    return;
-  }
-  window.localStorage.removeItem(PENDING_NATIVE_JUPITER_CONNECT_KEY);
-}
-
-function readAppKitConnectionStatus() {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(APPKIT_CONNECTION_STATUS_KEY);
-}
 
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
   if (value === null || !Number.isFinite(value)) return "-";
@@ -301,7 +278,6 @@ function JupiterPerpsPositionWidgetBody({
   const [selectedWalletName, setSelectedWalletName] = useState<WalletName<string> | null>(null);
   const [walletFeedback, setWalletFeedback] = useState<string | null>(null);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
-  const [resumeAttemptNonce, setResumeAttemptNonce] = useState(0);
   const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
   const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
   const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -340,85 +316,11 @@ function JupiterPerpsPositionWidgetBody({
   }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, walletAddress]);
 
   useEffect(() => {
-    if (!nativeShell) return;
-
-    let cancelled = false;
-    let removeListener: (() => void) | undefined;
-
-    async function registerResumeListener() {
-      const handle = await App.addListener("appStateChange", ({ isActive }) => {
-        if (!isActive || !readPendingNativeJupiterConnect()) return;
-        if (cancelled) return;
-        setResumeAttemptNonce((value) => value + 1);
-      });
-
-      removeListener = () => {
-        void handle.remove();
-      };
-    }
-
-    void registerResumeListener();
-
-    return () => {
-      cancelled = true;
-      removeListener?.();
-    };
-  }, [nativeShell]);
-
-  useEffect(() => {
-    if (!nativeShell || !nativeJupiterAdapterEnabled) return;
-
     if (isConnected) {
-      writePendingNativeJupiterConnect(false);
       setWalletMenuOpen(false);
       setWalletFeedback(null);
-      return;
     }
-
-    if (!readPendingNativeJupiterConnect()) return;
-
-    const appKitConnectionStatus = readAppKitConnectionStatus();
-    if (appKitConnectionStatus === "connecting") {
-      setWalletFeedback("Waiting for approval in Jupiter Mobile...");
-      return;
-    }
-
-    if (appKitConnectionStatus !== "connected") {
-      return;
-    }
-
-    const finalizeConnect = connectJupiterMobile;
-    if (!finalizeConnect || isConnecting) return;
-
-    let cancelled = false;
-
-    async function finalizePendingConnection() {
-      const connectNow = finalizeConnect;
-      if (!connectNow) return;
-      try {
-        setWalletFeedback("Finalizing Jupiter Mobile connection...");
-        await connectNow();
-        if (cancelled) return;
-      } catch (connectError) {
-        if (cancelled) return;
-        const message = connectError instanceof Error ? connectError.message : "Jupiter Mobile connection was not completed.";
-        setWalletFeedback(message);
-      }
-    }
-
-    void finalizePendingConnection();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    connectJupiterMobile,
-    isConnected,
-    isConnecting,
-    nativeJupiterAdapterEnabled,
-    nativeShell,
-    resumeAttemptNonce,
-  ]);
+  }, [isConnected]);
 
   function openJupiterExperience() {
     if (typeof window === "undefined") return;
@@ -490,13 +392,11 @@ function JupiterPerpsPositionWidgetBody({
     }
 
     try {
-      writePendingNativeJupiterConnect(true);
       setWalletFeedback("Opening Jupiter Mobile...");
       await connectJupiterMobile();
       setWalletFeedback(null);
       setWalletMenuOpen(false);
     } catch (connectError) {
-      writePendingNativeJupiterConnect(false);
       const message = connectError instanceof Error ? connectError.message : "Jupiter Mobile connection was not completed.";
       setWalletFeedback(message);
     }
@@ -504,7 +404,6 @@ function JupiterPerpsPositionWidgetBody({
 
   async function handleDisconnect() {
     try {
-      writePendingNativeJupiterConnect(false);
       await disconnect();
       setWalletFeedback("Wallet disconnected.");
     } catch (disconnectError) {
