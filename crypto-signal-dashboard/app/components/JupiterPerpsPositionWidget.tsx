@@ -378,7 +378,12 @@ function JupiterPerpsPositionWidgetBody({
     if (!readPendingNativeJupiterConnect()) return;
 
     const appKitConnectionStatus = readAppKitConnectionStatus();
-    if (appKitConnectionStatus !== "connected" && appKitConnectionStatus !== "connecting") {
+    if (appKitConnectionStatus === "connecting") {
+      setWalletFeedback("Waiting for approval in Jupiter Mobile...");
+      return;
+    }
+
+    if (appKitConnectionStatus !== "connected") {
       return;
     }
 
