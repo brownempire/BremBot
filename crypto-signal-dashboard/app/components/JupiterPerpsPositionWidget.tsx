@@ -1,22 +1,12 @@
 "use client";
 
 import { Browser } from "@capacitor/browser";
-import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
-import { clusterApiUrl } from "@solana/web3.js";
-import { useWrappedReownAdapter } from "@jup-ag/jup-mobile-adapter";
-import {
-  WalletReadyState,
-  useWallet,
-  type Adapter,
-  type WalletName,
-} from "@jup-ag/wallet-adapter";
-import {
-  ConnectionProvider,
-  WalletProvider,
-} from "@solana/wallet-adapter-react";
+import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
+import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { formatUsd } from "@/lib/utils";
 import {
   shortenWalletAddress,
@@ -33,16 +23,6 @@ export type JupiterPerpsWidgetSnapshot = {
   isMock: boolean;
   connected: boolean;
 };
-
-type NativeJupiterContextValue = {
-  connectJupiterMobile: (() => Promise<void>) | null;
-  directAdapterLabel: string | null;
-};
-
-const NativeJupiterContext = createContext<NativeJupiterContextValue>({
-  connectJupiterMobile: null,
-  directAdapterLabel: null,
-});
 
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
   if (value === null || !Number.isFinite(value)) return "-";
@@ -70,74 +50,6 @@ function getWalletReadinessLabel(readyState: WalletReadyState) {
     default:
       return "Unsupported";
   }
-}
-
-function JupiterNativeWalletProvider({
-  children,
-  endpoint,
-  reownProjectId,
-}: PropsWithChildren<{
-  endpoint: string;
-  reownProjectId: string;
-}>) {
-  const { jupiterAdapter } = useWrappedReownAdapter({
-    appKitOptions: {
-      metadata: {
-        name: "BremLogic",
-        description: "BremLogic Signals Bot read-only Jupiter Perps wallet connection",
-        url: "https://app.bremlogic.com",
-        icons: ["https://app.bremlogic.com/favicon.ico"],
-      },
-      projectId: reownProjectId,
-      features: {
-        analytics: false,
-        socials: ["google", "x", "apple"],
-        email: false,
-      },
-      enableWallets: false,
-    },
-  });
-
-  const nativeWallets = useMemo<Adapter[]>(() => {
-    return [jupiterAdapter].filter((item) => item && item.name && item.icon) as Adapter[];
-  }, [jupiterAdapter]);
-  const nativeAdapterContextValue = useMemo<NativeJupiterContextValue>(() => ({
-    connectJupiterMobile: async () => {
-      await jupiterAdapter.connect();
-    },
-    directAdapterLabel: typeof jupiterAdapter.name === "string" ? jupiterAdapter.name : "Jupiter Mobile",
-  }), [jupiterAdapter]);
-
-  return (
-    <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider wallets={nativeWallets} autoConnect={false}>
-        <NativeJupiterContext.Provider value={nativeAdapterContextValue}>
-          {children}
-        </NativeJupiterContext.Provider>
-      </WalletProvider>
-    </ConnectionProvider>
-  );
-}
-
-function ReadOnlyWalletProvider({ children }: PropsWithChildren) {
-  const endpoint = process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() || clusterApiUrl("mainnet-beta");
-  const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
-  const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
-  const shouldUseJupiterNativeAdapter = nativeShell && reownProjectId.length > 0;
-
-  return (
-    shouldUseJupiterNativeAdapter ? (
-      <JupiterNativeWalletProvider endpoint={endpoint} reownProjectId={reownProjectId}>
-        {children}
-      </JupiterNativeWalletProvider>
-    ) : (
-      <ConnectionProvider endpoint={endpoint}>
-        <WalletProvider wallets={[]} autoConnect={false}>
-          {children}
-        </WalletProvider>
-      </ConnectionProvider>
-    )
-  );
 }
 
 function PositionMetric({
@@ -262,46 +174,23 @@ function JupiterPerpsPositionWidgetBody({
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
 }) {
-  const { connectJupiterMobile, directAdapterLabel } = useContext(NativeJupiterContext);
-  const {
-    publicKey,
-    connected: adapterConnected,
-    connecting: adapterConnecting,
-    disconnecting: adapterDisconnecting,
-    wallets,
-    wallet,
-    select,
-    connect,
-    disconnect,
-  } = useWallet();
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
-  const [selectedWalletName, setSelectedWalletName] = useState<WalletName<string> | null>(null);
-  const [walletFeedback, setWalletFeedback] = useState<string | null>(null);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
   const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
   const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const shouldRecommendJupiterMobile = nativeShell || mobileUserAgent;
   const nativeJupiterAdapterEnabled = nativeShell && reownProjectId.length > 0;
-
-  const isConnected = adapterConnected;
-  const isConnecting = adapterConnecting;
-  const isDisconnecting = adapterDisconnecting;
-  const walletAddress = publicKey?.toBase58() ?? null;
+  const nativeJupiterWallet = useNativeJupiterWalletConnect(nativeJupiterAdapterEnabled, reownProjectId);
+  const walletFeedback = nativeJupiterAdapterEnabled ? nativeJupiterWallet.feedback : null;
+  const isConnected = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isConnected : false;
+  const isConnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isConnecting : false;
+  const isDisconnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isDisconnecting : false;
+  const walletAddress = nativeJupiterAdapterEnabled ? nativeJupiterWallet.walletAddress : null;
   const { positions, pendingTriggers, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     walletAddress,
     showMockData,
   });
-
-  const visibleWallets = useMemo(() => {
-    return [...wallets]
-      .filter((entry) => entry.readyState !== "Unsupported")
-      .filter((entry) => String(entry.adapter.name).toLowerCase().includes("jupiter"));
-  }, [wallets]);
-  const nativeJupiterWallet = useMemo(
-    () => visibleWallets.find((entry) => String(entry.adapter.name).toLowerCase().includes("jupiter")) ?? null,
-    [visibleWallets]
-  );
 
   useEffect(() => {
     onSnapshotChange?.({
@@ -318,7 +207,6 @@ function JupiterPerpsPositionWidgetBody({
   useEffect(() => {
     if (isConnected) {
       setWalletMenuOpen(false);
-      setWalletFeedback(null);
     }
   }, [isConnected]);
 
@@ -333,82 +221,25 @@ function JupiterPerpsPositionWidgetBody({
     window.location.assign("https://jup.ag");
   }
 
-  useEffect(() => {
-    if (!selectedWalletName || wallet?.adapter.name !== selectedWalletName) return;
-
-    let cancelled = false;
-
-    async function runConnect() {
-      try {
-        setWalletFeedback("Connecting wallet...");
-        await connect();
-        if (!cancelled) {
-          setWalletFeedback(null);
-          setWalletMenuOpen(false);
-        }
-      } catch (connectError) {
-        if (cancelled) return;
-        const message = connectError instanceof Error ? connectError.message : "Wallet connection was not completed.";
-        setWalletFeedback(message);
-      } finally {
-        if (!cancelled) {
-          setSelectedWalletName(null);
-        }
-      }
-    }
-
-    void runConnect();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [connect, selectedWalletName, wallet?.adapter.name]);
-
-  async function handleWalletPick(name: WalletName<string>, readyState: WalletReadyState) {
-    if (nativeShell && !nativeJupiterAdapterEnabled) {
-      setWalletFeedback("Jupiter Mobile adapter is not configured for the native app yet. Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable direct Jupiter Mobile connection.");
-      return;
-    }
-
-    if (readyState === "NotDetected") {
-      setWalletFeedback("No compatible wallet was detected in this browser. Open BremLogic inside Jupiter Mobile's dApp browser, or install a supported wallet and try again.");
-      return;
-    }
-
-    setWalletFeedback(null);
-    setSelectedWalletName(name);
-    select(name);
-  }
-
   async function handleNativeJupiterConnect() {
     if (!nativeJupiterAdapterEnabled) {
-      setWalletFeedback("Jupiter Mobile adapter is not configured for the native app yet. Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable direct Jupiter Mobile connection.");
-      return;
-    }
-
-    if (!connectJupiterMobile) {
-      setWalletFeedback("Jupiter Mobile's direct adapter is not ready yet in this session. Close the wallet picker and try again.");
       return;
     }
 
     try {
-      setWalletFeedback("Opening Jupiter Mobile...");
-      await connectJupiterMobile();
-      setWalletFeedback(null);
+      nativeJupiterWallet.clearFeedback();
+      await nativeJupiterWallet.connect();
       setWalletMenuOpen(false);
-    } catch (connectError) {
-      const message = connectError instanceof Error ? connectError.message : "Jupiter Mobile connection was not completed.";
-      setWalletFeedback(message);
+    } catch {
+      // The hook surfaces the user-friendly error state.
     }
   }
 
   async function handleDisconnect() {
     try {
-      await disconnect();
-      setWalletFeedback("Wallet disconnected.");
-    } catch (disconnectError) {
-      const message = disconnectError instanceof Error ? disconnectError.message : "Unable to disconnect the wallet.";
-      setWalletFeedback(message);
+      await nativeJupiterWallet.disconnect();
+    } catch {
+      // The hook surfaces the user-friendly error state.
     }
   }
 
@@ -483,7 +314,7 @@ function JupiterPerpsPositionWidgetBody({
           {shouldRecommendJupiterMobile ? (
             <div className="perps-wallet-note">
               {nativeJupiterAdapterEnabled
-                ? "BremLogic native app is configured to use Jupiter's official Mobile Adapter. Selecting Jupiter should route through Jupiter Mobile's supported WalletConnect flow."
+                ? "BremLogic native app is configured to use a native WalletConnect/AppKit Jupiter flow. Selecting Jupiter should route through Jupiter Mobile and return to BremLogic once the wallet approval finishes."
                 : "Jupiter Mobile works best when BremLogic is opened inside Jupiter Mobile's dApp browser. External app handoffs from the native iPhone shell may still leave you in a mobile browser unless the native Jupiter Mobile Adapter is configured."}
             </div>
           ) : null}
@@ -492,7 +323,7 @@ function JupiterPerpsPositionWidgetBody({
               <div className="perps-message-card">
                 <strong>Connect with Jupiter Mobile</strong>
                 <span className="subtext">
-                  Use Jupiter&apos;s direct mobile adapter path. This should target Jupiter Mobile itself instead of falling back to the broader wallet onboarding modal.
+                  Use the native iOS WalletConnect/AppKit Jupiter path. Approve in Jupiter Mobile, then return to BremLogic so the read-only session can finalize here.
                 </span>
                 <div className="wallet-controls" style={{ marginTop: 12 }}>
                   <button
@@ -504,44 +335,36 @@ function JupiterPerpsPositionWidgetBody({
                   </button>
                 </div>
                 <span className="subtext" style={{ marginTop: 12 }}>
-                  Adapter: {nativeJupiterWallet?.adapter.name ?? directAdapterLabel ?? "Jupiter Mobile"}
+                  Adapter: Jupiter Mobile
                 </span>
               </div>
             </div>
           ) : (
           <div className="perps-wallet-grid">
-            {visibleWallets.length === 0 ? (
-              <button
-                type="button"
-                className="perps-message-card perps-message-card-link"
-                onClick={openJupiterExperience}
-              >
-                <strong>{nativeShell ? "Jupiter Mobile adapter unavailable" : "Jupiter wallet not found"}</strong>
-                <span className="subtext">
-                  {nativeShell
-                    ? nativeJupiterAdapterEnabled
-                      ? "Jupiter Mobile did not expose a ready adapter yet. If Jupiter does not open directly from the native shell, use Jupiter Mobile's dApp browser for now."
-                      : "Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable Jupiter's official Mobile Adapter flow in the native app."
-                    : "Open BremLogic inside Jupiter Mobile's dApp browser to connect the Jupiter wallet in read-only mode."}
-                </span>
-              </button>
-            ) : (
-              visibleWallets.map((entry) => (
-                <button
-                  key={entry.adapter.name}
-                  type="button"
-                  className="perps-wallet-option"
-                  onClick={() => void handleWalletPick(entry.adapter.name, entry.readyState)}
-                >
-                  <span>{entry.adapter.name}</span>
-                  <span className="subtext">
-                    {entry.adapter.name === "Jupiter"
-                      ? "Recommended when using Jupiter Mobile's dApp browser"
-                      : getWalletReadinessLabel(entry.readyState)}
-                  </span>
-                </button>
-              ))
-            )}
+            <button
+              type="button"
+              className="perps-message-card perps-message-card-link"
+              onClick={openJupiterExperience}
+            >
+              <strong>{nativeShell ? "Jupiter Mobile adapter unavailable" : "Jupiter wallet not found"}</strong>
+              <span className="subtext">
+                {nativeShell
+                  ? nativeJupiterAdapterEnabled
+                    ? "Jupiter Mobile did not expose a ready adapter yet. If Jupiter does not open directly from the native shell, use Jupiter Mobile's dApp browser for now."
+                    : "Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable Jupiter's official Mobile Adapter flow in the native app."
+                  : "Open BremLogic inside Jupiter Mobile's dApp browser to connect the Jupiter wallet in read-only mode."}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="perps-wallet-option"
+              disabled
+            >
+              <span>Jupiter</span>
+              <span className="subtext">
+                {getWalletReadinessLabel(WalletReadyState.NotDetected)}
+              </span>
+            </button>
           </div>
           )}
         </div>
@@ -643,9 +466,5 @@ export function JupiterPerpsPositionWidget({
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
 }) {
-  return (
-    <ReadOnlyWalletProvider>
-      <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} />
-    </ReadOnlyWalletProvider>
-  );
+  return <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} />;
 }
