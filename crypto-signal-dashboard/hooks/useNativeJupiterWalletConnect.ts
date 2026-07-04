@@ -19,7 +19,8 @@ type NativeJupiterWalletState = {
 const PENDING_CONNECT_STORAGE_KEY = "bremlogic.native.jupiter.pending-connect.v1";
 const CONNECT_STARTED_MESSAGE = "Opening Jupiter Mobile...";
 const CONNECT_RESUME_MESSAGE = "Return to BremLogic after approval so the wallet session can finish attaching here.";
-const STALE_PENDING_MS = 2 * 60 * 1000;
+const CONNECT_TIMEOUT_MESSAGE = "Jupiter Mobile connection timed out after 3 minutes. Reopen Jupiter Mobile and try again.";
+const STALE_PENDING_MS = 3 * 60 * 1000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -72,6 +73,7 @@ function clearPendingConnectTimestamp() {
 export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: string): NativeJupiterWalletState {
   const adapterRef = useRef<WalletConnectWalletAdapter | null>(null);
   const connectPromiseRef = useRef<Promise<void> | null>(null);
+  const pendingTimeoutRef = useRef<number | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -81,6 +83,35 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
   const clearFeedback = useCallback(() => {
     setFeedback(null);
   }, []);
+
+  const clearPendingTimeout = useCallback(() => {
+    if (pendingTimeoutRef.current !== null) {
+      window.clearTimeout(pendingTimeoutRef.current);
+      pendingTimeoutRef.current = null;
+    }
+  }, []);
+
+  const expirePendingConnect = useCallback((message = CONNECT_TIMEOUT_MESSAGE) => {
+    clearPendingTimeout();
+    clearPendingConnectTimestamp();
+    connectPromiseRef.current = null;
+    setIsConnecting(false);
+    setFeedback(message);
+  }, [clearPendingTimeout]);
+
+  const schedulePendingTimeout = useCallback((timestamp: number) => {
+    clearPendingTimeout();
+
+    const remainingMs = STALE_PENDING_MS - (Date.now() - timestamp);
+    if (remainingMs <= 0) {
+      expirePendingConnect();
+      return;
+    }
+
+    pendingTimeoutRef.current = window.setTimeout(() => {
+      expirePendingConnect();
+    }, remainingMs);
+  }, [clearPendingTimeout, expirePendingConnect]);
 
   const ensureAdapter = useCallback(() => {
     if (!enabled || !reownProjectId.trim()) return null;
@@ -112,11 +143,12 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     setIsConnected(Boolean(publicKey));
 
     if (publicKey) {
+      clearPendingTimeout();
       clearPendingConnectTimestamp();
       setIsConnecting(false);
       setFeedback(null);
     }
-  }, []);
+  }, [clearPendingTimeout]);
 
   const connect = useCallback(async () => {
     const adapter = ensureAdapter();
@@ -133,6 +165,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     setIsConnecting(true);
     setFeedback(CONNECT_STARTED_MESSAGE);
     savePendingConnectTimestamp();
+    schedulePendingTimeout(Date.now());
 
     const connectPromise = (async () => {
       try {
@@ -143,9 +176,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
           setFeedback(CONNECT_RESUME_MESSAGE);
         }
       } catch (error) {
-        clearPendingConnectTimestamp();
-        setIsConnecting(false);
-        setFeedback(getFriendlyErrorMessage(error));
+        expirePendingConnect(getFriendlyErrorMessage(error));
         throw error;
       } finally {
         connectPromiseRef.current = null;
@@ -154,13 +185,15 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
 
     connectPromiseRef.current = connectPromise;
     await connectPromise;
-  }, [ensureAdapter, syncStateFromAdapter]);
+  }, [ensureAdapter, expirePendingConnect, schedulePendingTimeout, syncStateFromAdapter]);
 
   const disconnect = useCallback(async () => {
     const adapter = adapterRef.current;
     if (!adapter) {
+      clearPendingTimeout();
       setWalletAddress(null);
       setIsConnected(false);
+      setIsConnecting(false);
       clearPendingConnectTimestamp();
       return;
     }
@@ -169,6 +202,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
 
     try {
       await adapter.disconnect();
+      clearPendingTimeout();
       clearPendingConnectTimestamp();
       setWalletAddress(null);
       setIsConnected(false);
@@ -180,10 +214,11 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     } finally {
       setIsDisconnecting(false);
     }
-  }, []);
+  }, [clearPendingTimeout]);
 
   useEffect(() => {
     if (!enabled) {
+      clearPendingTimeout();
       clearPendingConnectTimestamp();
       setWalletAddress(null);
       setIsConnected(false);
@@ -202,6 +237,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     if (pendingConnectTimestamp) {
       setFeedback(CONNECT_RESUME_MESSAGE);
       setIsConnecting(true);
+      schedulePendingTimeout(pendingConnectTimestamp);
     }
 
     let cancelled = false;
@@ -212,9 +248,14 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
         if (cancelled) return;
         syncStateFromAdapter();
 
-        if (loadPendingConnectTimestamp() && !adapterRef.current?.publicKey) {
+        const pendingTimestamp = loadPendingConnectTimestamp();
+        if (pendingTimestamp && !adapterRef.current?.publicKey) {
           setFeedback(CONNECT_RESUME_MESSAGE);
           setIsConnecting(true);
+          schedulePendingTimeout(pendingTimestamp);
+        } else if (!pendingTimestamp) {
+          clearPendingTimeout();
+          setIsConnecting(false);
         }
       });
 
@@ -227,9 +268,10 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
 
     return () => {
       cancelled = true;
+      clearPendingTimeout();
       removeResumeListener?.();
     };
-  }, [enabled, ensureAdapter, syncStateFromAdapter]);
+  }, [clearPendingTimeout, enabled, ensureAdapter, schedulePendingTimeout, syncStateFromAdapter]);
 
   return {
     walletAddress,
