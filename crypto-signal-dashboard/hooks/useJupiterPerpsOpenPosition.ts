@@ -26,18 +26,18 @@ export type PerpsOrderPreview = {
   asset: PerpsAsset;
   inputToken: PerpsInputToken;
   market: {
-    change24h: number;
-    high24h: number;
-    low24h: number;
-    price: number;
-    volume24h: number;
+    change24h: number | null;
+    high24h: number | null;
+    low24h: number | null;
+    price: number | null;
+    volume24h: number | null;
   };
   orderType: PerpsOrderType;
   pool: {
-    longBorrowRatePercent: number;
-    maxPriceImpactFeePercent: number;
-    openFeePercent: number;
-    shortBorrowRatePercent: number;
+    longBorrowRatePercent: number | null;
+    maxPriceImpactFeePercent: number | null;
+    openFeePercent: number | null;
+    shortBorrowRatePercent: number | null;
   };
   positionPubkey: string | null;
   quote: {
@@ -77,14 +77,16 @@ type UseJupiterPerpsOpenPositionResult = {
 
 type OpenPerpsResponse = PerpsOrderPreview & {
   error?: string;
+  detail?: string;
 };
 
 type ExecuteSignedTransactionResponse = {
   error?: string;
+  detail?: string;
   txid?: string;
 };
 
-const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
+const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
 
 function fromBase64(input: string) {
   const raw = atob(input);
@@ -97,6 +99,17 @@ function fromBase64(input: string) {
 
 function toBase64(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes));
+}
+
+function formatPerpsErrorMessage(error?: string, detail?: string) {
+  const trimmedError = error?.trim() ?? "";
+  const trimmedDetail = detail?.trim() ?? "";
+
+  if (trimmedDetail && trimmedDetail !== trimmedError) {
+    return trimmedError ? `${trimmedError} Detail: ${trimmedDetail}` : trimmedDetail;
+  }
+
+  return trimmedError || trimmedDetail || "Unable to build the Jupiter Perps order.";
 }
 
 export function useJupiterPerpsOpenPosition({
@@ -145,7 +158,7 @@ export function useJupiterPerpsOpenPosition({
 
     const payload = await response.json().catch(() => null) as OpenPerpsResponse | null;
     if (!response.ok || !payload) {
-      throw new Error(payload?.error || "Unable to build the Jupiter Perps order.");
+      throw new Error(formatPerpsErrorMessage(payload?.error, payload?.detail));
     }
 
     return payload;
@@ -200,7 +213,12 @@ export function useJupiterPerpsOpenPosition({
 
       const executePayload = await executeResponse.json().catch(() => null) as ExecuteSignedTransactionResponse | null;
       if (!executeResponse.ok) {
-        throw new Error(executePayload?.error || "Jupiter could not execute the signed Perps transaction.");
+        throw new Error(
+          formatPerpsErrorMessage(
+            executePayload?.error || "Jupiter could not execute the signed Perps transaction.",
+            executePayload?.detail
+          )
+        );
       }
 
       const txid = executePayload?.txid?.trim();

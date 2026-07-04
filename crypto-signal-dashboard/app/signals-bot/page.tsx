@@ -120,7 +120,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
 };
 
 const PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS = 60_000;
-const AUTO_TRADE_ERROR_AUTO_RESET_MS = 60_000;
+const AUTO_TRADE_ERROR_AUTO_RESET_MS = 20_000;
 
 type WalletTokenHolding = {
   mint: string;
@@ -393,6 +393,7 @@ function DashboardPage() {
   const perpsAutoTradeAttemptIdRef = useRef(0);
   const perpsAutoTradeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const perpsAutoTradeErrorResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const perpsAutoTradeFailureCooldownUntilRef = useRef(0);
   const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
@@ -432,6 +433,15 @@ function DashboardPage() {
     }
   }, []);
 
+  const clearPerpsAutoTradeFailureCooldown = useCallback(() => {
+    perpsAutoTradeFailureCooldownUntilRef.current = 0;
+    clearPerpsAutoTradeErrorResetTimeout();
+  }, [clearPerpsAutoTradeErrorResetTimeout]);
+
+  const isPerpsAutoTradeFailureCooldownActive = useCallback(() => {
+    return perpsAutoTradeFailureCooldownUntilRef.current > Date.now();
+  }, []);
+
   const getPerpsAutoTradeReadyStatus = useCallback((
     tokenSymbol: string,
     options?: {
@@ -454,6 +464,21 @@ function DashboardPage() {
 
     return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`;
   }, [autoTradeSettings.mode, autoTradeSettings.perpsLeverage, autoTradeSettings.walletPercent]);
+
+  const setPerpsAutoTradeFailureCooldown = useCallback((tokenSymbol: string, message: string) => {
+    clearPerpsAutoTradeErrorResetTimeout();
+    perpsAutoTradeFailureCooldownUntilRef.current = Date.now() + AUTO_TRADE_ERROR_AUTO_RESET_MS;
+    setPerpsAutoTradeStatus(
+      `Perps auto-trade failed for ${tokenSymbol}: ${message} Cooling down for ${Math.round(AUTO_TRADE_ERROR_AUTO_RESET_MS / 1000)}s.`
+    );
+    perpsAutoTradeErrorResetTimeoutRef.current = setTimeout(() => {
+      perpsAutoTradeFailureCooldownUntilRef.current = 0;
+      if (!perpsAutoTradeBusyRef.current) {
+        setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(tokenSymbol));
+      }
+      perpsAutoTradeErrorResetTimeoutRef.current = null;
+    }, AUTO_TRADE_ERROR_AUTO_RESET_MS);
+  }, [clearPerpsAutoTradeErrorResetTimeout, getPerpsAutoTradeReadyStatus]);
 
   const sendSignalNotification = useCallback(async (title: string, body: string, url?: string) => {
     if (!pushEnabled) return;
@@ -840,6 +865,10 @@ function DashboardPage() {
                 return;
               }
 
+              if (isPerpsAutoTradeFailureCooldownActive()) {
+                return;
+              }
+
               if (!isSupportedPerpsAutoTradeToken(activePerpsAutoTradeToken.symbol)) {
                 setPerpsAutoTradeStatus(`Perps auto-trade does not support ${activePerpsAutoTradeToken.symbol} yet`);
                 return;
@@ -934,7 +963,7 @@ function DashboardPage() {
                   return;
                 }
                 const message = error instanceof Error ? error.message : "Perps order failed";
-                setPerpsAutoTradeStatus(`Perps auto-trade failed for ${signal.symbol}: ${message}`);
+                setPerpsAutoTradeFailureCooldown(signal.symbol, message);
               }).finally(() => {
                 if (perpsAutoTradeAttemptIdRef.current === perpsAttemptId || perpsAutoTradeAttemptIdRef.current === 0) {
                   perpsAutoTradeBusyRef.current = false;
@@ -972,6 +1001,7 @@ function DashboardPage() {
     autoTradeSettings.takeProfitPercent,
     clearPerpsAutoTradeTimeout,
     getPerpsAutoTradeReadyStatus,
+    isPerpsAutoTradeFailureCooldownActive,
     jupiterPerpsController,
     lastSignalAt,
     newsItems,
@@ -981,6 +1011,7 @@ function DashboardPage() {
     pushEnabled,
     receiveSignalsForSlotId,
     sendSignalNotification,
+    setPerpsAutoTradeFailureCooldown,
     subscription,
     trackedMarkets,
     persistTradeRecord,
@@ -1215,7 +1246,7 @@ function DashboardPage() {
 
   useEffect(() => {
     if (!activePerpsAutoTradeToken) {
-      clearPerpsAutoTradeErrorResetTimeout();
+      clearPerpsAutoTradeFailureCooldown();
       clearPerpsAutoTradeTimeout();
       perpsAutoTradeAttemptIdRef.current += 1;
       perpsAutoTradeBusyRef.current = false;
@@ -1238,6 +1269,10 @@ function DashboardPage() {
       return;
     }
 
+    if (isPerpsAutoTradeFailureCooldownActive()) {
+      return;
+    }
+
     if (!perpsAutoTradeBusyRef.current) {
       setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
     }
@@ -1246,45 +1281,22 @@ function DashboardPage() {
     autoTradeSettings.mode,
     autoTradeSettings.perpsLeverage,
     autoTradeSettings.walletPercent,
-    clearPerpsAutoTradeErrorResetTimeout,
+    clearPerpsAutoTradeFailureCooldown,
     clearPerpsAutoTradeTimeout,
     getPerpsAutoTradeReadyStatus,
+    isPerpsAutoTradeFailureCooldownActive,
     jupiterPerpsController,
     readOnlyPerpsSnapshot.positions.length,
   ]);
 
   useEffect(() => {
-    clearPerpsAutoTradeErrorResetTimeout();
-
-    if (!activePerpsAutoTradeToken || !perpsAutoTradeStatus.startsWith("Perps auto-trade failed")) {
-      return;
-    }
-
-    perpsAutoTradeErrorResetTimeoutRef.current = setTimeout(() => {
-      if (!perpsAutoTradeBusyRef.current) {
-        setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
-      }
-      perpsAutoTradeErrorResetTimeoutRef.current = null;
-    }, AUTO_TRADE_ERROR_AUTO_RESET_MS);
-
     return () => {
-      clearPerpsAutoTradeErrorResetTimeout();
-    };
-  }, [
-    activePerpsAutoTradeToken,
-    clearPerpsAutoTradeErrorResetTimeout,
-    getPerpsAutoTradeReadyStatus,
-    perpsAutoTradeStatus,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      clearPerpsAutoTradeErrorResetTimeout();
+      clearPerpsAutoTradeFailureCooldown();
       clearPerpsAutoTradeTimeout();
       perpsAutoTradeAttemptIdRef.current = 0;
       perpsAutoTradeBusyRef.current = false;
     };
-  }, [clearPerpsAutoTradeErrorResetTimeout, clearPerpsAutoTradeTimeout]);
+  }, [clearPerpsAutoTradeFailureCooldown, clearPerpsAutoTradeTimeout]);
 
   useEffect(() => {
     if (nativeShell || typeof window === "undefined") return;

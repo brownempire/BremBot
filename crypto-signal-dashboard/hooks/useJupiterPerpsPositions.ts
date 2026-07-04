@@ -27,7 +27,7 @@ type JupiterPerpsPositionsState = {
 };
 
 const LIVE_PERPS_REFRESH_MS = 1000;
-const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
+const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {

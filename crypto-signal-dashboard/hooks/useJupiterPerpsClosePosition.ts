@@ -27,14 +27,16 @@ type UseJupiterPerpsClosePositionResult = {
 type CreateCloseTransactionResponse = {
   serializedTxBase64?: string;
   error?: string;
+  detail?: string;
 };
 
 type ExecuteSignedTransactionResponse = {
   txid?: string;
   error?: string;
+  detail?: string;
 };
 
-const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
+const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
 
 function fromBase64(input: string) {
   const raw = atob(input);
@@ -47,6 +49,17 @@ function fromBase64(input: string) {
 
 function toBase64(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes));
+}
+
+function formatPerpsErrorMessage(error?: string, detail?: string) {
+  const trimmedError = error?.trim() ?? "";
+  const trimmedDetail = detail?.trim() ?? "";
+
+  if (trimmedDetail && trimmedDetail !== trimmedError) {
+    return trimmedError ? `${trimmedError} Detail: ${trimmedDetail}` : trimmedDetail;
+  }
+
+  return trimmedError || trimmedDetail || "Unable to close the Jupiter Perps position.";
 }
 
 export function useJupiterPerpsClosePosition({
@@ -111,7 +124,7 @@ export function useJupiterPerpsClosePosition({
 
       const closePayload = await closeResponse.json().catch(() => null) as CreateCloseTransactionResponse | null;
       if (!closeResponse.ok) {
-        throw new Error(closePayload?.error || "Jupiter did not return a close transaction.");
+        throw new Error(formatPerpsErrorMessage(closePayload?.error || "Jupiter did not return a close transaction.", closePayload?.detail));
       }
 
       const serializedTxBase64 = closePayload?.serializedTxBase64?.trim();
@@ -136,7 +149,12 @@ export function useJupiterPerpsClosePosition({
 
       const executePayload = await executeResponse.json().catch(() => null) as ExecuteSignedTransactionResponse | null;
       if (!executeResponse.ok) {
-        throw new Error(executePayload?.error || "Jupiter could not execute the signed close transaction.");
+        throw new Error(
+          formatPerpsErrorMessage(
+            executePayload?.error || "Jupiter could not execute the signed close transaction.",
+            executePayload?.detail
+          )
+        );
       }
 
       const txid = executePayload?.txid?.trim();

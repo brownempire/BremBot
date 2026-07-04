@@ -337,7 +337,7 @@ function NewPerpComposer({
             <span className={`perps-side-badge ${side === "long" ? "long" : "short"}`}>{side === "long" ? "Long" : "Short"}</span>
           </div>
           <div className="perps-metric-grid">
-            <PositionMetric label="Mark" value={formatUsd(preview.market.price)} />
+            <PositionMetric label="Mark" value={preview.market.price === null ? "-" : formatUsd(preview.market.price)} />
             <PositionMetric label="Entry" value={preview.quote.averagePriceUsd === null ? "-" : formatUsd(preview.quote.averagePriceUsd)} />
             <PositionMetric label="Position Size" value={preview.quote.positionSizeUsd === null ? "-" : formatUsd(preview.quote.positionSizeUsd)} />
             <PositionMetric label="Collateral" value={preview.quote.positionCollateralUsd === null ? "-" : formatUsd(preview.quote.positionCollateralUsd)} />

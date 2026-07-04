@@ -62,6 +62,25 @@ function rawUsdToNumber(value: string | null | undefined) {
   return parsed / 1_000_000;
 }
 
+function emptyMarketStats() {
+  return {
+    price: null,
+    change24h: null,
+    high24h: null,
+    low24h: null,
+    volume24h: null,
+  };
+}
+
+function emptyPoolInfo() {
+  return {
+    longBorrowRatePercent: null,
+    shortBorrowRatePercent: null,
+    openFeePercent: null,
+    maxPriceImpactFeePercent: null,
+  };
+}
+
 export async function POST(request: NextRequest) {
   const payload = await request.json().catch(() => null) as OpenPerpsRequest | null;
 
@@ -90,7 +109,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const [orderResponse, marketStats, poolInfo] = await Promise.all([
+    const orderResponse = await (
       orderType === "limit"
         ? perps.trading.createLimitOrder({
             asset,
@@ -114,10 +133,54 @@ export async function POST(request: NextRequest) {
               ...(takeProfitPrice ? [{ receiveToken: inputToken, requestType: "tp" as const, triggerPrice: takeProfitPrice }] : []),
               ...(stopLossPrice ? [{ receiveToken: inputToken, requestType: "sl" as const, triggerPrice: stopLossPrice }] : []),
             ],
-          }),
+          })
+    );
+
+    const [marketStatsResult, poolInfoResult] = await Promise.allSettled([
       perps.markets.getStats({ mint: ASSET_TO_MINT[asset] }),
       perps.markets.getPoolInfo({ mint: ASSET_TO_MINT[asset] }),
     ]);
+
+    const market =
+      marketStatsResult.status === "fulfilled"
+        ? {
+            price: Number(marketStatsResult.value.price),
+            change24h: Number(marketStatsResult.value.priceChange24H),
+            high24h: Number(marketStatsResult.value.priceHigh24H),
+            low24h: Number(marketStatsResult.value.priceLow24H),
+            volume24h: Number(marketStatsResult.value.volume),
+          }
+        : emptyMarketStats();
+
+    const pool =
+      poolInfoResult.status === "fulfilled"
+        ? {
+            longBorrowRatePercent: Number(poolInfoResult.value.longBorrowRatePercent),
+            shortBorrowRatePercent: Number(poolInfoResult.value.shortBorrowRatePercent),
+            openFeePercent: Number(poolInfoResult.value.openFeePercent),
+            maxPriceImpactFeePercent: Number(poolInfoResult.value.maxPriceImpactFeePercent),
+          }
+        : emptyPoolInfo();
+
+    if (marketStatsResult.status === "rejected" || poolInfoResult.status === "rejected") {
+      console.warn("[Perps Open Metadata Warning]", {
+        asset,
+        orderType,
+        side,
+        marketError:
+          marketStatsResult.status === "rejected"
+            ? marketStatsResult.reason instanceof Error
+              ? marketStatsResult.reason.message
+              : String(marketStatsResult.reason)
+            : null,
+        poolError:
+          poolInfoResult.status === "rejected"
+            ? poolInfoResult.reason instanceof Error
+              ? poolInfoResult.reason.message
+              : String(poolInfoResult.reason)
+            : null,
+      });
+    }
 
     return Response.json({
       orderType,
@@ -140,19 +203,8 @@ export async function POST(request: NextRequest) {
         priceImpactFeeUsd: rawUsdToNumber(orderResponse.quote.priceImpactFeeUsd),
         sizeUsdDelta: rawUsdToNumber(orderResponse.quote.sizeUsdDelta),
       },
-      market: {
-        price: Number(marketStats.price),
-        change24h: Number(marketStats.priceChange24H),
-        high24h: Number(marketStats.priceHigh24H),
-        low24h: Number(marketStats.priceLow24H),
-        volume24h: Number(marketStats.volume),
-      },
-      pool: {
-        longBorrowRatePercent: Number(poolInfo.longBorrowRatePercent),
-        shortBorrowRatePercent: Number(poolInfo.shortBorrowRatePercent),
-        openFeePercent: Number(poolInfo.openFeePercent),
-        maxPriceImpactFeePercent: Number(poolInfo.maxPriceImpactFeePercent),
-      },
+      market,
+      pool,
       tpsl: "tpsl" in orderResponse ? orderResponse.tpsl : [],
     });
   } catch (error) {
