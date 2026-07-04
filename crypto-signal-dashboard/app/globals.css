@@ -1101,6 +1101,32 @@ button:disabled {
   letter-spacing: 0.05em;
 }
 
+.perps-metric-editable {
+  align-content: start;
+}
+
+.perps-metric-actions {
+  margin-top: 6px;
+}
+
+.perps-inline-input {
+  min-height: 40px;
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(130, 148, 181, 0.16);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.perps-metric-status {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .perps-position-footer {
   display: grid;
   gap: 4px;

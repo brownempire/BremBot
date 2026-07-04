@@ -54,6 +54,8 @@ export type JupiterPerpsPendingTrigger = {
   triggerAboveThreshold: boolean;
   executed: boolean;
   accountRef: string | null;
+  positionPubkey: string | null;
+  positionRequestPubkey: string | null;
   lastUpdated: number | null;
 };
 
@@ -112,6 +114,7 @@ type LivePerpsPosition = {
 };
 
 type LivePerpsTriggerRequest = {
+  positionRequestPubkey?: string;
   triggerPriceUsd?: string | number;
   price?: string | number;
   side?: "long" | "short";
@@ -579,6 +582,8 @@ function decodePositionRequestAccount(accountRef: string, bytes: Uint8Array): Ju
     triggerAboveThreshold,
     executed,
     accountRef,
+    positionPubkey: null,
+    positionRequestPubkey: accountRef,
     lastUpdated: Number(updateTime || openTime) * 1000,
   };
 }
@@ -657,7 +662,7 @@ function mapLiveTriggerRequest(
   const lastUpdated = toOptionalTimestamp(trigger.updatedTime) ?? toOptionalTimestamp(trigger.createdTime) ?? position.lastUpdated;
 
   return {
-    id: `${position.id}:${kind}:${triggerPrice}:${lastUpdated ?? "na"}`,
+    id: trigger.positionRequestPubkey?.trim() || `${position.id}:${kind}:${triggerPrice}:${lastUpdated ?? "na"}`,
     source: "live-api",
     platformId: JUPITER_EXCHANGE_PLATFORM,
     marketSymbol: position.marketSymbol,
@@ -674,7 +679,9 @@ function mapLiveTriggerRequest(
     entirePosition: trigger.entirePosition ?? true,
     triggerAboveThreshold,
     executed: false,
-    accountRef: position.accountRef,
+    accountRef: trigger.positionRequestPubkey?.trim() || null,
+    positionPubkey: position.accountRef,
+    positionRequestPubkey: trigger.positionRequestPubkey?.trim() || null,
     lastUpdated,
   };
 }
@@ -905,6 +912,8 @@ function decodeInstantTpslAccount(
       linkedPosition?.entryPrice !== null ? triggerPrice >= (linkedPosition?.entryPrice ?? 0) : kind === "take-profit",
     executed: false,
     accountRef,
+    positionPubkey: positionAccount.toBase58(),
+    positionRequestPubkey: accountRef,
     lastUpdated: Number(updateTime || openTime) * 1000,
   };
 }
@@ -1137,6 +1146,8 @@ export function getMockJupiterPerpsPendingTriggers(): JupiterPerpsPendingTrigger
       triggerAboveThreshold: true,
       executed: false,
       accountRef: "mock-sol-tp-ref",
+      positionPubkey: "mock-position-sol",
+      positionRequestPubkey: "mock-sol-tp-ref",
       lastUpdated: Date.now() - 120000,
     },
     {
@@ -1158,6 +1169,8 @@ export function getMockJupiterPerpsPendingTriggers(): JupiterPerpsPendingTrigger
       triggerAboveThreshold: true,
       executed: false,
       accountRef: "mock-btc-sl-ref",
+      positionPubkey: "mock-position-btc",
+      positionRequestPubkey: "mock-btc-sl-ref",
       lastUpdated: Date.now() - 240000,
     },
   ];

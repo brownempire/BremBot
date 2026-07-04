@@ -137,6 +137,14 @@ function formatPercentNumber(value: number | null, fractionDigits = 2, suffix = 
   return `${value.toFixed(fractionDigits)}${suffix}`;
 }
 
+function getPerpsTpslReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "SOL" | "USDC" {
+  if (position.collateralSymbol === "BTC" || position.collateralSymbol === "ETH" || position.collateralSymbol === "SOL") {
+    return position.collateralSymbol;
+  }
+
+  return "USDC";
+}
+
 function NewPerpComposer({
   buildPreview,
   connected,
@@ -389,14 +397,114 @@ function PositionMetric({
   );
 }
 
+function EditableTpslMetric({
+  disabled,
+  isSaving,
+  kind,
+  onSubmit,
+  requestPubkey,
+  value,
+}: {
+  disabled: boolean;
+  isSaving: boolean;
+  kind: "tp" | "sl";
+  onSubmit: (nextValue: string, requestPubkey: string | null) => Promise<void>;
+  requestPubkey: string | null;
+  value: number | null;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftValue, setDraftValue] = useState(value === null ? "" : value.toFixed(6));
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setDraftValue(value === null ? "" : value.toFixed(6));
+    }
+  }, [isEditing, value]);
+
+  async function handleSave() {
+    const trimmed = draftValue.trim();
+    const parsed = Number(trimmed);
+    if (!trimmed || !Number.isFinite(parsed) || parsed <= 0) {
+      setStatus("Enter a valid trigger price above 0.");
+      return;
+    }
+
+    setStatus(null);
+
+    try {
+      await onSubmit(parsed.toFixed(6), requestPubkey);
+      setIsEditing(false);
+      setStatus(`${kind === "tp" ? "Take profit" : "Stop loss"} updated.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to update the TP/SL request.");
+    }
+  }
+
+  return (
+    <div className="perps-metric perps-metric-editable">
+      <span>{kind === "tp" ? "Pending TP" : "Pending SL"}</span>
+      {!isEditing ? (
+        <>
+          <strong>{value === null ? "-" : formatUsd(value)}</strong>
+          <div className="wallet-controls perps-metric-actions">
+            <button type="button" className="secondary" disabled={disabled || isSaving} onClick={() => setIsEditing(true)}>
+              Modify
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <input
+            className="perps-inline-input"
+            inputMode="decimal"
+            value={draftValue}
+            onChange={(event) => setDraftValue(event.target.value)}
+            placeholder={kind === "tp" ? "84.00" : "81.00"}
+          />
+          <div className="wallet-controls perps-metric-actions">
+            <button type="button" disabled={disabled || isSaving} onClick={() => void handleSave()}>
+              {isSaving ? "Saving..." : value === null ? "Add" : "Save"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={isSaving}
+              onClick={() => {
+                setDraftValue(value === null ? "" : value.toFixed(6));
+                setStatus(null);
+                setIsEditing(false);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {status ? <span className="perps-metric-status">{status}</span> : null}
+    </div>
+  );
+}
+
 function PositionCard({
   closingPositionPubkey,
+  isMutatingTpsl,
+  onModifyTpsl,
+  pendingTriggers,
   onClosePosition,
   pendingClosePositionPubkeys,
   position,
   writeEnabled,
 }: {
   closingPositionPubkey: string | null;
+  isMutatingTpsl: boolean;
+  onModifyTpsl: (request: {
+    kind: "tp" | "sl";
+    position: JupiterPerpsPosition;
+    positionRequestPubkey: string | null;
+    triggerPrice: string;
+  }) => Promise<void>;
+  pendingTriggers: JupiterPerpsPendingTrigger[];
   onClosePosition: (position: JupiterPerpsPosition) => Promise<void>;
   pendingClosePositionPubkeys: Set<string>;
   position: JupiterPerpsPosition;
@@ -410,6 +518,8 @@ function PositionCard({
   const canClose = writeEnabled && typeof closePubkey === "string" && closePubkey.length > 0;
   const isSubmitting = closePubkey !== null && closingPositionPubkey === closePubkey;
   const isPendingKeeper = closePubkey !== null && pendingClosePositionPubkeys.has(closePubkey);
+  const takeProfitTrigger = pendingTriggers.find((trigger) => trigger.kind === "take-profit");
+  const stopLossTrigger = pendingTriggers.find((trigger) => trigger.kind === "stop-loss");
 
   return (
     <article className="perps-position-card">
@@ -447,8 +557,32 @@ function PositionCard({
         <PositionMetric label="Value" value={position.positionValue === null ? "-" : formatUsd(position.positionValue)} />
         <PositionMetric label="Collateral" value={position.collateralValue === null ? "-" : formatUsd(position.collateralValue)} />
         <PositionMetric label="Leverage" value={formatPercent(position.leverage)} />
-        <PositionMetric label="Pending TP" value={position.takeProfit === null ? "-" : formatUsd(position.takeProfit)} />
-        <PositionMetric label="Pending SL" value={position.stopLoss === null ? "-" : formatUsd(position.stopLoss)} />
+        <EditableTpslMetric
+          disabled={!canClose}
+          isSaving={isMutatingTpsl}
+          kind="tp"
+          onSubmit={(triggerPrice, positionRequestPubkey) => onModifyTpsl({
+            kind: "tp",
+            position,
+            positionRequestPubkey,
+            triggerPrice,
+          })}
+          requestPubkey={takeProfitTrigger?.positionRequestPubkey ?? null}
+          value={position.takeProfit}
+        />
+        <EditableTpslMetric
+          disabled={!canClose}
+          isSaving={isMutatingTpsl}
+          kind="sl"
+          onSubmit={(triggerPrice, positionRequestPubkey) => onModifyTpsl({
+            kind: "sl",
+            position,
+            positionRequestPubkey,
+            triggerPrice,
+          })}
+          requestPubkey={stopLossTrigger?.positionRequestPubkey ?? null}
+          value={position.stopLoss}
+        />
         <PositionMetric
           label="Unrealized PnL"
           value={position.unrealizedPnl === null ? "-" : formatUsd(position.unrealizedPnl)}
@@ -569,6 +703,7 @@ function JupiterPerpsPositionWidgetBody({
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
+  const [pendingTpslMutationKey, setPendingTpslMutationKey] = useState<string | null>(null);
   const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
   const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
   const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -601,6 +736,7 @@ function JupiterPerpsPositionWidgetBody({
     isPreviewing,
     isSubmitting,
     openPosition,
+    updateTpsl,
   } = useJupiterPerpsOpenPosition({
     signTransaction: nativeJupiterAdapterEnabled ? nativeJupiterWallet.signTransaction : undefined,
   });
@@ -799,6 +935,44 @@ function JupiterPerpsPositionWidgetBody({
     clearOpenError();
     setActiveTab("open");
     await refetch();
+  }
+
+  async function handleModifyTpsl(request: {
+    kind: "tp" | "sl";
+    position: JupiterPerpsPosition;
+    positionRequestPubkey: string | null;
+    triggerPrice: string;
+  }) {
+    const positionPubkey = request.position.accountRef?.trim();
+    if (!positionPubkey || !walletAddress) {
+      throw new Error("Connect Jupiter Mobile before editing this TP/SL request.");
+    }
+
+    clearOpenError();
+    setPendingTpslMutationKey(`${positionPubkey}:${request.kind}`);
+
+    try {
+      if (request.positionRequestPubkey) {
+        await updateTpsl({
+          positionRequestPubkey: request.positionRequestPubkey,
+          triggerPrice: request.triggerPrice,
+        });
+      } else {
+        await attachTpsl({
+          positionPubkey,
+          tpsl: [{
+            receiveToken: getPerpsTpslReceiveToken(request.position),
+            requestType: request.kind,
+            triggerPrice: request.triggerPrice,
+          }],
+          walletAddress,
+        });
+      }
+
+      await refetch();
+    } finally {
+      setPendingTpslMutationKey(null);
+    }
   }
 
   const shouldShowDisconnectedState =
@@ -1002,16 +1176,26 @@ function JupiterPerpsPositionWidgetBody({
 
         {!isLoading && activeTab === "open" && positions.length > 0 ? (
           <div className="perps-list">
-            {positions.map((position) => (
+            {positions.map((position) => {
+              const positionPubkey = position.accountRef?.trim();
+              const positionPendingTriggers = pendingTriggers.filter((trigger) => (
+                !!positionPubkey && trigger.positionPubkey?.trim() === positionPubkey
+              ));
+
+              return (
               <PositionCard
                 key={position.id}
                 closingPositionPubkey={closingPositionPubkey}
+                isMutatingTpsl={pendingTpslMutationKey === `${position.accountRef?.trim() ?? ""}:tp` || pendingTpslMutationKey === `${position.accountRef?.trim() ?? ""}:sl`}
+                onModifyTpsl={handleModifyTpsl}
+                pendingTriggers={positionPendingTriggers}
                 onClosePosition={handleClosePosition}
                 pendingClosePositionPubkeys={pendingClosePositionPubkeySet}
                 position={position}
                 writeEnabled={writeEnabled}
               />
-            ))}
+              );
+            })}
             {pendingTriggers.length > 0 ? (
               <section className="perps-trigger-section">
                 <div className="perps-trigger-section-head">

@@ -7,11 +7,13 @@ const perps = createPerpsClient();
 
 type CreateTpslRequest = {
   positionPubkey?: string;
+  positionRequestPubkey?: string;
   tpsl?: Array<{
     receiveToken?: InputToken;
     triggerPrice?: string | null;
     requestType?: "tp" | "sl";
   }>;
+  triggerPrice?: string | null;
   walletAddress?: string;
 };
 
@@ -73,6 +75,38 @@ export async function POST(request: NextRequest) {
     return Response.json(
       {
         error: "Jupiter Perps could not create the TP/SL request right now.",
+        detail: message,
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  const payload = await request.json().catch(() => null) as CreateTpslRequest | null;
+  const positionRequestPubkey = payload?.positionRequestPubkey?.trim();
+  const triggerPrice = normalizePositiveNumberString(payload?.triggerPrice);
+
+  if (!positionRequestPubkey || !triggerPrice) {
+    return Response.json({ error: "Incomplete TP/SL update request." }, { status: 400 });
+  }
+
+  try {
+    const response = await perps.trading.updateTpsl({
+      positionRequestPubkey,
+      triggerPrice,
+    });
+
+    return Response.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to update the Jupiter Perps TP/SL request right now.";
+    console.error("[Perps TP/SL Update Error]", {
+      positionRequestPubkey,
+      message,
+    });
+    return Response.json(
+      {
+        error: "Jupiter Perps could not update the TP/SL request right now.",
         detail: message,
       },
       { status: 500 }
