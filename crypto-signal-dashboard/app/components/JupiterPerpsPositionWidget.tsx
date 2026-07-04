@@ -89,7 +89,7 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
           <div className="subtext">{position.marketName ?? "Jupiter Perps position"}</div>
         </div>
         <div className="perps-position-price">
-          <span className="subtext">Mark</span>
+          <span className="subtext">Mark{position.markPriceIsLive ? " (live)" : ""}</span>
           <strong>{position.markPrice === null ? "-" : formatUsd(position.markPrice)}</strong>
         </div>
       </div>
@@ -109,7 +109,7 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
           negative={isNegative}
         />
         <PositionMetric
-          label="Liquidation"
+          label={position.liquidationPriceIsEstimated ? "Liquidation (est.)" : "Liquidation"}
           value={position.liquidationPrice === null ? "-" : formatUsd(position.liquidationPrice)}
         />
         <PositionMetric label="Realized PnL" value={position.realizedPnl === null ? "-" : formatUsd(position.realizedPnl)} />
@@ -455,7 +455,7 @@ function JupiterPerpsPositionWidgetBody({
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, with Jupiter&apos;s Portfolio API used only as a fallback if the live account read cannot complete.
+        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, plus live Coinbase mark prices for supported markets. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable.
       </div>
     </div>
   );

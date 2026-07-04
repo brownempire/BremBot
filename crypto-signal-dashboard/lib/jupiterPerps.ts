@@ -29,6 +29,8 @@ export type JupiterPerpsPosition = {
   borrowSnapshot: string | null;
   takeProfit: number | null;
   stopLoss: number | null;
+  markPriceIsLive: boolean;
+  liquidationPriceIsEstimated: boolean;
   accountRef: string | null;
   lastUpdated: number | null;
 };
@@ -158,6 +160,12 @@ const JUPITER_COLLATERAL_SYMBOLS = new Map([
   ["5Pv3gM9JrFFH883SWAhvJC9RPYmo8UNxuFtv5bMMALkm", "BTC"],
 ]);
 
+const JUPITER_COINBASE_PRODUCTS = new Map([
+  ["SOL", "SOL-USD"],
+  ["ETH", "ETH-USD"],
+  ["BTC", "BTC-USD"],
+]);
+
 function toFiniteNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -168,6 +176,11 @@ function atomicUsdToNumber(value: bigint) {
 
 function signedAtomicUsdToNumber(value: bigint) {
   return Number(value) / 10 ** USDC_DECIMALS;
+}
+
+function roundUsd(value: number | null, fractionDigits = 6) {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(fractionDigits));
 }
 
 function readPublicKey(bytes: Uint8Array, offset: number) {
@@ -217,6 +230,100 @@ function getTriggerKind(side: JupiterPerpsPositionSide, triggerAboveThreshold: b
 
 function isPlausibleUnixSeconds(value: bigint) {
   return value >= MIN_PLAUSIBLE_UNIX_SECONDS && value <= MAX_PLAUSIBLE_UNIX_SECONDS;
+}
+
+function calculateUnrealizedPnl(position: JupiterPerpsPosition, markPrice: number | null) {
+  if (
+    markPrice === null ||
+    position.entryPrice === null ||
+    position.positionSize === null ||
+    !Number.isFinite(markPrice) ||
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.positionSize)
+  ) {
+    return null;
+  }
+
+  const priceDelta = position.side === "long"
+    ? markPrice - position.entryPrice
+    : position.entryPrice - markPrice;
+
+  return roundUsd(priceDelta * position.positionSize);
+}
+
+function estimateLiquidationPrice(position: JupiterPerpsPosition) {
+  if (
+    position.entryPrice === null ||
+    position.positionValue === null ||
+    position.collateralValue === null ||
+    position.positionValue <= 0 ||
+    position.collateralValue <= 0
+  ) {
+    return null;
+  }
+
+  const collateralRatio = position.collateralValue / position.positionValue;
+  const liquidationPrice = position.side === "long"
+    ? position.entryPrice * (1 - collateralRatio)
+    : position.entryPrice * (1 + collateralRatio);
+
+  if (!Number.isFinite(liquidationPrice) || liquidationPrice <= 0) {
+    return null;
+  }
+
+  return roundUsd(liquidationPrice);
+}
+
+async function fetchCoinbaseMarkPrices(symbols: string[]) {
+  const products = [...new Set(
+    symbols
+      .map((symbol) => JUPITER_COINBASE_PRODUCTS.get(symbol))
+      .filter((product): product is string => typeof product === "string" && product.length > 0)
+  )];
+
+  if (products.length === 0) {
+    return new Map<string, number>();
+  }
+
+  const entries = await Promise.all(
+    products.map(async (product) => {
+      const response = await fetch(`https://api.exchange.coinbase.com/products/${product}/ticker`, {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) return [product, null] as const;
+
+      const payload = await response.json() as { price?: string };
+      const price = Number(payload?.price);
+      return [product, Number.isFinite(price) && price > 0 ? price : null] as const;
+    })
+  );
+
+  return new Map(entries.filter((entry): entry is [string, number] => entry[1] !== null));
+}
+
+async function enrichPositionsWithLiveMetrics(positions: JupiterPerpsPosition[]) {
+  if (positions.length === 0) return positions;
+
+  const markPricesByProduct = await fetchCoinbaseMarkPrices(positions.map((position) => position.marketSymbol));
+
+  return positions.map((position) => {
+    const product = JUPITER_COINBASE_PRODUCTS.get(position.marketSymbol);
+    const liveMarkPrice = product ? markPricesByProduct.get(product) ?? null : null;
+    const markPrice = liveMarkPrice ?? position.markPrice;
+    const unrealizedPnl = calculateUnrealizedPnl(position, markPrice) ?? position.unrealizedPnl;
+    const liquidationPrice = position.liquidationPrice ?? estimateLiquidationPrice(position);
+
+    return {
+      ...position,
+      markPrice,
+      unrealizedPnl,
+      liquidationPrice,
+      markPriceIsLive: liveMarkPrice !== null,
+      liquidationPriceIsEstimated: position.liquidationPrice === null && liquidationPrice !== null,
+    };
+  });
 }
 
 function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPerpsPosition | null {
@@ -304,6 +411,8 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
     borrowSnapshot: `Interest snapshot ${cumulativeInterestSnapshot.toString()} via ${collateralSymbol}`,
     takeProfit: null,
     stopLoss: null,
+    markPriceIsLive: false,
+    liquidationPriceIsEstimated: false,
     accountRef,
     lastUpdated: Number(updateTime) * 1000,
   };
@@ -577,6 +686,8 @@ function mapLeveragePosition(
     borrowSnapshot: null,
     takeProfit: toFiniteNumber(position.tp),
     stopLoss: toFiniteNumber(position.sl),
+    markPriceIsLive: false,
+    liquidationPriceIsEstimated: false,
     accountRef,
     lastUpdated: responseDate,
   };
@@ -623,7 +734,11 @@ export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): P
     clusterApiUrl("mainnet-beta");
 
   try {
-    return await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
+    const directSnapshot = await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
+    return {
+      ...directSnapshot,
+      positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
+    };
   } catch {
     // Fall back to Jupiter's Portfolio API if the direct reader cannot complete successfully.
   }
@@ -664,8 +779,9 @@ export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): P
 
   const filteredPositions = extractLeveragePositions(filteredPayload);
   if (filteredPositions.length > 0) {
+    const enrichedPositions = await enrichPositionsWithLiveMetrics(filteredPositions);
     return {
-      positions: filteredPositions,
+      positions: enrichedPositions,
       pendingTriggers: [],
     };
   }
@@ -682,8 +798,9 @@ export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): P
     const fallbackPayload = await fetchPortfolio(`${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}`);
     const fallbackPositions = extractLeveragePositions(fallbackPayload);
     if (fallbackPositions.length > 0) {
+      const enrichedPositions = await enrichPositionsWithLiveMetrics(fallbackPositions);
       return {
-        positions: fallbackPositions,
+        positions: enrichedPositions,
         pendingTriggers: [],
       };
     }
@@ -791,6 +908,8 @@ export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
       borrowSnapshot: "Portfolio API does not expose borrow snapshots",
       takeProfit: 165,
       stopLoss: 142,
+      markPriceIsLive: false,
+      liquidationPriceIsEstimated: false,
       accountRef: "mock-position-sol",
       lastUpdated: Date.now() - 180000,
     },
@@ -819,6 +938,8 @@ export function getMockJupiterPerpsPositions(): JupiterPerpsPosition[] {
       borrowSnapshot: "Portfolio API does not expose borrow snapshots",
       takeProfit: 101000,
       stopLoss: 105500,
+      markPriceIsLive: false,
+      liquidationPriceIsEstimated: false,
       accountRef: "mock-position-btc",
       lastUpdated: Date.now() - 420000,
     },

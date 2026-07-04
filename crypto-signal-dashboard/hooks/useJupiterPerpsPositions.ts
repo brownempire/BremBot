@@ -23,6 +23,8 @@ type JupiterPerpsPositionsState = {
   refetch: () => Promise<void>;
 };
 
+const LIVE_PERPS_REFRESH_MS = 5000;
+
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
     if (/Discriminant\s+\d+\s+out of range/i.test(error.message) || /out of range for \d+ variants/i.test(error.message)) {
@@ -111,6 +113,19 @@ export function useJupiterPerpsPositions({
   useEffect(() => {
     void loadPositions();
   }, [loadPositions]);
+
+  useEffect(() => {
+    if (!walletAddress || showMockData) return;
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void loadPositions();
+    }, LIVE_PERPS_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loadPositions, showMockData, walletAddress]);
 
   return {
     positions,
