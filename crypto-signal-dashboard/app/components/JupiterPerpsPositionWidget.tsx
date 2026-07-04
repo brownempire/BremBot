@@ -52,6 +52,7 @@ export type JupiterPerpsWidgetController = {
   canWrite: boolean;
   connected: boolean;
   openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ positionPubkey: string | null; txid: string }>;
+  previewMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<PerpsOrderPreview>;
   refresh: () => Promise<void>;
   walletAddress: string | null;
 };
@@ -795,6 +796,39 @@ function JupiterPerpsPositionWidgetBody({
       connected: isConnected,
       refresh: refetch,
       walletAddress,
+      previewMarketPosition: async ({
+        asset,
+        collateralToken,
+        leverage,
+        maxSlippageBps = "100",
+        side,
+        stopLossPrice,
+        takeProfitPrice,
+        uiAmount,
+      }) => {
+        if (!walletAddress) {
+          throw new Error("Connect Jupiter Mobile before previewing a Perps order.");
+        }
+
+        const inputTokenAmount = uiNumberAmountToAtomicString(uiAmount, collateralToken);
+        if (!inputTokenAmount) {
+          throw new Error("Enter a valid Perps collateral amount greater than zero.");
+        }
+
+        return buildPreview({
+          asset,
+          inputToken: collateralToken,
+          inputTokenAmount,
+          leverage,
+          maxSlippageBps,
+          orderType: "market",
+          side,
+          walletAddress,
+          stopLossPrice: typeof stopLossPrice === "number" && Number.isFinite(stopLossPrice) ? stopLossPrice.toFixed(6) : null,
+          takeProfitPrice: typeof takeProfitPrice === "number" && Number.isFinite(takeProfitPrice) ? takeProfitPrice.toFixed(6) : null,
+          triggerPrice: null,
+        });
+      },
       openMarketPosition: async ({
         asset,
         collateralToken,
@@ -835,7 +869,7 @@ function JupiterPerpsPositionWidgetBody({
         };
       },
     };
-  }, [attachTpsl, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
+  }, [attachTpsl, buildPreview, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);

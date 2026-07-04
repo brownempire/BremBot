@@ -204,6 +204,74 @@ function shortAddress(address: string) {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
+function deriveFeeAdjustedPerpsTriggers(options: {
+  desiredStopLossPercent: number;
+  desiredTakeProfitPercent: number;
+  fallbackEntryPrice: number;
+  preview: {
+    pool: {
+      openFeePercent: number | null;
+    };
+    quote: {
+      averagePriceUsd: number | null;
+      openFeeUsd: number | null;
+      outstandingBorrowFeeUsd: number | null;
+      positionSizeUsd: number | null;
+      priceImpactFeeUsd: number | null;
+    };
+    side: "long" | "short";
+  };
+}) {
+  const desiredTakeProfitFraction = options.desiredTakeProfitPercent > 0 ? options.desiredTakeProfitPercent / 100 : 0;
+  const desiredStopLossFraction = options.desiredStopLossPercent > 0 ? options.desiredStopLossPercent / 100 : 0;
+  const entryPrice =
+    typeof options.preview.quote.averagePriceUsd === "number" && Number.isFinite(options.preview.quote.averagePriceUsd) && options.preview.quote.averagePriceUsd > 0
+      ? options.preview.quote.averagePriceUsd
+      : options.fallbackEntryPrice;
+  const positionSizeUsd = options.preview.quote.positionSizeUsd;
+  const openFeeUsd = options.preview.quote.openFeeUsd ?? 0;
+  const priceImpactFeeUsd = options.preview.quote.priceImpactFeeUsd ?? 0;
+  const outstandingBorrowFeeUsd = options.preview.quote.outstandingBorrowFeeUsd ?? 0;
+  const openFeePercent = options.preview.pool.openFeePercent;
+  const estimatedCloseFeeUsd =
+    typeof positionSizeUsd === "number" &&
+    Number.isFinite(positionSizeUsd) &&
+    positionSizeUsd > 0 &&
+    typeof openFeePercent === "number" &&
+    Number.isFinite(openFeePercent) &&
+    openFeePercent > 0
+      ? positionSizeUsd * (openFeePercent / 100)
+      : openFeeUsd;
+  const estimatedRoundTripFeesUsd = openFeeUsd + priceImpactFeeUsd + outstandingBorrowFeeUsd + estimatedCloseFeeUsd;
+  const feeMoveFraction =
+    typeof positionSizeUsd === "number" && Number.isFinite(positionSizeUsd) && positionSizeUsd > 0
+      ? estimatedRoundTripFeesUsd / positionSizeUsd
+      : 0;
+
+  const takeProfitMoveFraction = desiredTakeProfitFraction > 0 ? desiredTakeProfitFraction + feeMoveFraction : 0;
+  const stopLossMoveFraction = desiredStopLossFraction > 0 ? Math.max(0, desiredStopLossFraction - feeMoveFraction) : 0;
+
+  const takeProfitPrice =
+    takeProfitMoveFraction > 0
+      ? options.preview.side === "long"
+        ? entryPrice * (1 + takeProfitMoveFraction)
+        : entryPrice * (1 - takeProfitMoveFraction)
+      : null;
+  const stopLossPrice =
+    stopLossMoveFraction > 0 || desiredStopLossFraction > 0
+      ? options.preview.side === "long"
+        ? entryPrice * (1 - stopLossMoveFraction)
+        : entryPrice * (1 + stopLossMoveFraction)
+      : null;
+
+  return {
+    entryPrice,
+    estimatedRoundTripFeesUsd,
+    stopLossPrice: typeof stopLossPrice === "number" && Number.isFinite(stopLossPrice) ? stopLossPrice : null,
+    takeProfitPrice: typeof takeProfitPrice === "number" && Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
+  };
+}
+
 function formatFeedSource(status: string) {
   const map: Record<string, string> = {
     loading: "loading",
@@ -917,18 +985,8 @@ function DashboardPage() {
               }
 
               const marketEntryPrice = points[points.length - 1]?.v ?? 0;
-              const takeProfitPrice =
-                autoTradeSettings.takeProfitPercent > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
-                  ? isBullSignal
-                    ? marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100))
-                    : marketEntryPrice * (1 - (autoTradeSettings.takeProfitPercent / 100))
-                  : null;
-              const stopLossPrice =
-                autoTradeSettings.stopLossPercent > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
-                  ? isBullSignal
-                    ? marketEntryPrice * (1 - (autoTradeSettings.stopLossPercent / 100))
-                    : marketEntryPrice * (1 + (autoTradeSettings.stopLossPercent / 100))
-                  : null;
+              let takeProfitPrice: number | null = null;
+              let stopLossPrice: number | null = null;
 
               const openAutoPerpsPosition = (options?: {
                 stopLossPrice?: number | null;
@@ -982,6 +1040,43 @@ function DashboardPage() {
                       `Perps auto-trade is waiting: ${activePositionAfterSubmitRefresh.marketSymbol} ${activePositionAfterSubmitRefresh.side === "long" ? "long" : "short"} already open`
                     );
                     return;
+                  }
+
+                  if (
+                    (autoTradeSettings.takeProfitPercent > 0 || autoTradeSettings.stopLossPercent > 0) &&
+                    Number.isFinite(marketEntryPrice) &&
+                    marketEntryPrice > 0
+                  ) {
+                    setPerpsAutoTradeStatus(`Estimating Perps TP/SL for ${signal.symbol} with fees included...`);
+
+                    let preview;
+                    try {
+                      preview = await jupiterPerpsController.previewMarketPosition({
+                        asset: perpsAssetSymbol,
+                        collateralToken: "USDC",
+                        leverage: String(autoTradeSettings.perpsLeverage),
+                        maxSlippageBps: "100",
+                        side: isBullSignal ? "long" : "short",
+                        uiAmount: collateralAmount,
+                      });
+                    } catch (previewError) {
+                      const previewMessage =
+                        previewError instanceof Error ? previewError.message : "Unable to estimate Perps TP/SL with fees.";
+                      setPerpsAutoTradeStatus(
+                        `Perps auto-trade paused for ${signal.symbol}: ${previewMessage}`
+                      );
+                      return;
+                    }
+
+                    const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
+                      desiredStopLossPercent: autoTradeSettings.stopLossPercent,
+                      desiredTakeProfitPercent: autoTradeSettings.takeProfitPercent,
+                      fallbackEntryPrice: marketEntryPrice,
+                      preview,
+                    });
+
+                    takeProfitPrice = adjustedTriggers.takeProfitPrice;
+                    stopLossPrice = adjustedTriggers.stopLossPrice;
                   }
 
                   clearPerpsAutoTradeTimeout();

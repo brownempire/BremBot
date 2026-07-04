@@ -753,6 +753,12 @@ function mapLivePerpsTrade(trade: LivePerpsTradeResponse): JupiterPerpsTrade {
   const market = resolveMarketMetadataFromLivePosition(trade.positionName ?? null, trade.mint ?? null);
   const createdAt = toOptionalTimestamp(trade.createdTime);
   const lastUpdated = toOptionalTimestamp(trade.updatedTime) ?? createdAt;
+  const grossPnlUsd = decimalUsdToNumber(trade.pnl);
+  const feeUsd = decimalUsdToNumber(trade.fee);
+  const netPnlUsd =
+    typeof grossPnlUsd === "number" && Number.isFinite(grossPnlUsd)
+      ? grossPnlUsd - (typeof feeUsd === "number" && Number.isFinite(feeUsd) ? feeUsd : 0)
+      : grossPnlUsd;
 
   return {
     id: trade.txHash?.trim() || `${trade.positionPubkey ?? market.marketSymbol}-${lastUpdated ?? Date.now()}`,
@@ -766,8 +772,8 @@ function mapLivePerpsTrade(trade: LivePerpsTradeResponse): JupiterPerpsTrade {
     price: decimalUsdToNumber(trade.price),
     sizeUsd: decimalUsdToNumber(trade.size),
     collateralUsdDelta: decimalUsdToNumber(trade.collateralUsdDelta),
-    feeUsd: decimalUsdToNumber(trade.fee),
-    pnl: decimalUsdToNumber(trade.pnl),
+    feeUsd,
+    pnl: netPnlUsd,
     pnlPercentage: decimalUsdToNumber(trade.pnlPercentage),
     txHash: trade.txHash?.trim() || null,
     lastUpdated,
