@@ -9,7 +9,7 @@ import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
-import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
+import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import type { JupiterPerpsWidgetSnapshot } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
@@ -1915,19 +1915,19 @@ function DashboardPage() {
     setLastSignalAt({});
   }
 
-  async function handleManualSwapSuccess(result: ManualSwapSuccess) {
+  async function handleManualSwapSuccess(result: JupiterTradeRecord) {
     const manualTradeRecord: StoredTradeRecord = {
       id: `manual-${result.txid}-${Date.now()}`,
       txid: result.txid,
       timestamp: Date.now(),
-      walletAddress: wallet.publicKey?.toBase58() ?? undefined,
+      walletAddress: wallet.publicKey?.toBase58() ?? result.walletAddress,
       source: "manual",
       inputMint: result.inputMint,
       outputMint: result.outputMint,
       inputAmount: result.inputAmount,
       outputAmount: result.outputAmount,
-      signalSummary: `${result.inputSymbol} -> ${result.outputSymbol}${result.gasless ? " · gasless" : ""}`,
-      gasless: result.gasless,
+      signalSummary: "Jupiter widget manual swap",
+      gasless: false,
     };
     await persistTradeRecord(manualTradeRecord);
     refreshWalletPortfolio().catch(() => undefined);
@@ -2134,14 +2134,7 @@ function DashboardPage() {
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-grid" style={{ marginTop: 10 }}>
             <div className="wallet-trading-panel wallet-trading-panel-swap">
-              <ManualSwapWidget
-                connected={wallet.connected}
-                walletAddress={wallet.publicKey?.toBase58() ?? null}
-                solBalance={solBalance}
-                walletTokens={walletTokens}
-                onExecuteSwap={wallet.executeSwap}
-                onTradeSuccess={handleManualSwapSuccess}
-              />
+              <JupiterTradePanel onTradeSuccess={handleManualSwapSuccess} integratedTargetId="bremlogic-manual-swap-widget" />
             </div>
             <div className="wallet-trading-panel wallet-trading-panel-perps">
               <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />

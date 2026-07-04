@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   getMockJupiterPerpsPendingTriggers,
@@ -23,7 +23,7 @@ type JupiterPerpsPositionsState = {
   refetch: () => Promise<void>;
 };
 
-const LIVE_PERPS_REFRESH_MS = 5000;
+const LIVE_PERPS_REFRESH_MS = 1000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
@@ -74,9 +74,19 @@ export function useJupiterPerpsPositions({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isMock, setIsMock] = useState(false);
+  const hasResolvedInitialLoadRef = useRef(false);
+  const activeRequestRef = useRef<Promise<void> | null>(null);
 
-  const loadPositions = useCallback(async () => {
+  const loadPositions = useCallback(async (options?: { silent?: boolean }) => {
+    if (activeRequestRef.current) {
+      await activeRequestRef.current;
+      return;
+    }
+
+    const silent = options?.silent ?? false;
+
     if (!walletAddress) {
+      hasResolvedInitialLoadRef.current = true;
       setError(null);
       setIsLoading(false);
       setIsMock(showMockData);
@@ -85,32 +95,52 @@ export function useJupiterPerpsPositions({
       return;
     }
 
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const next = await fetchPerpsSnapshotFromApi(walletAddress);
-      setPositions(next.positions);
-      setPendingTriggers(next.pendingTriggers);
-      setIsMock(false);
-    } catch (loadError) {
-      const friendlyError = getFriendlyErrorMessage(loadError);
-      setError(friendlyError);
-      if (showMockData) {
-        setPositions(getMockJupiterPerpsPositions());
-        setPendingTriggers(getMockJupiterPerpsPendingTriggers());
-        setIsMock(true);
-      } else {
-        setPositions([]);
-        setPendingTriggers([]);
-        setIsMock(false);
-      }
-    } finally {
-      setIsLoading(false);
+    const shouldShowLoading = !silent && !hasResolvedInitialLoadRef.current;
+    if (shouldShowLoading) {
+      setIsLoading(true);
     }
+    if (!silent) {
+      setError(null);
+    }
+
+    const request = (async () => {
+      try {
+        const next = await fetchPerpsSnapshotFromApi(walletAddress);
+        hasResolvedInitialLoadRef.current = true;
+        setPositions(next.positions);
+        setPendingTriggers(next.pendingTriggers);
+        setIsMock(false);
+        setError(null);
+      } catch (loadError) {
+        const friendlyError = getFriendlyErrorMessage(loadError);
+        setError(friendlyError);
+        if (!silent) {
+          if (showMockData) {
+            setPositions(getMockJupiterPerpsPositions());
+            setPendingTriggers(getMockJupiterPerpsPendingTriggers());
+            setIsMock(true);
+            hasResolvedInitialLoadRef.current = true;
+          } else {
+            setPositions([]);
+            setPendingTriggers([]);
+            setIsMock(false);
+            hasResolvedInitialLoadRef.current = true;
+          }
+        }
+      } finally {
+        if (shouldShowLoading) {
+          setIsLoading(false);
+        }
+        activeRequestRef.current = null;
+      }
+    })();
+
+    activeRequestRef.current = request;
+    await request;
   }, [showMockData, walletAddress]);
 
   useEffect(() => {
+    hasResolvedInitialLoadRef.current = false;
     void loadPositions();
   }, [loadPositions]);
 
@@ -119,7 +149,7 @@ export function useJupiterPerpsPositions({
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
-      void loadPositions();
+      void loadPositions({ silent: true });
     }, LIVE_PERPS_REFRESH_MS);
 
     return () => {

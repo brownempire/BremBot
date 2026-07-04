@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useWallet } from "@solana/wallet-adapter-react";
 
 import "@jup-ag/plugin/css";
 
@@ -34,7 +33,6 @@ export function JupiterTradePanel({
   integratedTargetId = "target-container",
   tradeRequest = null,
 }: JupiterTradePanelProps) {
-  const wallet = useWallet();
   const onTradeSuccessRef = useRef(onTradeSuccess);
   const lastHandledRequestId = useRef<string | null>(null);
 
@@ -67,7 +65,6 @@ export function JupiterTradePanel({
             onTradeSuccessRef.current?.({
               txid,
               timestamp: Date.now(),
-              walletAddress: wallet.publicKey?.toBase58(),
               inputMint: quote?.inputMint?.toString?.(),
               outputMint: quote?.outputMint?.toString?.(),
               inputAmount: Number(quote?.inAmount ?? 0),
@@ -86,7 +83,7 @@ export function JupiterTradePanel({
         })
         .catch(() => undefined);
     };
-  }, [defaultInputMint, integratedTargetId, wallet.publicKey]);
+  }, [defaultInputMint, integratedTargetId]);
 
   useEffect(() => {
     if (!tradeRequest || lastHandledRequestId.current === tradeRequest.id) return;
@@ -114,7 +111,6 @@ export function JupiterTradePanel({
             onTradeSuccessRef.current?.({
               txid,
               timestamp: Date.now(),
-              walletAddress: wallet.publicKey?.toBase58(),
               inputMint: quote?.inputMint?.toString?.(),
               outputMint: quote?.outputMint?.toString?.(),
               inputAmount: Number(quote?.inAmount ?? 0),
@@ -125,7 +121,29 @@ export function JupiterTradePanel({
         mod.resume();
       })
       .catch(() => undefined);
-  }, [integratedTargetId, tradeRequest, wallet.publicKey]);
+  }, [integratedTargetId, tradeRequest]);
 
-  return <div id={integratedTargetId} />;
+  return (
+    <div className="manual-swap-shell">
+      <div className="manual-swap-header">
+        <div>
+          <div className="manual-swap-title-row">
+            <strong>Manual Swap</strong>
+            <span className="perps-readonly-badge">Jupiter</span>
+          </div>
+          <div className="subtext">
+            BremLogic-branded Jupiter widget for manual spot swaps.
+          </div>
+        </div>
+      </div>
+      <div className="manual-swap-body">
+        <div id={integratedTargetId} />
+      </div>
+      <div className="manual-swap-footer">
+        <div className="subtext">
+          Manual swaps run through the embedded Jupiter widget and keep BremLogic branding in place.
+        </div>
+      </div>
+    </div>
+  );
 }

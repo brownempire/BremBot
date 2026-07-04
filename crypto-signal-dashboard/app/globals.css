@@ -1137,6 +1137,11 @@ button:disabled {
   padding-right: 4px;
 }
 
+.manual-swap-body > div {
+  min-height: 100%;
+  width: 100%;
+}
+
 .manual-swap-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
