@@ -1,7 +1,7 @@
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
 
 export type JupiterPerpsPositionSide = "long" | "short";
-export type JupiterPerpsPositionSource = "portfolio-api" | "mock" | "rpc-direct" | "rpc-placeholder";
+export type JupiterPerpsPositionSource = "live-api" | "portfolio-api" | "mock" | "rpc-direct" | "rpc-placeholder";
 export type JupiterPerpsPendingTriggerKind = "take-profit" | "stop-loss";
 
 export type JupiterPerpsPosition = {
@@ -60,62 +60,91 @@ export type JupiterPerpsPendingTrigger = {
 export type JupiterPerpsAccountSnapshot = {
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
+  recentTrades: JupiterPerpsTrade[];
 };
 
-type PortfolioResponse = {
-  date?: number;
-  elements?: PortfolioElement[];
-  fetcherReports?: Array<{ id?: string; status?: string; error?: string }>;
-  tokenInfo?: {
-    solana?: Record<
-      string,
-      {
-        symbol?: string;
-        name?: string;
-        logoURI?: string;
-      }
-    >;
-  };
+export type JupiterPerpsTrade = {
+  id: string;
+  source: "live-api";
+  positionPubkey: string | null;
+  marketSymbol: string;
+  marketName: string | null;
+  side: JupiterPerpsPositionSide;
+  action: string;
+  orderType: string;
+  price: number | null;
+  sizeUsd: number | null;
+  collateralUsdDelta: number | null;
+  feeUsd: number | null;
+  pnl: number | null;
+  pnlPercentage: number | null;
+  txHash: string | null;
+  lastUpdated: number | null;
+  createdAt: number | null;
 };
 
-type PortfolioElement = {
-  type?: string;
-  label?: string;
-  platformId?: string;
-  data?: {
-    isolated?: {
-      positions?: PortfolioLeveragePosition[];
-      value?: number;
-    };
-    cross?: {
-      positions?: PortfolioLeveragePosition[];
-      value?: number;
-      leverage?: number;
-    };
-    value?: number;
-  };
+type LivePerpsPositionsResponse = {
+  dataList?: LivePerpsPosition[];
+  count?: number;
 };
 
-type PortfolioLeveragePosition = {
-  address?: string;
-  name?: string;
-  imageUri?: string;
-  collateralValue?: number;
+type LivePerpsTradesResponse = {
+  dataList?: LivePerpsTradeResponse[];
+  count?: number;
+};
+
+type LivePerpsPosition = {
+  positionPubkey?: string;
+  mint?: string;
+  positionName?: string;
   side?: "long" | "short";
-  entryPrice?: number;
-  markPrice?: number;
-  size?: number;
-  sizeValue?: number;
-  pnlValue?: number;
-  liquidationPrice?: number;
-  leverage?: number;
-  tp?: number;
-  sl?: number;
-  value?: number;
-  ref?: string;
+  sizeUsd?: string | number;
+  collateralUsd?: string | number;
+  entryPriceUsd?: string | number;
+  markPriceUsd?: string | number;
+  liquidationPriceUsd?: string | number;
+  pnlAfterFeesUsd?: string | number;
+  realizedPnlUsd?: string | number;
+  createdTime?: number | string;
+  updatedTime?: number | string;
+  tpslRequests?: LivePerpsTriggerRequest[];
+  imageUri?: string;
 };
 
-const JUPITER_PORTFOLIO_BASE = "https://api.jup.ag/portfolio/v1";
+type LivePerpsTriggerRequest = {
+  triggerPriceUsd?: string | number;
+  price?: string | number;
+  side?: "long" | "short";
+  triggerAboveThreshold?: boolean;
+  entirePosition?: boolean;
+  sizeUsdDelta?: string | number;
+  collateralUsdDelta?: string | number;
+  updatedTime?: number | string;
+  createdTime?: number | string;
+  orderType?: string;
+  requestType?: string;
+  txType?: string;
+};
+
+type LivePerpsTradeResponse = {
+  mint?: string;
+  positionName?: string;
+  side?: "long" | "short";
+  action?: string;
+  orderType?: string;
+  collateralUsdDelta?: string | number;
+  price?: string | number;
+  size?: string | number;
+  fee?: string | number;
+  pnl?: string | number | null;
+  pnlPercentage?: string | number | null;
+  txHash?: string;
+  createdTime?: number | string;
+  updatedTime?: number | string;
+  positionPubkey?: string;
+};
+
+const JUPITER_PERPS_API_BASE = "https://perps-api.jup.ag/v1";
 const JUPITER_EXCHANGE_PLATFORM = "jupiter-exchange";
 const JUPITER_PERPS_PROGRAM_ID = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
 const POSITION_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0xa2, 0xbf, 0x9c, 0x22, 0x97, 0x83, 0x41, 0x8c]);
@@ -168,6 +197,33 @@ const JUPITER_COINBASE_PRODUCTS = new Map([
 
 function toFiniteNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function toFiniteNumberish(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function toOptionalTimestamp(value: unknown) {
+  const numeric = toFiniteNumberish(value);
+  if (numeric === null || numeric <= 0) return null;
+  return Math.round(numeric * 1000);
+}
+
+function decimalUsdToNumber(value: unknown) {
+  const numeric = toFiniteNumberish(value);
+  if (numeric === null) return null;
+  return roundUsd(numeric);
+}
+
+function atomicUsdLikeToNumber(value: unknown) {
+  const numeric = toFiniteNumberish(value);
+  if (numeric === null) return null;
+  return roundUsd(numeric / 10 ** USDC_DECIMALS);
 }
 
 function atomicUsdToNumber(value: bigint) {
@@ -543,6 +599,225 @@ function inferTriggerKindFromPrice(
   return triggerPrice <= entryPrice ? "take-profit" : "stop-loss";
 }
 
+function inferLiveTriggerKind(
+  trigger: LivePerpsTriggerRequest,
+  side: JupiterPerpsPositionSide,
+  entryPrice: number | null,
+  triggerPrice: number | null
+) {
+  const requestLabel = `${trigger.orderType ?? ""} ${trigger.requestType ?? ""} ${trigger.txType ?? ""}`.toLowerCase();
+  if (requestLabel.includes("tp") || requestLabel.includes("take")) {
+    return "take-profit" as const;
+  }
+  if (requestLabel.includes("sl") || requestLabel.includes("stop")) {
+    return "stop-loss" as const;
+  }
+
+  return inferTriggerKindFromPrice(side, entryPrice, triggerPrice);
+}
+
+function normalizeLiveMarketSymbol(positionName: string | null, mint: string | null) {
+  if (positionName) {
+    return positionName.replace(/-PERP$/i, "").replace(/[^A-Z0-9]/gi, "").toUpperCase() || "PERP";
+  }
+
+  if (mint && mint === "So11111111111111111111111111111111111111112") {
+    return "SOL";
+  }
+
+  if (mint) {
+    return `${mint.slice(0, 4)}...${mint.slice(-4)}`;
+  }
+
+  return "PERP";
+}
+
+function resolveMarketMetadataFromLivePosition(positionName: string | null, mint: string | null) {
+  const marketSymbol = normalizeLiveMarketSymbol(positionName, mint);
+  const custodyEntry = [...JUPITER_CUSTODY_MARKETS.entries()].find(([, market]) => market.symbol === marketSymbol);
+  return {
+    marketSymbol,
+    marketName: positionName ? `Jupiter ${positionName.replace(/-/g, " ")}` : custodyEntry?.[1].marketName ?? "Jupiter Perps position",
+    marketAddress: mint ?? custodyEntry?.[1].marketAddress ?? null,
+    custodyAddress: custodyEntry?.[0] ?? null,
+  };
+}
+
+function mapLiveTriggerRequest(
+  trigger: LivePerpsTriggerRequest,
+  position: JupiterPerpsPosition
+): JupiterPerpsPendingTrigger | null {
+  const triggerPrice = atomicUsdLikeToNumber(trigger.triggerPriceUsd ?? trigger.price);
+  if (triggerPrice === null) return null;
+
+  const kind = inferLiveTriggerKind(trigger, position.side, position.entryPrice, triggerPrice);
+  const triggerAboveThreshold = position.entryPrice !== null ? triggerPrice >= position.entryPrice : kind === "take-profit";
+  const sizeDeltaUsd = atomicUsdLikeToNumber(trigger.sizeUsdDelta);
+  const collateralDelta = atomicUsdLikeToNumber(trigger.collateralUsdDelta);
+  const lastUpdated = toOptionalTimestamp(trigger.updatedTime) ?? toOptionalTimestamp(trigger.createdTime) ?? position.lastUpdated;
+
+  return {
+    id: `${position.id}:${kind}:${triggerPrice}:${lastUpdated ?? "na"}`,
+    source: "live-api",
+    platformId: JUPITER_EXCHANGE_PLATFORM,
+    marketSymbol: position.marketSymbol,
+    marketName: position.marketName,
+    marketAddress: position.marketAddress,
+    custodyAddress: position.custodyAddress,
+    collateralCustodyAddress: position.collateralCustodyAddress,
+    collateralSymbol: position.collateralSymbol,
+    side: position.side,
+    kind,
+    triggerPrice,
+    sizeDeltaUsd,
+    collateralDelta,
+    entirePosition: trigger.entirePosition ?? true,
+    triggerAboveThreshold,
+    executed: false,
+    accountRef: position.accountRef,
+    lastUpdated,
+  };
+}
+
+function mapLivePerpsPosition(position: LivePerpsPosition) {
+  const market = resolveMarketMetadataFromLivePosition(position.positionName ?? null, position.mint ?? null);
+  const entryPrice = atomicUsdLikeToNumber(position.entryPriceUsd);
+  const markPrice = atomicUsdLikeToNumber(position.markPriceUsd);
+  const positionValue = atomicUsdLikeToNumber(position.sizeUsd);
+  const collateralValue = atomicUsdLikeToNumber(position.collateralUsd);
+  const leverage =
+    collateralValue !== null && collateralValue > 0 && positionValue !== null
+      ? roundUsd(positionValue / collateralValue, 4)
+      : null;
+  const positionSize =
+    positionValue !== null && entryPrice !== null && entryPrice > 0
+      ? Number((positionValue / entryPrice).toFixed(4))
+      : null;
+
+  const mappedPosition: JupiterPerpsPosition = {
+    id: position.positionPubkey?.trim() || `${market.marketSymbol}-${position.side ?? "long"}`,
+    source: "live-api",
+    platformId: JUPITER_EXCHANGE_PLATFORM,
+    marketSymbol: market.marketSymbol,
+    marketName: market.marketName,
+    marketAddress: market.marketAddress,
+    custodyAddress: market.custodyAddress,
+    collateralCustodyAddress: null,
+    collateralSymbol: "USDC",
+    imageUri: position.imageUri ?? null,
+    side: position.side === "short" ? "short" : "long",
+    entryPrice,
+    markPrice,
+    positionSize,
+    positionValue,
+    collateralValue,
+    leverage,
+    unrealizedPnl: atomicUsdLikeToNumber(position.pnlAfterFeesUsd),
+    realizedPnl: atomicUsdLikeToNumber(position.realizedPnlUsd) ?? 0,
+    liquidationPrice: atomicUsdLikeToNumber(position.liquidationPriceUsd),
+    fundingSnapshot: null,
+    borrowSnapshot: null,
+    takeProfit: null,
+    stopLoss: null,
+    markPriceIsLive: markPrice !== null,
+    liquidationPriceIsEstimated: false,
+    accountRef: position.positionPubkey?.trim() || null,
+    lastUpdated: toOptionalTimestamp(position.updatedTime) ?? toOptionalTimestamp(position.createdTime),
+  };
+
+  const pendingTriggers = (position.tpslRequests ?? [])
+    .map((trigger) => mapLiveTriggerRequest(trigger, mappedPosition))
+    .filter((trigger): trigger is JupiterPerpsPendingTrigger => trigger !== null);
+
+  const takeProfit = pendingTriggers.find((trigger) => trigger.kind === "take-profit")?.triggerPrice ?? null;
+  const stopLoss = pendingTriggers.find((trigger) => trigger.kind === "stop-loss")?.triggerPrice ?? null;
+
+  return {
+    position: {
+      ...mappedPosition,
+      takeProfit,
+      stopLoss,
+    },
+    pendingTriggers,
+  };
+}
+
+function mapLivePerpsTrade(trade: LivePerpsTradeResponse): JupiterPerpsTrade {
+  const market = resolveMarketMetadataFromLivePosition(trade.positionName ?? null, trade.mint ?? null);
+  const createdAt = toOptionalTimestamp(trade.createdTime);
+  const lastUpdated = toOptionalTimestamp(trade.updatedTime) ?? createdAt;
+
+  return {
+    id: trade.txHash?.trim() || `${trade.positionPubkey ?? market.marketSymbol}-${lastUpdated ?? Date.now()}`,
+    source: "live-api",
+    positionPubkey: trade.positionPubkey?.trim() || null,
+    marketSymbol: market.marketSymbol,
+    marketName: trade.positionName ? `Jupiter ${trade.positionName.replace(/-/g, " ")}` : market.marketName,
+    side: trade.side === "short" ? "short" : "long",
+    action: trade.action?.trim() || "Unknown",
+    orderType: trade.orderType?.trim() || "Unknown",
+    price: decimalUsdToNumber(trade.price),
+    sizeUsd: decimalUsdToNumber(trade.size),
+    collateralUsdDelta: decimalUsdToNumber(trade.collateralUsdDelta),
+    feeUsd: decimalUsdToNumber(trade.fee),
+    pnl: decimalUsdToNumber(trade.pnl),
+    pnlPercentage: decimalUsdToNumber(trade.pnlPercentage),
+    txHash: trade.txHash?.trim() || null,
+    lastUpdated,
+    createdAt,
+  };
+}
+
+async function fetchLivePerpsSnapshot(walletAddress: string): Promise<JupiterPerpsAccountSnapshot> {
+  const positionsResponse = await fetch(
+    `${JUPITER_PERPS_API_BASE}/positions?walletAddress=${encodeURIComponent(walletAddress)}&includeClosedPositions=false`,
+    {
+      headers: {
+        Accept: "application/json",
+        "x-perps-api-version": "v2",
+      },
+      cache: "no-store",
+    }
+  );
+
+  if (!positionsResponse.ok) {
+    throw new Error(`Jupiter live Perps positions returned ${positionsResponse.status}`);
+  }
+
+  const positionsPayload = (await positionsResponse.json()) as LivePerpsPositionsResponse;
+  let recentTrades: JupiterPerpsTrade[] = [];
+
+  try {
+    const tradesResponse = await fetch(
+      `${JUPITER_PERPS_API_BASE}/trades?walletAddress=${encodeURIComponent(walletAddress)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "x-perps-api-version": "v2",
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (tradesResponse.ok) {
+      const tradesPayload = (await tradesResponse.json()) as LivePerpsTradesResponse;
+      recentTrades = (tradesPayload.dataList ?? []).map((item) => mapLivePerpsTrade(item));
+    }
+  } catch {
+    // Recent trade history is supplementary. Keep open-position visibility available even if the trade feed hiccups.
+  }
+
+  const livePositionRecords = (positionsPayload.dataList ?? []).map((item) => mapLivePerpsPosition(item));
+  const positions = livePositionRecords.map((item) => item.position);
+  const pendingTriggers = livePositionRecords.flatMap((item) => item.pendingTriggers);
+
+  return {
+    positions,
+    pendingTriggers,
+    recentTrades,
+  };
+}
+
 function decodeInstantTpslAccount(
   accountRef: string,
   bytes: Uint8Array,
@@ -636,61 +911,10 @@ function decodeInstantTpslAccount(
 
 function getFriendlyPortfolioErrorMessage(error: string) {
   if (/Discriminant\s+\d+\s+out of range/i.test(error) || /out of range for \d+ variants/i.test(error)) {
-    return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+    return "Jupiter's legacy fallback decoder could not parse this wallet's Perps accounts right now. BremLogic will keep using the live Perps feed when it is available.";
   }
 
   return error;
-}
-
-function normalizeMarketSymbol(position: PortfolioLeveragePosition, tokenSymbol?: string) {
-  if (tokenSymbol) return tokenSymbol;
-  if (position.name) return position.name.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12) || "PERP";
-  if (position.address) return `${position.address.slice(0, 4)}...${position.address.slice(-4)}`;
-  return "PERP";
-}
-
-function mapLeveragePosition(
-  position: PortfolioLeveragePosition,
-  platformId: string,
-  responseDate: number | null,
-  tokenInfo: PortfolioResponse["tokenInfo"]
-): JupiterPerpsPosition {
-  const tokenMeta = position.address ? tokenInfo?.solana?.[position.address] : undefined;
-  const marketSymbol = normalizeMarketSymbol(position, tokenMeta?.symbol);
-  const marketName = position.name ?? tokenMeta?.name ?? null;
-  const marketAddress = position.address ?? null;
-  const accountRef = position.ref ?? null;
-
-  return {
-    id: accountRef ?? `${platformId}-${marketAddress ?? marketSymbol}-${position.side ?? "long"}`,
-    source: "portfolio-api",
-    platformId,
-    marketSymbol,
-    marketName,
-    marketAddress,
-    custodyAddress: null,
-    collateralCustodyAddress: null,
-    collateralSymbol: null,
-    imageUri: position.imageUri ?? tokenMeta?.logoURI ?? null,
-    side: position.side === "short" ? "short" : "long",
-    entryPrice: toFiniteNumber(position.entryPrice),
-    markPrice: toFiniteNumber(position.markPrice),
-    positionSize: toFiniteNumber(position.size),
-    positionValue: toFiniteNumber(position.sizeValue ?? position.value),
-    collateralValue: toFiniteNumber(position.collateralValue),
-    leverage: toFiniteNumber(position.leverage),
-    unrealizedPnl: toFiniteNumber(position.pnlValue),
-    realizedPnl: null,
-    liquidationPrice: toFiniteNumber(position.liquidationPrice),
-    fundingSnapshot: null,
-    borrowSnapshot: null,
-    takeProfit: toFiniteNumber(position.tp),
-    stopLoss: toFiniteNumber(position.sl),
-    markPriceIsLive: false,
-    liquidationPriceIsEstimated: false,
-    accountRef,
-    lastUpdated: responseDate,
-  };
 }
 
 function applyPendingTriggersToPositions(
@@ -734,89 +958,34 @@ export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): P
     clusterApiUrl("mainnet-beta");
 
   try {
-    const directSnapshot = await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
-    return {
-      ...directSnapshot,
-      positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
-    };
-  } catch {
-    // Fall back to Jupiter's Portfolio API if the direct reader cannot complete successfully.
-  }
-
-  async function fetchPortfolio(url: string) {
-    const response = await fetch(url, { headers: { Accept: "application/json" } });
-
-    if (!response.ok) {
-      throw new Error(`Jupiter Portfolio API returned ${response.status}`);
+    const liveSnapshot = await fetchLivePerpsSnapshot(walletAddress);
+    if (liveSnapshot.positions.length > 0 || liveSnapshot.pendingTriggers.length > 0) {
+      return liveSnapshot;
     }
 
-    return (await response.json()) as PortfolioResponse;
-  }
-
-  function extractLeveragePositions(payload: PortfolioResponse) {
-    const responseDate = toFiniteNumber(payload.date);
-    return (payload.elements ?? [])
-      .filter((element) => element.type === "leverage" && element.platformId === JUPITER_EXCHANGE_PLATFORM)
-      .flatMap((element) => {
-        const isolatedPositions = (element.data?.isolated?.positions ?? []).map((position) =>
-          mapLeveragePosition(position, element.platformId ?? JUPITER_EXCHANGE_PLATFORM, responseDate, payload.tokenInfo)
-        );
-        const crossPositions = (element.data?.cross?.positions ?? []).map((position) =>
-          mapLeveragePosition(position, element.platformId ?? JUPITER_EXCHANGE_PLATFORM, responseDate, payload.tokenInfo)
-        );
-        return [...isolatedPositions, ...crossPositions];
-      });
-  }
-
-  function getFailedReport(payload: PortfolioResponse) {
-    return payload.fetcherReports?.find((report) => report.status === "failed" && report.id === JUPITER_EXCHANGE_PLATFORM)
-      ?? payload.fetcherReports?.find((report) => report.status === "failed");
-  }
-
-  const filteredPayload = await fetchPortfolio(
-    `${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}?platforms=${JUPITER_EXCHANGE_PLATFORM}`
-  );
-
-  const filteredPositions = extractLeveragePositions(filteredPayload);
-  if (filteredPositions.length > 0) {
-    const enrichedPositions = await enrichPositionsWithLiveMetrics(filteredPositions);
-    return {
-      positions: enrichedPositions,
-      pendingTriggers: [],
-    };
-  }
-
-  const filteredFailure = getFailedReport(filteredPayload);
-  if (!filteredFailure?.error) {
-    return {
-      positions: [],
-      pendingTriggers: [],
-    };
-  }
-
-  try {
-    const fallbackPayload = await fetchPortfolio(`${JUPITER_PORTFOLIO_BASE}/positions/${walletAddress}`);
-    const fallbackPositions = extractLeveragePositions(fallbackPayload);
-    if (fallbackPositions.length > 0) {
-      const enrichedPositions = await enrichPositionsWithLiveMetrics(fallbackPositions);
+    try {
+      const directSnapshot = await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
       return {
-        positions: enrichedPositions,
-        pendingTriggers: [],
+        ...liveSnapshot,
+        positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
+        pendingTriggers: directSnapshot.pendingTriggers,
       };
-    }
-
-    const fallbackFailure = getFailedReport(fallbackPayload);
-    if (!fallbackFailure?.error) {
-      return {
-        positions: [],
-        pendingTriggers: [],
-      };
+    } catch {
+      return liveSnapshot;
     }
   } catch {
-    // Keep the original fetcher error as the user-facing signal when the broader portfolio retry also fails.
+    try {
+      const directSnapshot = await fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress, rpcUrl);
+      return {
+        positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
+        pendingTriggers: directSnapshot.pendingTriggers,
+        recentTrades: [],
+      };
+    } catch (rpcError) {
+      const message = rpcError instanceof Error ? rpcError.message : "Unable to load Jupiter Perps positions right now.";
+      throw new Error(getFriendlyPortfolioErrorMessage(message));
+    }
   }
-
-  throw new Error(getFriendlyPortfolioErrorMessage(filteredFailure.error));
 }
 
 export async function fetchJupiterPerpsPositions(walletAddress: string): Promise<JupiterPerpsPosition[]> {
@@ -878,6 +1047,7 @@ export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: str
   return {
     positions: applyPendingTriggersToPositions(positions, pendingTriggers),
     pendingTriggers,
+    recentTrades: [],
   };
 }
 

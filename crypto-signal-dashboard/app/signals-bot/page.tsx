@@ -143,7 +143,7 @@ type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
 type PnlMode = "app" | "chain";
 type RemoteAuthSource = "in-app" | "phantom";
-type DashboardSectionId = "chart" | "wallet" | "pnl" | "params" | "signals" | "trades" | "news";
+type DashboardSectionId = "chart" | "wallet" | "perps" | "pnl" | "params" | "signals" | "trades" | "news";
 type DashboardSectionLayout = {
   id: DashboardSectionId;
   width: number;
@@ -248,6 +248,7 @@ const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
 const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
   { id: "chart", width: 1080, height: 640 },
   { id: "wallet", width: 1080, height: 520 },
+  { id: "perps", width: 1080, height: 620 },
   { id: "pnl", width: 1080, height: 460 },
   { id: "params", width: 1080, height: 500 },
   { id: "signals", width: 1080, height: 430 },
@@ -258,6 +259,7 @@ const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
 const DASHBOARD_SECTION_TITLES: Record<DashboardSectionId, string> = {
   chart: "TradingView Chart",
   wallet: "In-App Wallet",
+  perps: "Jupiter Perps",
   pnl: "PnL",
   params: "Signal Parameters",
   signals: "Live Signals",
@@ -299,7 +301,6 @@ function DashboardPage() {
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
   const [newsItems, setNewsItems] = useState<NewsItem[]>(getMockNews());
-  const [editingMarketSlotId, setEditingMarketSlotId] = useState<string | null>(null);
   const [editingSignalTarget, setEditingSignalTarget] = useState(false);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
@@ -320,6 +321,7 @@ function DashboardPage() {
     walletAddress: null,
     positions: [],
     pendingTriggers: [],
+    recentTrades: [],
     isLoading: false,
     error: null,
     isMock: false,
@@ -1429,6 +1431,7 @@ function DashboardPage() {
     const change24h = dayChange24h[market.id] ?? 0;
     return { ...market, current, change24h };
   });
+  const selectedChartCard = cards.find((market) => market.id === selectedChartSlotId) ?? cards[0];
 
   const pnlTokenOptions = useMemo(() => {
     const byMint = new Map<string, string>();
@@ -1578,14 +1581,6 @@ function DashboardPage() {
       .join(" ");
   }, [pnlChartPoints]);
 
-  const selectableMarketOptions = useMemo(() => {
-    const currentProducts = new Set(trackedMarkets.map((market) => market.coinbaseProduct));
-    return marketOptions.filter(
-      (option) => !currentProducts.has(option.coinbaseProduct) || option.coinbaseProduct ===
-        trackedMarkets.find((market) => market.id === editingMarketSlotId)?.coinbaseProduct
-    );
-  }, [editingMarketSlotId, marketOptions, trackedMarkets]);
-
   function updateTrackedMarket(slotId: string, nextProduct: string) {
     const option = marketOptions.find((item) => item.coinbaseProduct === nextProduct);
     if (!option) return;
@@ -1606,7 +1601,6 @@ function DashboardPage() {
     }
     setSelectedChartSlotId(slotId);
     setReceiveSignalsForSlotId(slotId);
-    setEditingMarketSlotId(null);
   }
 
   async function enablePush() {
@@ -2100,9 +2094,6 @@ function DashboardPage() {
     if (id === "chart") {
       return (
         <>
-          <div className="subtext" style={{ marginBottom: 10 }}>
-            Live market chart aligned with signal scanning. Selected: {selectedChartMarket?.pair ?? "-"}
-          </div>
           <div className="tradingview-wrap">
             <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
           </div>
@@ -2132,18 +2123,13 @@ function DashboardPage() {
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
-          <div className="wallet-trading-grid" style={{ marginTop: 10 }}>
-            <div className="wallet-trading-panel wallet-trading-panel-swap">
-              <JupiterTradePanel
-                onTradeSuccess={handleManualSwapSuccess}
-                integratedTargetId="bremlogic-manual-swap-widget"
-                passthroughWalletContextState={wallet.passthroughWalletContextState}
-                onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
-              />
-            </div>
-            <div className="wallet-trading-panel wallet-trading-panel-perps">
-              <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />
-            </div>
+          <div className="wallet-trading-panel wallet-trading-panel-swap" style={{ marginTop: 10 }}>
+            <JupiterTradePanel
+              onTradeSuccess={handleManualSwapSuccess}
+              integratedTargetId="bremlogic-manual-swap-widget"
+              passthroughWalletContextState={wallet.passthroughWalletContextState}
+              onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
+            />
           </div>
           <div className="wallet-holdings">
             <div className="holding-row total-row">
@@ -2197,6 +2183,10 @@ function DashboardPage() {
           </div>
         </>
       );
+    }
+
+    if (id === "perps") {
+      return <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />;
     }
 
     if (id === "pnl") {
@@ -2470,67 +2460,12 @@ function DashboardPage() {
               </div>
             </div>
           </div>
-          <div className="badges">
-            <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-            <div className="badge">Wallet: in-app</div>
-            <div className="badge">{autoTradeStatus}</div>
-          </div>
+        <div className="badges">
+          <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
+          <div className="badge">Wallet: in-app</div>
+          <div className="badge">{autoTradeStatus}</div>
         </div>
-
-        <div className="grid">
-          {cards.map((card) => (
-            <div
-              key={card.id}
-              className={`panel price-card ${selectedChartSlotId === card.id ? "active" : ""}`}
-              onClick={() => {
-                setSelectedChartSlotId(card.id);
-                setReceiveSignalsForSlotId(card.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  setSelectedChartSlotId(card.id);
-                  setReceiveSignalsForSlotId(card.id);
-                }
-              }}
-              role="button"
-              tabIndex={0}
-            >
-              <div className="price-card-head">
-                <button
-                  type="button"
-                  className="price-pair-button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setEditingMarketSlotId((prev) => (prev === card.id ? null : card.id));
-                  }}
-                >
-                  {card.pair}
-                </button>
-              </div>
-              {editingMarketSlotId === card.id ? (
-                <div className="price-pair-picker" onClick={(event) => event.stopPropagation()}>
-                  <select
-                    value={card.coinbaseProduct}
-                    onChange={(event) => updateTrackedMarket(card.id, event.target.value)}
-                  >
-                    {selectableMarketOptions.map((option) => (
-                      <option key={option.coinbaseProduct} value={option.coinbaseProduct}>
-                        {option.pair}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="subtext">TradingView-compatible Coinbase symbols</div>
-                </div>
-              ) : null}
-              <div className="price">{formatUsd(card.current)}</div>
-              <div className="subtext">
-                24h change {card.change24h >= 0 ? "+" : ""}
-                {card.change24h.toFixed(2)}%
-              </div>
-            </div>
-          ))}
-        </div>
+      </div>
       </header>
 
       <section className="dashboard-layout" style={{ marginBottom: 22 }}>
@@ -2546,7 +2481,15 @@ function DashboardPage() {
             }}
           >
             <div className="dashboard-panel-toolbar">
-              <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[section.id]}</span>
+              <div className="dashboard-panel-title-group">
+                <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[section.id]}</span>
+                {section.id === "chart" && selectedChartCard ? (
+                  <span className="subtext">
+                    {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
+                    {selectedChartCard.change24h.toFixed(2)}%
+                  </span>
+                ) : null}
+              </div>
               <button
                 type="button"
                 draggable

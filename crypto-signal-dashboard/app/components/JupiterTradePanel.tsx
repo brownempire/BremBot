@@ -163,23 +163,13 @@ export function JupiterTradePanel({
   return (
     <div className="manual-swap-shell">
       <div className="manual-swap-header">
-        <div>
-          <div className="manual-swap-title-row">
-            <strong>Manual Swap</strong>
-            <span className="perps-readonly-badge">Jupiter</span>
-          </div>
-          <div className="subtext">
-            BremLogic-branded Jupiter widget for manual spot swaps.
-          </div>
+        <div className="manual-swap-title-row">
+          <strong>Manual Swap</strong>
+          <span className="perps-readonly-badge">Jupiter</span>
         </div>
       </div>
       <div className="manual-swap-body">
         <div id={integratedTargetId} />
-      </div>
-      <div className="manual-swap-footer">
-        <div className="subtext">
-          Manual swaps run through the embedded Jupiter widget and keep BremLogic branding in place.
-        </div>
       </div>
     </div>
   );

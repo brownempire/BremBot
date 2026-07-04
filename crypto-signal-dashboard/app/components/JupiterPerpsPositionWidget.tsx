@@ -1,7 +1,7 @@
 "use client";
 
 import { Browser } from "@capacitor/browser";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
@@ -11,6 +11,7 @@ import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletCon
 import { formatUsd } from "@/lib/utils";
 import {
   shortenWalletAddress,
+  type JupiterPerpsTrade,
   type JupiterPerpsPendingTrigger,
   type JupiterPerpsPosition,
 } from "@/lib/jupiterPerps";
@@ -19,6 +20,7 @@ export type JupiterPerpsWidgetSnapshot = {
   walletAddress: string | null;
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
+  recentTrades: JupiterPerpsTrade[];
   isLoading: boolean;
   error: string | null;
   isMock: boolean;
@@ -33,6 +35,11 @@ function formatNumber(value: number | null, maximumFractionDigits = 2) {
 function formatPercent(value: number | null) {
   if (value === null || !Number.isFinite(value)) return "-";
   return `${value.toFixed(2)}x`;
+}
+
+function formatSignedUsd(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "-";
+  return `${value >= 0 ? "+" : "-"}${formatUsd(Math.abs(value))}`;
 }
 
 function formatTimestamp(timestamp: number | null) {
@@ -156,7 +163,7 @@ function PositionCard({
       <div className="perps-position-footer">
         <span className="subtext">Updated {formatTimestamp(position.lastUpdated)}</span>
         <span className="subtext">
-          Funding/Borrow {position.borrowSnapshot ?? position.fundingSnapshot ?? "Not exposed by the current Portfolio API"}
+          Funding/Borrow {position.borrowSnapshot ?? position.fundingSnapshot ?? "Not exposed by the current live feed"}
         </span>
       </div>
 
@@ -200,6 +207,35 @@ function PendingTriggerCard({ trigger }: { trigger: JupiterPerpsPendingTrigger }
   );
 }
 
+function TradeCard({ trade }: { trade: JupiterPerpsTrade }) {
+  const pnlPositive = typeof trade.pnl === "number" && trade.pnl > 0;
+  const pnlNegative = typeof trade.pnl === "number" && trade.pnl < 0;
+
+  return (
+    <article className="perps-trigger-card">
+      <div className="perps-trigger-head">
+        <div className="perps-position-symbol-row">
+          <strong>{trade.marketSymbol}</strong>
+          <span className={`perps-side-badge ${trade.side === "long" ? "long" : "short"}`}>
+            {trade.side === "long" ? "Long" : "Short"}
+          </span>
+        </div>
+        <strong>{trade.price === null ? "-" : formatUsd(trade.price)}</strong>
+      </div>
+      <div className="perps-trigger-meta">
+        <span className="subtext">
+          {trade.action} · {trade.orderType} · Size {trade.sizeUsd === null ? "-" : formatUsd(trade.sizeUsd)}
+        </span>
+        <span className={pnlPositive ? "subtext pnl-positive" : pnlNegative ? "subtext pnl-negative" : "subtext"}>
+          Realized PnL {formatSignedUsd(trade.pnl)}
+          {trade.pnlPercentage !== null ? ` (${trade.pnlPercentage.toFixed(2)}%)` : ""}
+        </span>
+        <span className="subtext">Updated {formatTimestamp(trade.lastUpdated)}</span>
+      </div>
+    </article>
+  );
+}
+
 function LoadingState() {
   return (
     <div className="perps-list">
@@ -223,6 +259,9 @@ function JupiterPerpsPositionWidgetBody({
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
 }) {
+  const widgetRef = useRef<HTMLDivElement | null>(null);
+  const [isWidgetVisible, setIsWidgetVisible] = useState(true);
+  const [activeTab, setActiveTab] = useState<"open" | "recent">("open");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
@@ -237,9 +276,10 @@ function JupiterPerpsPositionWidgetBody({
   const isConnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isConnecting : false;
   const isDisconnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isDisconnecting : false;
   const walletAddress = nativeJupiterAdapterEnabled ? nativeJupiterWallet.walletAddress : null;
-  const { positions, pendingTriggers, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
+  const { positions, pendingTriggers, recentTrades, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     walletAddress,
     showMockData,
+    pollingEnabled: isWidgetVisible,
   });
   const {
     closePosition,
@@ -257,12 +297,41 @@ function JupiterPerpsPositionWidgetBody({
       walletAddress,
       positions,
       pendingTriggers,
+      recentTrades,
       isLoading,
       error,
       isMock,
       connected: isConnected,
     });
-  }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, walletAddress]);
+  }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
+
+  useEffect(() => {
+    const node = widgetRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        setIsWidgetVisible(entry?.isIntersecting ?? true);
+      },
+      { threshold: 0.15 }
+    );
+
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (positions.length === 0 && recentTrades.length > 0) {
+      setActiveTab("recent");
+      return;
+    }
+
+    if (positions.length > 0 && activeTab !== "open") {
+      setActiveTab("open");
+    }
+  }, [activeTab, positions.length, recentTrades.length]);
 
   useEffect(() => {
     if (isConnected) {
@@ -350,7 +419,7 @@ function JupiterPerpsPositionWidgetBody({
     pendingTriggers.length === 0;
 
   return (
-    <div className="perps-widget-shell">
+    <div ref={widgetRef} className="perps-widget-shell">
       <div className="perps-widget-header">
         <div>
           <div className="perps-widget-title-row">
@@ -417,7 +486,7 @@ function JupiterPerpsPositionWidgetBody({
               <div className="perps-message-card">
                 <strong>Connect with Jupiter Mobile</strong>
                 <span className="subtext">
-                  Use the native iOS WalletConnect/AppKit Jupiter path. Approve in Jupiter Mobile, then return to BremLogic so the read-only session can finalize here.
+                  Use the native iOS WalletConnect/AppKit Jupiter path. Approve in Jupiter Mobile, then return to BremLogic so the session can finalize here.
                 </span>
                 <div className="wallet-controls" style={{ marginTop: 12 }}>
                   <button
@@ -497,10 +566,19 @@ function JupiterPerpsPositionWidgetBody({
         </div>
       ) : null}
 
+      <div className="wallet-controls" style={{ marginTop: 2 }}>
+        <button type="button" className={activeTab === "open" ? "" : "secondary"} onClick={() => setActiveTab("open")}>
+          Open Trades
+        </button>
+        <button type="button" className={activeTab === "recent" ? "" : "secondary"} onClick={() => setActiveTab("recent")}>
+          Recent Trades
+        </button>
+      </div>
+
       <div className="perps-widget-body">
         {isLoading ? <LoadingState /> : null}
 
-        {!isLoading && shouldShowDisconnectedState ? (
+        {!isLoading && activeTab === "open" && shouldShowDisconnectedState ? (
           <div className="perps-empty-state">
             <strong>Connect a Solana wallet</strong>
             <span className="subtext">
@@ -509,14 +587,14 @@ function JupiterPerpsPositionWidgetBody({
           </div>
         ) : null}
 
-        {!isLoading && hasNoPerpsState ? (
+        {!isLoading && activeTab === "open" && hasNoPerpsState ? (
           <div className="perps-empty-state">
             <strong>No open Jupiter Perps positions found.</strong>
             <span className="subtext">If this wallet opens a Jupiter Perps position later, it will appear here on refresh.</span>
           </div>
         ) : null}
 
-        {!isLoading && positions.length > 0 ? (
+        {!isLoading && activeTab === "open" && positions.length > 0 ? (
           <div className="perps-list">
             {positions.map((position) => (
               <PositionCard
@@ -544,7 +622,7 @@ function JupiterPerpsPositionWidgetBody({
           </div>
         ) : null}
 
-        {!isLoading && positions.length === 0 && pendingTriggers.length > 0 ? (
+        {!isLoading && activeTab === "open" && positions.length === 0 && pendingTriggers.length > 0 ? (
           <div className="perps-list">
             <section className="perps-trigger-section">
               <div className="perps-trigger-section-head">
@@ -559,10 +637,25 @@ function JupiterPerpsPositionWidgetBody({
             </section>
           </div>
         ) : null}
+
+        {!isLoading && activeTab === "recent" && recentTrades.length > 0 ? (
+          <div className="perps-list">
+            {recentTrades.map((trade) => (
+              <TradeCard key={trade.id} trade={trade} />
+            ))}
+          </div>
+        ) : null}
+
+        {!isLoading && activeTab === "recent" && recentTrades.length === 0 ? (
+          <div className="perps-empty-state">
+            <strong>No recent Jupiter Perps trades found.</strong>
+            <span className="subtext">Closed positions and trigger fills will appear here after Jupiter records them on-chain.</span>
+          </div>
+        ) : null}
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, plus live Coinbase mark prices for supported markets. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable. Close requests use Jupiter&apos;s live Perps API transaction builder and still require an explicit wallet signature.
+        Data source: Jupiter&apos;s live Perps API for positions and trade history, with direct Solana RPC account reads kept as a fallback. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable. Close requests use Jupiter&apos;s live Perps API transaction builder and still require an explicit wallet signature.
       </div>
     </div>
   );

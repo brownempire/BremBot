@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getMockJupiterPerpsPendingTriggers,
   getMockJupiterPerpsPositions,
+  type JupiterPerpsTrade,
   type JupiterPerpsPendingTrigger,
   type JupiterPerpsPosition,
 } from "@/lib/jupiterPerps";
@@ -12,11 +13,13 @@ import {
 type UseJupiterPerpsPositionsOptions = {
   walletAddress: string | null;
   showMockData: boolean;
+  pollingEnabled?: boolean;
 };
 
 type JupiterPerpsPositionsState = {
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
+  recentTrades: JupiterPerpsTrade[];
   isLoading: boolean;
   error: string | null;
   isMock: boolean;
@@ -28,7 +31,7 @@ const LIVE_PERPS_REFRESH_MS = 1000;
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
     if (/Discriminant\s+\d+\s+out of range/i.test(error.message) || /out of range for \d+ variants/i.test(error.message)) {
-      return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+      return "Jupiter's legacy fallback decoder could not parse this wallet's Perps accounts right now.";
     }
 
     return error.message;
@@ -36,7 +39,7 @@ function getFriendlyErrorMessage(error: unknown) {
 
   if (typeof error === "string") {
     if (/Discriminant\s+\d+\s+out of range/i.test(error) || /out of range for \d+ variants/i.test(error)) {
-      return "Jupiter's beta Portfolio API could not decode this wallet's Perps positions right now. Live Perps data is temporarily unavailable for this wallet.";
+      return "Jupiter's legacy fallback decoder could not parse this wallet's Perps accounts right now.";
     }
 
     return error;
@@ -51,14 +54,14 @@ async function fetchPerpsSnapshotFromApi(walletAddress: string) {
   });
 
   const payload = (await response.json()) as
-    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[] }
+    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[]; recentTrades: JupiterPerpsTrade[] }
     | { error?: string };
 
   if (!response.ok) {
     throw new Error("error" in payload && payload.error ? payload.error : "Unable to load Jupiter Perps positions right now.");
   }
 
-  if (!("positions" in payload) || !("pendingTriggers" in payload)) {
+  if (!("positions" in payload) || !("pendingTriggers" in payload) || !("recentTrades" in payload)) {
     throw new Error("Invalid Jupiter Perps response.");
   }
 
@@ -68,9 +71,11 @@ async function fetchPerpsSnapshotFromApi(walletAddress: string) {
 export function useJupiterPerpsPositions({
   walletAddress,
   showMockData,
+  pollingEnabled = true,
 }: UseJupiterPerpsPositionsOptions): JupiterPerpsPositionsState {
   const [positions, setPositions] = useState<JupiterPerpsPosition[]>([]);
   const [pendingTriggers, setPendingTriggers] = useState<JupiterPerpsPendingTrigger[]>([]);
+  const [recentTrades, setRecentTrades] = useState<JupiterPerpsTrade[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isMock, setIsMock] = useState(false);
@@ -92,6 +97,7 @@ export function useJupiterPerpsPositions({
       setIsMock(showMockData);
       setPositions(showMockData ? getMockJupiterPerpsPositions() : []);
       setPendingTriggers(showMockData ? getMockJupiterPerpsPendingTriggers() : []);
+      setRecentTrades([]);
       return;
     }
 
@@ -109,6 +115,7 @@ export function useJupiterPerpsPositions({
         hasResolvedInitialLoadRef.current = true;
         setPositions(next.positions);
         setPendingTriggers(next.pendingTriggers);
+        setRecentTrades(next.recentTrades);
         setIsMock(false);
         setError(null);
       } catch (loadError) {
@@ -118,11 +125,13 @@ export function useJupiterPerpsPositions({
           if (showMockData) {
             setPositions(getMockJupiterPerpsPositions());
             setPendingTriggers(getMockJupiterPerpsPendingTriggers());
+            setRecentTrades([]);
             setIsMock(true);
             hasResolvedInitialLoadRef.current = true;
           } else {
             setPositions([]);
             setPendingTriggers([]);
+            setRecentTrades([]);
             setIsMock(false);
             hasResolvedInitialLoadRef.current = true;
           }
@@ -145,7 +154,7 @@ export function useJupiterPerpsPositions({
   }, [loadPositions]);
 
   useEffect(() => {
-    if (!walletAddress || showMockData) return;
+    if (!walletAddress || showMockData || !pollingEnabled) return;
 
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
@@ -155,11 +164,12 @@ export function useJupiterPerpsPositions({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [loadPositions, showMockData, walletAddress]);
+  }, [loadPositions, pollingEnabled, showMockData, walletAddress]);
 
   return {
     positions,
     pendingTriggers,
+    recentTrades,
     isLoading,
     error,
     isMock,
