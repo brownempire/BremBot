@@ -6,6 +6,7 @@ import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
 import { useJupiterPerpsClosePosition } from "@/hooks/useJupiterPerpsClosePosition";
+import { useJupiterPerpsOpenPosition, type PerpsOrderDraft, type PerpsOrderPreview } from "@/hooks/useJupiterPerpsOpenPosition";
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { formatUsd } from "@/lib/utils";
@@ -25,6 +26,24 @@ export type JupiterPerpsWidgetSnapshot = {
   error: string | null;
   isMock: boolean;
   connected: boolean;
+};
+
+export type JupiterPerpsAutoTradeRequest = {
+  asset: "BTC" | "ETH" | "SOL";
+  collateralToken: "BTC" | "ETH" | "SOL" | "USDC";
+  leverage: string;
+  maxSlippageBps?: string;
+  side: "long" | "short";
+  stopLossPrice?: number | null;
+  takeProfitPrice?: number | null;
+  uiAmount: number;
+};
+
+export type JupiterPerpsWidgetController = {
+  canWrite: boolean;
+  connected: boolean;
+  openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ txid: string }>;
+  walletAddress: string | null;
 };
 
 function formatNumber(value: number | null, maximumFractionDigits = 2) {
@@ -66,6 +85,279 @@ function getCloseReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "
   }
 
   return "USDC";
+}
+
+const PERPS_ASSET_OPTIONS = [
+  { value: "SOL", label: "SOL" },
+  { value: "ETH", label: "ETH" },
+  { value: "BTC", label: "BTC" },
+] as const;
+
+const PERPS_INPUT_TOKEN_OPTIONS = [
+  { value: "USDC", label: "USDC" },
+  { value: "SOL", label: "SOL" },
+  { value: "ETH", label: "ETH" },
+  { value: "BTC", label: "BTC" },
+] as const;
+
+type PerpsAsset = (typeof PERPS_ASSET_OPTIONS)[number]["value"];
+type PerpsInputToken = (typeof PERPS_INPUT_TOKEN_OPTIONS)[number]["value"];
+
+function tokenDecimals(token: PerpsInputToken) {
+  if (token === "USDC") return 6;
+  if (token === "SOL") return 9;
+  return 8;
+}
+
+function uiAmountToAtomicString(uiAmount: string, token: PerpsInputToken) {
+  const numeric = Number(uiAmount);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  const scaled = Math.floor(numeric * 10 ** tokenDecimals(token));
+  return scaled > 0 ? String(scaled) : null;
+}
+
+function uiNumberAmountToAtomicString(uiAmount: number, token: PerpsInputToken) {
+  if (!Number.isFinite(uiAmount) || uiAmount <= 0) return null;
+  const scaled = Math.floor(uiAmount * 10 ** tokenDecimals(token));
+  return scaled > 0 ? String(scaled) : null;
+}
+
+function formatPercentNumber(value: number | null, fractionDigits = 2, suffix = "%") {
+  if (value === null || !Number.isFinite(value)) return "-";
+  return `${value.toFixed(fractionDigits)}${suffix}`;
+}
+
+function NewPerpComposer({
+  buildPreview,
+  connected,
+  error,
+  isPreviewing,
+  isSubmitting,
+  onBack,
+  onPlaced,
+  openPosition,
+  walletAddress,
+  writeEnabled,
+}: {
+  buildPreview: (draft: PerpsOrderDraft) => Promise<PerpsOrderPreview>;
+  connected: boolean;
+  error: string | null;
+  isPreviewing: boolean;
+  isSubmitting: boolean;
+  onBack: () => void;
+  onPlaced: () => Promise<void>;
+  openPosition: (draft: PerpsOrderDraft) => Promise<{ preview: PerpsOrderPreview; txid: string }>;
+  walletAddress: string | null;
+  writeEnabled: boolean;
+}) {
+  const [side, setSide] = useState<"long" | "short">("long");
+  const [orderType, setOrderType] = useState<"market" | "limit">("market");
+  const [asset, setAsset] = useState<PerpsAsset>("SOL");
+  const [inputToken, setInputToken] = useState<PerpsInputToken>("USDC");
+  const [amount, setAmount] = useState("10");
+  const [leverage, setLeverage] = useState("10");
+  const [triggerPrice, setTriggerPrice] = useState("");
+  const [maxSlippageBps, setMaxSlippageBps] = useState("100");
+  const [enableTpSl, setEnableTpSl] = useState(false);
+  const [takeProfitPrice, setTakeProfitPrice] = useState("");
+  const [stopLossPrice, setStopLossPrice] = useState("");
+  const [preview, setPreview] = useState<PerpsOrderPreview | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const canSign = connected && writeEnabled && !!walletAddress;
+
+  function buildDraft(): PerpsOrderDraft | null {
+    if (!walletAddress) return null;
+
+    const inputTokenAmount = uiAmountToAtomicString(amount, inputToken);
+    if (!inputTokenAmount) return null;
+
+    return {
+      asset,
+      inputToken,
+      inputTokenAmount,
+      leverage,
+      maxSlippageBps,
+      orderType,
+      side,
+      walletAddress,
+      triggerPrice: orderType === "limit" ? triggerPrice : null,
+      takeProfitPrice: enableTpSl && takeProfitPrice.trim() ? takeProfitPrice.trim() : null,
+      stopLossPrice: enableTpSl && stopLossPrice.trim() ? stopLossPrice.trim() : null,
+    };
+  }
+
+  async function handlePreview() {
+    const draft = buildDraft();
+    if (!draft) {
+      setStatus("Enter a valid collateral amount before previewing the Perps order.");
+      return;
+    }
+
+    setStatus("Fetching Jupiter Perps preview...");
+    const nextPreview = await buildPreview(draft);
+    setPreview(nextPreview);
+    setStatus("Preview ready.");
+  }
+
+  async function handleSubmit() {
+    const draft = buildDraft();
+    if (!draft) {
+      setStatus("Enter a valid collateral amount before submitting the Perps order.");
+      return;
+    }
+
+    if (!canSign) {
+      setStatus("Connect Jupiter Mobile in the native app before opening a new Perps order.");
+      return;
+    }
+
+    setStatus(orderType === "limit" ? "Submitting Jupiter Perps trigger order..." : "Submitting Jupiter Perps market order...");
+    const result = await openPosition(draft);
+    setPreview(result.preview);
+    setStatus(`Perps order submitted. Tx ${result.txid.slice(0, 10)}...`);
+    await onPlaced();
+  }
+
+  return (
+    <div className="perps-composer-shell">
+      <div className="perps-composer-header">
+        <div>
+          <strong>New Perp</strong>
+          <div className="subtext">Contained Jupiter Perps order ticket powered by the public Perps trading API.</div>
+        </div>
+        <button type="button" className="secondary" onClick={onBack}>
+          Back
+        </button>
+      </div>
+
+      <div className="perps-toggle-row">
+        <button type="button" className={side === "long" ? "" : "secondary"} onClick={() => setSide("long")}>
+          Long / Buy
+        </button>
+        <button type="button" className={side === "short" ? "" : "secondary"} onClick={() => setSide("short")}>
+          Short / Sell
+        </button>
+      </div>
+
+      <div className="perps-toggle-row">
+        <button type="button" className={orderType === "market" ? "" : "secondary"} onClick={() => setOrderType("market")}>
+          Market
+        </button>
+        <button type="button" className={orderType === "limit" ? "" : "secondary"} onClick={() => setOrderType("limit")}>
+          Limit
+        </button>
+      </div>
+
+      <div className="perps-composer-grid">
+        <label className="perps-field">
+          <span>Market</span>
+          <select value={asset} onChange={(event) => setAsset(event.target.value as PerpsAsset)}>
+            {PERPS_ASSET_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="perps-field">
+          <span>Collateral</span>
+          <select value={inputToken} onChange={(event) => setInputToken(event.target.value as PerpsInputToken)}>
+            {PERPS_INPUT_TOKEN_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="perps-field">
+          <span>You&apos;re paying</span>
+          <input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="10" />
+        </label>
+
+        <label className="perps-field">
+          <span>Leverage</span>
+          <input inputMode="decimal" value={leverage} onChange={(event) => setLeverage(event.target.value)} placeholder="10" />
+        </label>
+
+        {orderType === "limit" ? (
+          <label className="perps-field perps-field-span-2">
+            <span>Trigger price</span>
+            <input inputMode="decimal" value={triggerPrice} onChange={(event) => setTriggerPrice(event.target.value)} placeholder="83.26" />
+          </label>
+        ) : null}
+
+        <label className="perps-field perps-field-span-2">
+          <span>Max slippage (bps)</span>
+          <input inputMode="numeric" value={maxSlippageBps} onChange={(event) => setMaxSlippageBps(event.target.value)} placeholder="100" />
+        </label>
+      </div>
+
+      {orderType === "market" ? (
+        <label className="perps-checkbox-row">
+          <input checked={enableTpSl} type="checkbox" onChange={(event) => setEnableTpSl(event.target.checked)} />
+          <span>Take Profit / Stop Loss</span>
+        </label>
+      ) : (
+        <div className="subtext">TP / SL requests can be added after the trigger order fills.</div>
+      )}
+
+      {orderType === "market" && enableTpSl ? (
+        <div className="perps-composer-grid">
+          <label className="perps-field">
+            <span>Take profit</span>
+            <input inputMode="decimal" value={takeProfitPrice} onChange={(event) => setTakeProfitPrice(event.target.value)} placeholder="84.00" />
+          </label>
+          <label className="perps-field">
+            <span>Stop loss</span>
+            <input inputMode="decimal" value={stopLossPrice} onChange={(event) => setStopLossPrice(event.target.value)} placeholder="81.00" />
+          </label>
+        </div>
+      ) : null}
+
+      <div className="wallet-controls">
+        <button type="button" className="secondary" onClick={() => void handlePreview()} disabled={isPreviewing || isSubmitting}>
+          {isPreviewing ? "Previewing..." : "Preview"}
+        </button>
+        <button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting}>
+          {isSubmitting ? "Submitting..." : orderType === "limit" ? (side === "long" ? "Place Long Trigger" : "Place Short Trigger") : (side === "long" ? "Long / Buy" : "Short / Sell")}
+        </button>
+      </div>
+
+      {status ? <div className="perps-inline-banner">{status}</div> : null}
+      {error ? <div className="perps-inline-banner" role="alert">{error}</div> : null}
+
+      {preview ? (
+        <div className="perps-preview-card">
+          <div className="perps-preview-head">
+            <strong>{asset} {orderType === "limit" ? "Trigger" : "Market"} Preview</strong>
+            <span className={`perps-side-badge ${side === "long" ? "long" : "short"}`}>{side === "long" ? "Long" : "Short"}</span>
+          </div>
+          <div className="perps-metric-grid">
+            <PositionMetric label="Mark" value={formatUsd(preview.market.price)} />
+            <PositionMetric label="Entry" value={preview.quote.averagePriceUsd === null ? "-" : formatUsd(preview.quote.averagePriceUsd)} />
+            <PositionMetric label="Position Size" value={preview.quote.positionSizeUsd === null ? "-" : formatUsd(preview.quote.positionSizeUsd)} />
+            <PositionMetric label="Collateral" value={preview.quote.positionCollateralUsd === null ? "-" : formatUsd(preview.quote.positionCollateralUsd)} />
+            <PositionMetric label="Liquidation" value={preview.quote.liquidationPriceUsd === null ? "-" : formatUsd(preview.quote.liquidationPriceUsd)} />
+            <PositionMetric label="Open Fee" value={preview.quote.openFeeUsd === null ? "-" : formatUsd(preview.quote.openFeeUsd)} />
+            <PositionMetric label="Borrow" value={preview.quote.outstandingBorrowFeeUsd === null ? "-" : formatUsd(preview.quote.outstandingBorrowFeeUsd)} />
+            <PositionMetric label="Impact Fee" value={preview.quote.priceImpactFeeUsd === null ? "-" : formatUsd(preview.quote.priceImpactFeeUsd)} />
+            <PositionMetric label="Impact %" value={formatPercentNumber(preview.pool.maxPriceImpactFeePercent, 2)} />
+            <PositionMetric label="Borrow Rate" value={formatPercentNumber(side === "long" ? preview.pool.longBorrowRatePercent : preview.pool.shortBorrowRatePercent, 2)} />
+          </div>
+        </div>
+      ) : null}
+
+      {!canSign ? (
+        <div className="perps-empty-state">
+          <strong>Connect Jupiter Mobile to submit</strong>
+          <span className="subtext">Previews can be built from the public API once the wallet is connected, and signing stays inside Jupiter Mobile.</span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function PositionMetric({
@@ -256,12 +548,14 @@ function LoadingState() {
 
 function JupiterPerpsPositionWidgetBody({
   onSnapshotChange,
+  onControllerChange,
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
+  onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
 }) {
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const [isWidgetVisible, setIsWidgetVisible] = useState(true);
-  const [activeTab, setActiveTab] = useState<"open" | "recent">("open");
+  const [activeTab, setActiveTab] = useState<"open" | "recent" | "new">("open");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
@@ -289,6 +583,16 @@ function JupiterPerpsPositionWidgetBody({
   } = useJupiterPerpsClosePosition({
     signTransaction: nativeJupiterAdapterEnabled ? nativeJupiterWallet.signTransaction : undefined,
   });
+  const {
+    buildPreview,
+    clearError: clearOpenError,
+    error: openError,
+    isPreviewing,
+    isSubmitting,
+    openPosition,
+  } = useJupiterPerpsOpenPosition({
+    signTransaction: nativeJupiterAdapterEnabled ? nativeJupiterWallet.signTransaction : undefined,
+  });
   const pendingClosePositionPubkeySet = useMemo(() => new Set(pendingClosePositionPubkeys), [pendingClosePositionPubkeys]);
   const writeEnabled = nativeJupiterAdapterEnabled && isConnected && !isMock;
 
@@ -304,6 +608,56 @@ function JupiterPerpsPositionWidgetBody({
       connected: isConnected,
     });
   }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
+
+  const autoTradeController = useMemo<JupiterPerpsWidgetController | null>(() => {
+    if (!nativeJupiterAdapterEnabled) return null;
+
+    return {
+      canWrite: writeEnabled,
+      connected: isConnected,
+      walletAddress,
+      openMarketPosition: async ({
+        asset,
+        collateralToken,
+        leverage,
+        maxSlippageBps = "100",
+        side,
+        stopLossPrice,
+        takeProfitPrice,
+        uiAmount,
+      }) => {
+        if (!walletAddress) {
+          throw new Error("Connect Jupiter Mobile before opening a Perps order.");
+        }
+
+        const inputTokenAmount = uiNumberAmountToAtomicString(uiAmount, collateralToken);
+        if (!inputTokenAmount) {
+          throw new Error("Enter a valid Perps collateral amount greater than zero.");
+        }
+
+        const result = await openPosition({
+          asset,
+          inputToken: collateralToken,
+          inputTokenAmount,
+          leverage,
+          maxSlippageBps,
+          orderType: "market",
+          side,
+          walletAddress,
+          stopLossPrice: typeof stopLossPrice === "number" && Number.isFinite(stopLossPrice) ? stopLossPrice.toFixed(6) : null,
+          takeProfitPrice: typeof takeProfitPrice === "number" && Number.isFinite(takeProfitPrice) ? takeProfitPrice.toFixed(6) : null,
+          triggerPrice: null,
+        });
+
+        await refetch();
+        return { txid: result.txid };
+      },
+    };
+  }, [isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
+
+  useEffect(() => {
+    onControllerChange?.(autoTradeController);
+  }, [autoTradeController, onControllerChange]);
 
   useEffect(() => {
     const node = widgetRef.current;
@@ -328,7 +682,7 @@ function JupiterPerpsPositionWidgetBody({
       return;
     }
 
-    if (positions.length > 0 && activeTab !== "open") {
+    if (positions.length > 0 && activeTab !== "open" && activeTab !== "new") {
       setActiveTab("open");
     }
   }, [activeTab, positions.length, recentTrades.length]);
@@ -406,6 +760,12 @@ function JupiterPerpsPositionWidgetBody({
     await refetch();
   }
 
+  async function handleNewPerpPlaced() {
+    clearOpenError();
+    setActiveTab("open");
+    await refetch();
+  }
+
   const shouldShowDisconnectedState =
     !isConnected &&
     !showMockData &&
@@ -424,8 +784,10 @@ function JupiterPerpsPositionWidgetBody({
         <div>
           <div className="perps-widget-title-row">
             <strong>Jupiter Perps</strong>
-            <span className="perps-readonly-badge">{writeEnabled ? "Close enabled" : "Read-only"}</span>
             {isMock ? <span className="perps-demo-badge">Demo</span> : null}
+            <button type="button" className="secondary perps-new-button" onClick={() => setActiveTab("new")}>
+              New Perp
+            </button>
           </div>
         </div>
         <div className="wallet-controls perps-widget-actions">
@@ -534,6 +896,12 @@ function JupiterPerpsPositionWidgetBody({
         </div>
       ) : null}
 
+      {openError && !isSubmitting ? (
+        <div className="perps-inline-banner" role="alert">
+          {openError}
+        </div>
+      ) : null}
+
       {error && !isMock ? (
         <div className="perps-message-card" role="alert">
           <strong>Unable to load live Jupiter Perps positions</strong>
@@ -566,6 +934,23 @@ function JupiterPerpsPositionWidgetBody({
 
       <div className="perps-widget-body">
         {isLoading ? <LoadingState /> : null}
+
+        {!isLoading && activeTab === "new" ? (
+          <div className="perps-list">
+            <NewPerpComposer
+              buildPreview={buildPreview}
+              connected={isConnected}
+              error={openError}
+              isPreviewing={isPreviewing}
+              isSubmitting={isSubmitting}
+              onBack={() => setActiveTab(positions.length > 0 ? "open" : "recent")}
+              onPlaced={handleNewPerpPlaced}
+              openPosition={openPosition}
+              walletAddress={walletAddress}
+              writeEnabled={writeEnabled}
+            />
+          </div>
+        ) : null}
 
         {!isLoading && activeTab === "open" && shouldShowDisconnectedState ? (
           <div className="perps-empty-state">
@@ -644,8 +1029,10 @@ function JupiterPerpsPositionWidgetBody({
 
 export function JupiterPerpsPositionWidget({
   onSnapshotChange,
+  onControllerChange,
 }: {
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
+  onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
 }) {
-  return <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} />;
+  return <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} onControllerChange={onControllerChange} />;
 }

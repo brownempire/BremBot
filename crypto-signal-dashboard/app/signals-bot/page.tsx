@@ -11,7 +11,10 @@ import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider"
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import type { JupiterPerpsWidgetSnapshot } from "@/app/components/JupiterPerpsPositionWidget";
+import type {
+  JupiterPerpsWidgetController,
+  JupiterPerpsWidgetSnapshot,
+} from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -91,8 +94,10 @@ type AutoTradeSlot = {
 type AutoTradeSettings = {
   walletPercent: number;
   takeProfitPercent: number;
+  perpsLeverage: number;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
+  perpsActiveSlotId: string | null;
   mode: AutoTradeMode;
   disableTpLock: boolean;
 };
@@ -100,12 +105,14 @@ type AutoTradeSettings = {
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
   takeProfitPercent: 0,
+  perpsLeverage: 10,
   slots: [
     { id: "auto-slot-1", token: "SOL" },
     { id: "auto-slot-2", token: "ETH" },
     { id: "auto-slot-3", token: "BTC" },
   ],
   activeSlotId: null,
+  perpsActiveSlotId: null,
   mode: "all",
   disableTpLock: false,
 };
@@ -271,6 +278,10 @@ function getAutoTradeTokenOption(symbol: AutoTradeToken) {
   return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
 }
 
+function isSupportedPerpsAutoTradeToken(symbol: AutoTradeToken): symbol is "SOL" | "ETH" | "BTC" {
+  return symbol === "SOL" || symbol === "ETH" || symbol === "BTC";
+}
+
 const PNL_DEFAULT_MINT = SOL_MINT;
 const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
   [SOL_MINT]: "SOL",
@@ -315,6 +326,7 @@ function DashboardPage() {
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
+  const [perpsAutoTradeStatus, setPerpsAutoTradeStatus] = useState("Perps auto-trade is off");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
@@ -327,6 +339,7 @@ function DashboardPage() {
     isMock: false,
     connected: false,
   });
+  const [jupiterPerpsController, setJupiterPerpsController] = useState<JupiterPerpsWidgetController | null>(null);
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
@@ -350,14 +363,21 @@ function DashboardPage() {
     startHeight: number;
   } | null>(null);
   const autoTradeBusyRef = useRef(false);
+  const perpsAutoTradeBusyRef = useRef(false);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
   const lastTpAttemptAtRef = useRef(0);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
   );
+  const activePerpsAutoTradeSlot = useMemo(
+    () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.perpsActiveSlotId) ?? null,
+    [autoTradeSettings.perpsActiveSlotId, autoTradeSettings.slots]
+  );
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
+  const activePerpsAutoTradeToken = activePerpsAutoTradeSlot ? getAutoTradeTokenOption(activePerpsAutoTradeSlot.token) : null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
+  const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
   const remoteSyncWalletAddress =
     remoteAuthSource === "phantom"
       ? phantomAuthAddress
@@ -746,6 +766,77 @@ function DashboardPage() {
               }
             }
 
+            if (perpsAutoTradeEnabled && activePerpsAutoTradeToken) {
+              if (perpsAutoTradeBusyRef.current) {
+                return;
+              }
+
+              if (!isSupportedPerpsAutoTradeToken(activePerpsAutoTradeToken.symbol)) {
+                setPerpsAutoTradeStatus(`Perps auto-trade does not support ${activePerpsAutoTradeToken.symbol} yet`);
+                return;
+              }
+
+              const isBullSignal = signal.direction === "bullish";
+              if (autoTradeSettings.mode === "buy-only" && !isBullSignal) {
+                setPerpsAutoTradeStatus(`Buy-only mode skipped bearish Perps signal for ${signal.symbol}`);
+                return;
+              }
+
+              if (!jupiterPerpsController?.connected || !jupiterPerpsController.canWrite) {
+                setPerpsAutoTradeStatus(
+                  `Perps signal detected for ${signal.symbol}, but Jupiter Mobile is not connected for trading`
+                );
+                return;
+              }
+
+              const activePerpsPosition = readOnlyPerpsSnapshot.positions.find((position) => position.source !== "mock");
+              if (activePerpsPosition) {
+                setPerpsAutoTradeStatus(
+                  `Perps auto-trade is waiting: ${activePerpsPosition.marketSymbol} ${activePerpsPosition.side === "long" ? "long" : "short"} already open`
+                );
+                return;
+              }
+
+              const usdcBalance = walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0;
+              const collateralAmount = Number((usdcBalance * (autoTradeSettings.walletPercent / 100)).toFixed(6));
+              if (!Number.isFinite(collateralAmount) || collateralAmount <= 0) {
+                setPerpsAutoTradeStatus(`Perps signal detected for ${signal.symbol} but no USDC collateral is available`);
+                return;
+              }
+
+              const marketEntryPrice = points[points.length - 1]?.v ?? 0;
+              const takeProfitPrice =
+                autoTradeSettings.takeProfitPercent > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
+                  ? isBullSignal
+                    ? marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100))
+                    : marketEntryPrice * (1 - (autoTradeSettings.takeProfitPercent / 100))
+                  : null;
+
+              perpsAutoTradeBusyRef.current = true;
+              setPerpsAutoTradeStatus(
+                `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
+              );
+
+              jupiterPerpsController.openMarketPosition({
+                asset: activePerpsAutoTradeToken.symbol,
+                collateralToken: "USDC",
+                leverage: String(autoTradeSettings.perpsLeverage),
+                maxSlippageBps: "100",
+                side: isBullSignal ? "long" : "short",
+                takeProfitPrice,
+                uiAmount: collateralAmount,
+              }).then(({ txid }) => {
+                setPerpsAutoTradeStatus(
+                  `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
+                );
+              }).catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : "Perps order failed";
+                setPerpsAutoTradeStatus(`Perps auto-trade failed for ${signal.symbol}: ${message}`);
+              }).finally(() => {
+                perpsAutoTradeBusyRef.current = false;
+              });
+            }
+
             if (!nativeShell && pushEnabled) {
               fetch("/api/push/notify", {
                 method: "POST",
@@ -766,11 +857,14 @@ function DashboardPage() {
     });
   }, [
     activeAutoTradeToken,
+    activePerpsAutoTradeToken,
     autoTradeSettings.disableTpLock,
     autoTradeSettings.mode,
+    autoTradeSettings.perpsLeverage,
     autoTradeEnabled,
     autoTradeSettings.walletPercent,
     autoTradeSettings.takeProfitPercent,
+    jupiterPerpsController,
     lastSignalAt,
     newsItems,
     nativeShell,
@@ -782,6 +876,8 @@ function DashboardPage() {
     subscription,
     trackedMarkets,
     persistTradeRecord,
+    perpsAutoTradeEnabled,
+    readOnlyPerpsSnapshot.positions,
     wallet,
     wallet.executeSwap,
     wallet.publicKey,
@@ -907,6 +1003,10 @@ function DashboardPage() {
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
         ? nextTakeProfit
         : DEFAULT_AUTO_TRADE_SETTINGS.takeProfitPercent;
+      const nextPerpsLeverage = Number(parsed.perpsLeverage);
+      const perpsLeverage = Number.isFinite(nextPerpsLeverage) && nextPerpsLeverage >= 1
+        ? Math.min(250, Math.max(1, Number(nextPerpsLeverage.toFixed(2))))
+        : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const disableTpLock = Boolean(parsed.disableTpLock);
       const parsedSlots = Array.isArray(parsed.slots)
@@ -935,12 +1035,17 @@ function DashboardPage() {
         : legacyInputToken
           ? normalizedSlots[0]?.id ?? null
           : null;
+      const perpsActiveSlotId = typeof parsed.perpsActiveSlotId === "string"
+        ? normalizedSlots.some((slot) => slot.id === parsed.perpsActiveSlotId) ? parsed.perpsActiveSlotId : null
+        : null;
 
       setAutoTradeSettings({
         walletPercent: percent,
         takeProfitPercent,
+        perpsLeverage,
         slots: normalizedSlots,
         activeSlotId,
+        perpsActiveSlotId,
         mode,
         disableTpLock,
       });
@@ -993,6 +1098,43 @@ function DashboardPage() {
     autoTradeSettings.mode,
     autoTradeSettings.walletPercent,
     pendingTakeProfit,
+  ]);
+
+  useEffect(() => {
+    if (!activePerpsAutoTradeToken) {
+      setPerpsAutoTradeStatus("Perps auto-trade is off");
+      return;
+    }
+
+    if (!isSupportedPerpsAutoTradeToken(activePerpsAutoTradeToken.symbol)) {
+      setPerpsAutoTradeStatus(`Perps auto-trade only supports SOL, ETH, or BTC. ${activePerpsAutoTradeToken.symbol} is not supported.`);
+      return;
+    }
+
+    if (!jupiterPerpsController?.connected || !jupiterPerpsController.canWrite) {
+      setPerpsAutoTradeStatus(
+        `Perps auto-trade is armed for ${activePerpsAutoTradeToken.symbol}, waiting for Jupiter Mobile`
+      );
+      return;
+    }
+
+    if (readOnlyPerpsSnapshot.positions.length > 0) {
+      setPerpsAutoTradeStatus(
+        `Perps auto-trade is on (${activePerpsAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x) · active position open`
+      );
+      return;
+    }
+
+    setPerpsAutoTradeStatus(
+      `Perps auto-trade is on (${activePerpsAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`
+    );
+  }, [
+    activePerpsAutoTradeToken,
+    autoTradeSettings.mode,
+    autoTradeSettings.perpsLeverage,
+    autoTradeSettings.walletPercent,
+    jupiterPerpsController,
+    readOnlyPerpsSnapshot.positions.length,
   ]);
 
   const requestRemoteAuthChallenge = useCallback(async (address: string) => {
@@ -1947,6 +2089,11 @@ function DashboardPage() {
         `Auto-trade is on (${token}, ${next.walletPercent}% allocation, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
       );
     }
+    if (next.perpsActiveSlotId === slotId) {
+      setPerpsAutoTradeStatus(
+        `Perps auto-trade is on (${token}, ${next.walletPercent}% collateral, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+      );
+    }
   }
 
   function toggleAutoTradeSlot(slotId: string, enabled: boolean) {
@@ -1970,6 +2117,27 @@ function DashboardPage() {
     );
   }
 
+  function togglePerpsAutoTradeSlot(slotId: string, enabled: boolean) {
+    if (enabled && autoTradeSettings.perpsActiveSlotId && autoTradeSettings.perpsActiveSlotId !== slotId) {
+      setShowAutoTradeSelectorWarning(true);
+      return;
+    }
+
+    const nextPerpsActiveSlotId = enabled ? slotId : null;
+    const slot = autoTradeSettings.slots.find((item) => item.id === slotId);
+    const token = slot ? getAutoTradeTokenOption(slot.token) : null;
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      perpsActiveSlotId: nextPerpsActiveSlotId,
+    };
+    persistAutoTradeSettings(next);
+    setPerpsAutoTradeStatus(
+      enabled && token
+        ? `Perps auto-trade is on (${token.symbol}, ${next.walletPercent}% collateral, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+        : "Perps auto-trade is off"
+    );
+  }
+
   function updateAutoTradeMode(mode: AutoTradeMode) {
     const next: AutoTradeSettings = {
       ...autoTradeSettings,
@@ -1990,6 +2158,15 @@ function DashboardPage() {
     persistAutoTradeSettings(next);
   }
 
+  function updatePerpsLeverage(value: number) {
+    const perpsLeverage = Number.isFinite(value) ? Math.min(250, Math.max(1, Number(value.toFixed(2)))) : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
+    const next: AutoTradeSettings = {
+      ...autoTradeSettings,
+      perpsLeverage,
+    };
+    persistAutoTradeSettings(next);
+  }
+
   function saveSignalParams() {
     try {
       window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
@@ -2006,6 +2183,7 @@ function DashboardPage() {
     setPendingTakeProfit(null);
     pendingTakeProfitRef.current = null;
     setAutoTradeStatus("Auto-trade is off");
+    setPerpsAutoTradeStatus("Perps auto-trade is off");
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
       window.localStorage.removeItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
@@ -2186,7 +2364,7 @@ function DashboardPage() {
     }
 
     if (id === "perps") {
-      return <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />;
+      return <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} onControllerChange={setJupiterPerpsController} />;
     }
 
     if (id === "pnl") {
@@ -2290,6 +2468,20 @@ function DashboardPage() {
                 }}
               />
             </label>
+            <label>
+              Perps leverage
+              <input
+                type="number"
+                value={autoTradeSettings.perpsLeverage}
+                min={1}
+                max={250}
+                step={0.5}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  updatePerpsLeverage(value);
+                }}
+              />
+            </label>
           </div>
           <div className="auto-trade-selector-wrap">
             <div className="auto-trade-selector-header">
@@ -2341,13 +2533,18 @@ function DashboardPage() {
                     <input type="checkbox" checked={autoTradeSettings.activeSlotId === slot.id} onChange={(event) => toggleAutoTradeSlot(slot.id, event.target.checked)} />
                     <span>{autoTradeSettings.activeSlotId === slot.id ? "On" : "Off"}</span>
                   </label>
+                  <label className="auto-trade-slot-toggle">
+                    <span className="subtext">Perps auto-trade</span>
+                    <input type="checkbox" checked={autoTradeSettings.perpsActiveSlotId === slot.id} onChange={(event) => togglePerpsAutoTradeSlot(slot.id, event.target.checked)} />
+                    <span>{autoTradeSettings.perpsActiveSlotId === slot.id ? "On" : "Off"}</span>
+                  </label>
                 </div>
               ))}
             </div>
             {showAutoTradeSelectorWarning ? (
               <div className="auto-trade-selector-modal" role="alertdialog" aria-modal="true">
                 <div className="auto-trade-selector-modal-card">
-                  <strong>Only One Token Allowed For Auto-Trade At A Time</strong>
+                  <strong>Only One Token Allowed For Each Auto-Trade Mode At A Time</strong>
                   <button type="button" style={{ marginTop: 10 }} onClick={() => setShowAutoTradeSelectorWarning(false)}>OK</button>
                 </div>
               </div>
@@ -2464,6 +2661,7 @@ function DashboardPage() {
           <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
           <div className="badge">Wallet: in-app</div>
           <div className="badge">{autoTradeStatus}</div>
+          <div className="badge">{perpsAutoTradeStatus}</div>
         </div>
       </div>
       </header>
