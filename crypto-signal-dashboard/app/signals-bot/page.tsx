@@ -898,7 +898,10 @@ function DashboardPage() {
                 return;
               }
 
-              const activePerpsPosition = readOnlyPerpsSnapshot.positions.find((position) => position.source !== "mock");
+              const findActivePerpsPosition = () =>
+                readOnlyPerpsSnapshotRef.current.positions.find((position) => position.source !== "mock");
+
+              const activePerpsPosition = findActivePerpsPosition();
               if (activePerpsPosition) {
                 setPerpsAutoTradeStatus(
                   `Perps auto-trade is waiting: ${activePerpsPosition.marketSymbol} ${activePerpsPosition.side === "long" ? "long" : "short"} already open`
@@ -927,20 +930,6 @@ function DashboardPage() {
                     : marketEntryPrice * (1 + (autoTradeSettings.stopLossPercent / 100))
                   : null;
 
-              perpsAutoTradeBusyRef.current = true;
-              clearPerpsAutoTradeTimeout();
-              const perpsAttemptId = Date.now();
-              perpsAutoTradeAttemptIdRef.current = perpsAttemptId;
-              perpsAutoTradeTimeoutRef.current = setTimeout(() => {
-                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) return;
-                perpsAutoTradeAttemptIdRef.current = 0;
-                perpsAutoTradeBusyRef.current = false;
-                setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
-              }, PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS);
-              setPerpsAutoTradeStatus(
-                `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
-              );
-
               const openAutoPerpsPosition = (options?: {
                 stopLossPrice?: number | null;
                 takeProfitPrice?: number | null;
@@ -955,98 +944,152 @@ function DashboardPage() {
                 uiAmount: collateralAmount,
               });
 
-              openAutoPerpsPosition().then(({ txid }) => {
-                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
-                  return;
-                }
-                clearPerpsAutoTradeTimeout();
-                perpsAutoTradeAttemptIdRef.current = 0;
-                setPerpsAutoTradeStatus(
-                  `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
-                );
-              }).catch(async (error: unknown) => {
-                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
-                  return;
-                }
-                clearPerpsAutoTradeTimeout();
-                perpsAutoTradeAttemptIdRef.current = 0;
-                await jupiterPerpsController.refresh().catch(() => undefined);
-                const activePositionAfterRefresh = readOnlyPerpsSnapshotRef.current.positions.find((position) => position.source !== "mock");
-                if (activePositionAfterRefresh) {
-                  setPerpsAutoTradeStatus(
-                    `Perps auto-trade likely filled for ${signal.symbol}; refreshed live positions after an uncertain Jupiter response`
-                  );
-                  return;
-                }
-                const message = error instanceof Error ? error.message : "Perps order failed";
-                const canRetryWithoutTpsl =
-                  (takeProfitPrice !== null || stopLossPrice !== null) &&
-                  isPerpsBuildFailureMessage(message) &&
-                  Boolean(jupiterPerpsController?.connected && jupiterPerpsController.canWrite);
+              void (async () => {
+                perpsAutoTradeBusyRef.current = true;
 
-                if (canRetryWithoutTpsl) {
+                try {
+                  setPerpsAutoTradeStatus(`Refreshing live Perps positions for ${signal.symbol} before auto-trade...`);
                   try {
+                    await jupiterPerpsController.refresh();
+                  } catch {
                     setPerpsAutoTradeStatus(
-                      `Perps auto-trade retrying for ${signal.symbol} without attached TP/SL after a Jupiter build failure`
+                      `Perps auto-trade paused for ${signal.symbol}: unable to refresh live positions before opening`
                     );
-                    const retryResult = await openAutoPerpsPosition({
-                      stopLossPrice: null,
-                      takeProfitPrice: null,
-                    });
-                    if (perpsAutoTradeAttemptIdRef.current !== 0 && perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                    return;
+                  }
+
+                  const activePositionAfterPreflightRefresh = findActivePerpsPosition();
+                  if (activePositionAfterPreflightRefresh) {
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade is waiting: ${activePositionAfterPreflightRefresh.marketSymbol} ${activePositionAfterPreflightRefresh.side === "long" ? "long" : "short"} already open`
+                    );
+                    return;
+                  }
+
+                  setPerpsAutoTradeStatus(`Double-checking live Perps positions for ${signal.symbol} before submit...`);
+                  try {
+                    await jupiterPerpsController.refresh();
+                  } catch {
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade paused for ${signal.symbol}: unable to confirm wallet positions right before submit`
+                    );
+                    return;
+                  }
+
+                  const activePositionAfterSubmitRefresh = findActivePerpsPosition();
+                  if (activePositionAfterSubmitRefresh) {
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade is waiting: ${activePositionAfterSubmitRefresh.marketSymbol} ${activePositionAfterSubmitRefresh.side === "long" ? "long" : "short"} already open`
+                    );
+                    return;
+                  }
+
+                  clearPerpsAutoTradeTimeout();
+                  const perpsAttemptId = Date.now();
+                  perpsAutoTradeAttemptIdRef.current = perpsAttemptId;
+                  perpsAutoTradeTimeoutRef.current = setTimeout(() => {
+                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) return;
+                    perpsAutoTradeAttemptIdRef.current = 0;
+                    perpsAutoTradeBusyRef.current = false;
+                    setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
+                  }, PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS);
+                  setPerpsAutoTradeStatus(
+                    `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
+                  );
+
+                  try {
+                    const { txid } = await openAutoPerpsPosition();
+                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
                       return;
                     }
                     clearPerpsAutoTradeTimeout();
                     perpsAutoTradeAttemptIdRef.current = 0;
-                    const openedPositionPubkey = retryResult.positionPubkey;
-
-                    const shouldAttachTpslAfterOpen =
-                      openedPositionPubkey &&
-                      (takeProfitPrice !== null || stopLossPrice !== null);
-
-                    if (shouldAttachTpslAfterOpen) {
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
+                    );
+                  } catch (error: unknown) {
+                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                      return;
+                    }
+                    clearPerpsAutoTradeTimeout();
+                    perpsAutoTradeAttemptIdRef.current = 0;
+                    await jupiterPerpsController.refresh().catch(() => undefined);
+                    const activePositionAfterRefresh = findActivePerpsPosition();
+                    if (activePositionAfterRefresh) {
                       setPerpsAutoTradeStatus(
-                        `Perps auto-trade opened for ${signal.symbol}. Attaching TP/SL in a follow-up request...`
+                        `Perps auto-trade likely filled for ${signal.symbol}; refreshed live positions after an uncertain Jupiter response`
                       );
+                      return;
+                    }
+                    const message = error instanceof Error ? error.message : "Perps order failed";
+                    const canRetryWithoutTpsl =
+                      (takeProfitPrice !== null || stopLossPrice !== null) &&
+                      isPerpsBuildFailureMessage(message) &&
+                      Boolean(jupiterPerpsController?.connected && jupiterPerpsController.canWrite);
 
+                    if (canRetryWithoutTpsl) {
                       try {
-                        const attachResult = await jupiterPerpsController.attachTpsl({
-                          positionPubkey: openedPositionPubkey,
-                          stopLossPrice,
-                          takeProfitPrice,
-                        });
                         setPerpsAutoTradeStatus(
-                          `Perps auto-trade opened for ${signal.symbol} and TP/SL attached · order ${retryResult.txid.slice(0, 10)}... · tpsl ${attachResult.txid.slice(0, 10)}...`
+                          `Perps auto-trade retrying for ${signal.symbol} without attached TP/SL after a Jupiter build failure`
+                        );
+                        const retryResult = await openAutoPerpsPosition({
+                          stopLossPrice: null,
+                          takeProfitPrice: null,
+                        });
+                        if (perpsAutoTradeAttemptIdRef.current !== 0 && perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                          return;
+                        }
+                        clearPerpsAutoTradeTimeout();
+                        perpsAutoTradeAttemptIdRef.current = 0;
+                        const openedPositionPubkey = retryResult.positionPubkey;
+
+                        const shouldAttachTpslAfterOpen =
+                          openedPositionPubkey &&
+                          (takeProfitPrice !== null || stopLossPrice !== null);
+
+                        if (shouldAttachTpslAfterOpen) {
+                          setPerpsAutoTradeStatus(
+                            `Perps auto-trade opened for ${signal.symbol}. Attaching TP/SL in a follow-up request...`
+                          );
+
+                          try {
+                            const attachResult = await jupiterPerpsController.attachTpsl({
+                              positionPubkey: openedPositionPubkey,
+                              stopLossPrice,
+                              takeProfitPrice,
+                            });
+                            setPerpsAutoTradeStatus(
+                              `Perps auto-trade opened for ${signal.symbol} and TP/SL attached · order ${retryResult.txid.slice(0, 10)}... · tpsl ${attachResult.txid.slice(0, 10)}...`
+                            );
+                            return;
+                          } catch (attachError) {
+                            const attachMessage =
+                              attachError instanceof Error ? attachError.message : "TP/SL attach failed";
+                            setPerpsAutoTradeStatus(
+                              `Perps auto-trade opened for ${signal.symbol}, but TP/SL attach failed: ${attachMessage}`
+                            );
+                            return;
+                          }
+                        }
+
+                        setPerpsAutoTradeStatus(
+                          `Perps auto-trade opened for ${signal.symbol} without attached TP/SL after a Jupiter build failure · ${retryResult.txid.slice(0, 10)}...`
                         );
                         return;
-                      } catch (attachError) {
-                        const attachMessage =
-                          attachError instanceof Error ? attachError.message : "TP/SL attach failed";
-                        setPerpsAutoTradeStatus(
-                          `Perps auto-trade opened for ${signal.symbol}, but TP/SL attach failed: ${attachMessage}`
-                        );
+                      } catch (retryError) {
+                        const retryMessage =
+                          retryError instanceof Error ? retryError.message : "Perps order retry failed";
+                        setPerpsAutoTradeFailureCooldown(signal.symbol, retryMessage);
                         return;
                       }
                     }
 
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade opened for ${signal.symbol} without attached TP/SL after a Jupiter build failure · ${retryResult.txid.slice(0, 10)}...`
-                    );
-                    return;
-                  } catch (retryError) {
-                    const retryMessage =
-                      retryError instanceof Error ? retryError.message : "Perps order retry failed";
-                    setPerpsAutoTradeFailureCooldown(signal.symbol, retryMessage);
-                    return;
+                    setPerpsAutoTradeFailureCooldown(signal.symbol, message);
                   }
-                }
-
-                setPerpsAutoTradeFailureCooldown(signal.symbol, message);
-              }).finally(() => {
-                if (perpsAutoTradeAttemptIdRef.current === perpsAttemptId || perpsAutoTradeAttemptIdRef.current === 0) {
+                } finally {
                   perpsAutoTradeBusyRef.current = false;
                 }
-              });
+              })();
             }
 
             if (!nativeShell && pushEnabled) {
