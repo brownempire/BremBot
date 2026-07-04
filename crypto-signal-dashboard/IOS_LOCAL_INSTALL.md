@@ -45,7 +45,7 @@ npm run cap:sync:ios
 npm run cap:open:ios
 ```
 
-4. In Xcode, select the `App` project.
+4. In Xcode, select the `BremLogic` project.
 5. In `Signing & Capabilities`:
    - choose your Apple ID team
    - keep the bundle id as `com.bremlogic.signalsbot`, or change it if that id is already in use
@@ -72,3 +72,5 @@ npm run cap:open:ios
 ```
 
 If you change native project files or Capacitor config, run `npm run cap:sync:ios` again before reopening Xcode.
+
+Note: Capacitor still uses `ios/App/App` internally as its native target directory. That path is a tooling detail and should be left alone so future iOS syncs keep working, even though the project and app name are `BremLogic`.
