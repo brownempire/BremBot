@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import type { PricePoint } from "@/lib/price/simulated";
 
 declare global {
   interface Window {
@@ -27,12 +29,82 @@ type WidgetApi = {
 
 type TradingViewChartProps = {
   symbol?: string;
+  pricePoints?: PricePoint[];
+  guides?: Array<{
+    id: string;
+    label: string;
+    price: number;
+    tone: "entry" | "tp" | "sl";
+  }>;
 };
 
 const SCRIPT_ID = "tradingview-widget-script";
 const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v1";
 const DEFAULT_INTERVAL = "5";
+const OVERLAY_REFRESH_MS = 1_000;
 let scriptLoadingPromise: Promise<void> | null = null;
+
+type ComputedGuide = {
+  id: string;
+  label: string;
+  price: number;
+  tone: "entry" | "tp" | "sl";
+  top: number;
+};
+
+function getIntervalWindowMs(interval: string) {
+  const normalized = interval.trim().toUpperCase();
+  if (normalized === "1") return 60 * 60 * 1000;
+  if (normalized === "3") return 3 * 60 * 60 * 1000;
+  if (normalized === "5") return 6 * 60 * 60 * 1000;
+  if (normalized === "15") return 18 * 60 * 60 * 1000;
+  if (normalized === "30") return 24 * 60 * 60 * 1000;
+  if (normalized === "60" || normalized === "1H") return 3 * 24 * 60 * 60 * 1000;
+  if (normalized === "120" || normalized === "2H") return 5 * 24 * 60 * 60 * 1000;
+  if (normalized === "240" || normalized === "4H") return 10 * 24 * 60 * 60 * 1000;
+  if (normalized === "1D" || normalized === "D") return 45 * 24 * 60 * 60 * 1000;
+  return 6 * 60 * 60 * 1000;
+}
+
+function computeGuidePositions(
+  pricePoints: PricePoint[],
+  guides: TradingViewChartProps["guides"],
+  interval: string
+): ComputedGuide[] {
+  const validGuides = (guides ?? []).filter(
+    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
+      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
+  );
+  if (validGuides.length === 0) return [];
+
+  const validPoints = pricePoints.filter(
+    (point): point is PricePoint => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0
+  );
+  if (validPoints.length === 0) return [];
+
+  const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
+  const intervalWindowMs = getIntervalWindowMs(interval);
+  const visiblePoints = validPoints.filter((point) => point.t >= latestTimestamp - intervalWindowMs);
+  const effectivePoints = visiblePoints.length >= 8 ? visiblePoints : validPoints.slice(-240);
+  const values = effectivePoints.map((point) => point.v);
+  if (values.length === 0) return [];
+
+  const minPrice = Math.min(...values);
+  const maxPrice = Math.max(...values);
+  const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
+  const paddedMin = minPrice - span * 0.15;
+  const paddedMax = maxPrice + span * 0.15;
+  const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+  return validGuides.map((guide) => {
+    const relative = (guide.price - paddedMin) / paddedSpan;
+    const top = 100 - Math.min(100, Math.max(0, relative * 100));
+    return {
+      ...guide,
+      top,
+    };
+  });
+}
 
 function loadTradingViewScript() {
   if (window.TradingView?.widget) return Promise.resolve();
@@ -60,9 +132,26 @@ function loadTradingViewScript() {
   return scriptLoadingPromise;
 }
 
-export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChartProps) {
+export function TradingViewChart({
+  symbol = "COINBASE:BTCUSD",
+  pricePoints = [],
+  guides = [],
+}: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_main_chart", []);
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
+  const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
+  const [computedGuides, setComputedGuides] = useState<ComputedGuide[]>([]);
+  const [isVisible, setIsVisible] = useState(true);
+
+  const refreshOverlay = useCallback(() => {
+    setComputedGuides(computeGuidePositions(pricePoints, guides, currentInterval));
+  }, [currentInterval, guides, pricePoints]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setCurrentInterval(window.localStorage.getItem(INTERVAL_STORAGE_KEY) ?? DEFAULT_INTERVAL);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,6 +172,7 @@ export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChar
           typeof window !== "undefined"
             ? window.localStorage.getItem(INTERVAL_STORAGE_KEY) ?? DEFAULT_INTERVAL
             : DEFAULT_INTERVAL;
+        setCurrentInterval(storedInterval);
 
         const widget = new window.TradingView.widget({
           autosize: true,
@@ -112,6 +202,7 @@ export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChar
           const currentResolution = chart?.resolution?.();
           if (typeof currentResolution === "string" && currentResolution.length > 0) {
             window.localStorage.setItem(INTERVAL_STORAGE_KEY, currentResolution);
+            setCurrentInterval(currentResolution);
           }
 
           chart?.onIntervalChanged?.().subscribe?.(null, (nextInterval) => {
@@ -124,6 +215,7 @@ export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChar
 
             if (interval) {
               window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
+              setCurrentInterval(interval);
             }
           });
         });
@@ -144,9 +236,72 @@ export function TradingViewChart({ symbol = "COINBASE:BTCUSD" }: TradingViewChar
     };
   }, [containerId, symbol]);
 
+  useEffect(() => {
+    const node = frameRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        setIsVisible(entry?.isIntersecting ?? true);
+      },
+      { threshold: 0.15 }
+    );
+
+    observer.observe(node);
+
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    refreshOverlay();
+
+    const handleViewportChange = () => {
+      refreshOverlay();
+      window.setTimeout(refreshOverlay, 180);
+    };
+
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("orientationchange", handleViewportChange);
+
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("orientationchange", handleViewportChange);
+    };
+  }, [refreshOverlay]);
+
+  useEffect(() => {
+    if (!isVisible) return;
+
+    refreshOverlay();
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      refreshOverlay();
+    }, OVERLAY_REFRESH_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isVisible, refreshOverlay]);
+
   return (
-    <div className="tradingview-frame">
+    <div ref={frameRef} className="tradingview-frame">
       <div id={containerId} className="tradingview-container" />
+      {computedGuides.length > 0 ? (
+        <div className="tradingview-overlay-layer" aria-hidden="true">
+          {computedGuides.map((guide) => (
+            <div
+              key={guide.id}
+              className={`tradingview-overlay-line tradingview-overlay-line-${guide.tone}`}
+              style={{ top: `${guide.top}%` }}
+            >
+              <span className="tradingview-overlay-label">
+                {guide.label} {guide.price.toFixed(2)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

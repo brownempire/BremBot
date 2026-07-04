@@ -283,6 +283,15 @@ function getAutoTradeTokenOption(symbol: AutoTradeToken) {
   return AUTO_TRADE_TOKEN_OPTIONS.find((option) => option.symbol === symbol) ?? AUTO_TRADE_TOKEN_OPTIONS[0];
 }
 
+function normalizeMarketGuideKey(value: string | null | undefined) {
+  const raw = value?.trim().toUpperCase() ?? "";
+  if (!raw) return null;
+  if (raw.includes("SOL")) return "SOL";
+  if (raw.includes("ETH")) return "ETH";
+  if (raw.includes("BTC")) return "BTC";
+  return null;
+}
+
 function isSupportedPerpsAutoTradeToken(symbol: AutoTradeToken): symbol is "SOL" | "ETH" | "BTC" {
   return symbol === "SOL" || symbol === "ETH" || symbol === "BTC";
 }
@@ -1754,8 +1763,50 @@ function DashboardPage() {
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
+  const selectedChartPricePoints = priceHistory[selectedChartMarket?.id ?? ""] ?? [];
   const selectedSignalMarket =
     trackedMarkets.find((market) => market.id === receiveSignalsForSlotId) ?? trackedMarkets[0];
+  const selectedChartGuideKey = normalizeMarketGuideKey(selectedChartMarket?.pair ?? selectedChartMarket?.tvSymbol);
+  const selectedChartPerpsPosition =
+    readOnlyPerpsSnapshot.positions.find(
+      (position) =>
+        position.source !== "mock" &&
+        normalizeMarketGuideKey(position.marketSymbol) === selectedChartGuideKey
+    ) ?? null;
+  const selectedChartGuides = useMemo(() => {
+    if (!selectedChartPerpsPosition) return [];
+
+    const guides: Array<{ id: string; label: string; price: number; tone: "entry" | "tp" | "sl" }> = [];
+
+    if (typeof selectedChartPerpsPosition.entryPrice === "number" && Number.isFinite(selectedChartPerpsPosition.entryPrice)) {
+      guides.push({
+        id: `${selectedChartPerpsPosition.id}-entry`,
+        label: "Entry",
+        price: selectedChartPerpsPosition.entryPrice,
+        tone: "entry",
+      });
+    }
+
+    if (typeof selectedChartPerpsPosition.takeProfit === "number" && Number.isFinite(selectedChartPerpsPosition.takeProfit)) {
+      guides.push({
+        id: `${selectedChartPerpsPosition.id}-tp`,
+        label: "TP",
+        price: selectedChartPerpsPosition.takeProfit,
+        tone: "tp",
+      });
+    }
+
+    if (typeof selectedChartPerpsPosition.stopLoss === "number" && Number.isFinite(selectedChartPerpsPosition.stopLoss)) {
+      guides.push({
+        id: `${selectedChartPerpsPosition.id}-sl`,
+        label: "SL",
+        price: selectedChartPerpsPosition.stopLoss,
+        tone: "sl",
+      });
+    }
+
+    return guides;
+  }, [selectedChartPerpsPosition]);
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];
@@ -2463,7 +2514,11 @@ function DashboardPage() {
       return (
         <>
           <div className="tradingview-wrap">
-            <TradingViewChart symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"} />
+            <TradingViewChart
+              symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
+              pricePoints={selectedChartPricePoints}
+              guides={selectedChartGuides}
+            />
           </div>
         </>
       );
