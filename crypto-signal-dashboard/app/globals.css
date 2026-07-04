@@ -41,6 +41,11 @@ body {
   min-height: 100vh;
 }
 
+body.chart-scroll-lock {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body.native-ios-shell {
   --native-content-top-buffer: max(var(--safe-top), 84px);
 }

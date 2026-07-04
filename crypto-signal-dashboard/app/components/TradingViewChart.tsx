@@ -132,6 +132,19 @@ function loadTradingViewScript() {
   return scriptLoadingPromise;
 }
 
+function shouldLockPageScrollForChartHover() {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+
+  const hasDesktopHover =
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(hover: hover) and (pointer: fine)").matches
+      : false;
+  const looksLikeMac = /Mac/i.test(navigator.userAgent);
+  const hasNoTouchPoints = Number(navigator.maxTouchPoints ?? 0) === 0;
+
+  return hasDesktopHover && (looksLikeMac || hasNoTouchPoints);
+}
+
 export function TradingViewChart({
   symbol = "COINBASE:BTCUSD",
   pricePoints = [],
@@ -265,6 +278,32 @@ export function TradingViewChart({
 
     return () => {
       node.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
+
+  useEffect(() => {
+    const node = frameRef.current;
+    if (!node || !shouldLockPageScrollForChartHover()) return;
+
+    const lockPageScroll = () => {
+      document.body.classList.add("chart-scroll-lock");
+    };
+
+    const unlockPageScroll = () => {
+      document.body.classList.remove("chart-scroll-lock");
+    };
+
+    node.addEventListener("pointerenter", lockPageScroll);
+    node.addEventListener("pointerleave", unlockPageScroll);
+    window.addEventListener("blur", unlockPageScroll);
+    document.addEventListener("visibilitychange", unlockPageScroll);
+
+    return () => {
+      node.removeEventListener("pointerenter", lockPageScroll);
+      node.removeEventListener("pointerleave", unlockPageScroll);
+      window.removeEventListener("blur", unlockPageScroll);
+      document.removeEventListener("visibilitychange", unlockPageScroll);
+      unlockPageScroll();
     };
   }, []);
 
