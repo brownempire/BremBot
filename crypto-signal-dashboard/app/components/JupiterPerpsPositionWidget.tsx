@@ -1,10 +1,11 @@
 "use client";
 
 import { Browser } from "@capacitor/browser";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
+import { useJupiterPerpsClosePosition } from "@/hooks/useJupiterPerpsClosePosition";
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { formatUsd } from "@/lib/utils";
@@ -52,6 +53,14 @@ function getWalletReadinessLabel(readyState: WalletReadyState) {
   }
 }
 
+function getCloseReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "SOL" | "USDC" {
+  if (position.collateralSymbol === "BTC" || position.collateralSymbol === "ETH" || position.collateralSymbol === "SOL") {
+    return position.collateralSymbol;
+  }
+
+  return "USDC";
+}
+
 function PositionMetric({
   label,
   value,
@@ -71,15 +80,32 @@ function PositionMetric({
   );
 }
 
-function PositionCard({ position }: { position: JupiterPerpsPosition }) {
+function PositionCard({
+  closingPositionPubkey,
+  onClosePosition,
+  pendingClosePositionPubkeys,
+  position,
+  writeEnabled,
+}: {
+  closingPositionPubkey: string | null;
+  onClosePosition: (position: JupiterPerpsPosition) => Promise<void>;
+  pendingClosePositionPubkeys: Set<string>;
+  position: JupiterPerpsPosition;
+  writeEnabled: boolean;
+}) {
   const pnlValue = position.unrealizedPnl;
   const isPositive = typeof pnlValue === "number" && pnlValue > 0;
   const isNegative = typeof pnlValue === "number" && pnlValue < 0;
+  const closePubkey = position.accountRef;
+  const showCloseButton = position.source !== "mock";
+  const canClose = writeEnabled && typeof closePubkey === "string" && closePubkey.length > 0;
+  const isSubmitting = closePubkey !== null && closingPositionPubkey === closePubkey;
+  const isPendingKeeper = closePubkey !== null && pendingClosePositionPubkeys.has(closePubkey);
 
   return (
     <article className="perps-position-card">
       <div className="perps-position-head">
-        <div>
+        <div className="perps-position-meta">
           <div className="perps-position-symbol-row">
             <strong>{position.marketSymbol}</strong>
             <span className={`perps-side-badge ${position.side === "long" ? "long" : "short"}`}>
@@ -88,6 +114,18 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
           </div>
           <div className="subtext">{position.marketName ?? "Jupiter Perps position"}</div>
         </div>
+        {showCloseButton ? (
+          <div className="perps-position-close">
+            <button
+              type="button"
+              className="secondary perps-close-button"
+              disabled={!canClose || isSubmitting || isPendingKeeper}
+              onClick={() => void onClosePosition(position)}
+            >
+              {isSubmitting ? "Requesting close..." : isPendingKeeper ? "Close requested..." : "Close Position"}
+            </button>
+          </div>
+        ) : null}
         <div className="perps-position-price">
           <span className="subtext">Mark{position.markPriceIsLive ? " (live)" : ""}</span>
           <strong>{position.markPrice === null ? "-" : formatUsd(position.markPrice)}</strong>
@@ -121,6 +159,17 @@ function PositionCard({ position }: { position: JupiterPerpsPosition }) {
           Funding/Borrow {position.borrowSnapshot ?? position.fundingSnapshot ?? "Not exposed by the current Portfolio API"}
         </span>
       </div>
+
+      {showCloseButton ? (
+        <div className="wallet-controls" style={{ marginTop: 12 }}>
+          <span className="subtext">
+            {canClose
+              ? "Full close via Jupiter Perps API. The keeper network may take a moment to finalize it on-chain."
+              : "Connect Jupiter Mobile in the native app to enable closing this position."}
+          </span>
+        </div>
+      ) : null}
+
     </article>
   );
 }
@@ -176,6 +225,7 @@ function JupiterPerpsPositionWidgetBody({
 }) {
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
+  const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
   const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
   const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
   const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -191,6 +241,16 @@ function JupiterPerpsPositionWidgetBody({
     walletAddress,
     showMockData,
   });
+  const {
+    closePosition,
+    closingPositionPubkey,
+    error: closeError,
+    clearError: clearCloseError,
+  } = useJupiterPerpsClosePosition({
+    signTransaction: nativeJupiterAdapterEnabled ? nativeJupiterWallet.signTransaction : undefined,
+  });
+  const pendingClosePositionPubkeySet = useMemo(() => new Set(pendingClosePositionPubkeys), [pendingClosePositionPubkeys]);
+  const writeEnabled = nativeJupiterAdapterEnabled && isConnected && !isMock;
 
   useEffect(() => {
     onSnapshotChange?.({
@@ -209,6 +269,20 @@ function JupiterPerpsPositionWidgetBody({
       setWalletMenuOpen(false);
     }
   }, [isConnected]);
+
+  useEffect(() => {
+    setPendingClosePositionPubkeys((current) => {
+      if (current.length === 0) return current;
+
+      const activePositionPubkeys = new Set(
+        positions
+          .map((position) => position.accountRef)
+          .filter((positionPubkey): positionPubkey is string => typeof positionPubkey === "string" && positionPubkey.length > 0)
+      );
+      const next = current.filter((positionPubkey) => activePositionPubkeys.has(positionPubkey));
+      return next.length === current.length ? current : next;
+    });
+  }, [positions]);
 
   function openJupiterExperience() {
     if (typeof window === "undefined") return;
@@ -243,6 +317,26 @@ function JupiterPerpsPositionWidgetBody({
     }
   }
 
+  async function handleClosePosition(position: JupiterPerpsPosition) {
+    const positionPubkey = position.accountRef?.trim();
+    if (!positionPubkey) {
+      return;
+    }
+
+    clearCloseError();
+
+    await closePosition({
+      positionPubkey,
+      receiveToken: getCloseReceiveToken(position),
+    });
+
+    setPendingClosePositionPubkeys((current) => (
+      current.includes(positionPubkey) ? current : [...current, positionPubkey]
+    ));
+
+    await refetch();
+  }
+
   const shouldShowDisconnectedState =
     !isConnected &&
     !showMockData &&
@@ -261,11 +355,11 @@ function JupiterPerpsPositionWidgetBody({
         <div>
           <div className="perps-widget-title-row">
             <strong>Jupiter Perps</strong>
-            <span className="perps-readonly-badge">Read-only</span>
+            <span className="perps-readonly-badge">{writeEnabled ? "Close enabled" : "Read-only"}</span>
             {isMock ? <span className="perps-demo-badge">Demo</span> : null}
           </div>
           <div className="subtext">
-            Connect a Solana wallet to view Jupiter Perps positions without signing trades or moving funds.
+            Connect a Solana wallet to view Jupiter Perps positions. Native Jupiter Mobile sessions can also submit a full close request.
           </div>
         </div>
         <div className="wallet-controls perps-widget-actions">
@@ -376,6 +470,12 @@ function JupiterPerpsPositionWidgetBody({
         </div>
       ) : null}
 
+      {closeError && !closingPositionPubkey ? (
+        <div className="perps-inline-banner" role="alert">
+          {closeError}
+        </div>
+      ) : null}
+
       {error && !isMock ? (
         <div className="perps-message-card" role="alert">
           <strong>Unable to load live Jupiter Perps positions</strong>
@@ -404,7 +504,7 @@ function JupiterPerpsPositionWidgetBody({
           <div className="perps-empty-state">
             <strong>Connect a Solana wallet</strong>
             <span className="subtext">
-              This Level 1 widget only reads positions. It does not create orders, request trade signatures, or move funds.
+              This panel primarily reads positions. Native Jupiter Mobile sessions can also submit a full close request with an explicit wallet signature.
             </span>
           </div>
         ) : null}
@@ -419,7 +519,14 @@ function JupiterPerpsPositionWidgetBody({
         {!isLoading && positions.length > 0 ? (
           <div className="perps-list">
             {positions.map((position) => (
-              <PositionCard key={position.id} position={position} />
+              <PositionCard
+                key={position.id}
+                closingPositionPubkey={closingPositionPubkey}
+                onClosePosition={handleClosePosition}
+                pendingClosePositionPubkeys={pendingClosePositionPubkeySet}
+                position={position}
+                writeEnabled={writeEnabled}
+              />
             ))}
             {pendingTriggers.length > 0 ? (
               <section className="perps-trigger-section">
@@ -455,7 +562,7 @@ function JupiterPerpsPositionWidgetBody({
       </div>
 
       <div className="perps-widget-footnote">
-        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, plus live Coinbase mark prices for supported markets. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable.
+        Data source: direct Jupiter Perps Position and PositionRequest account reads over Solana RPC, plus live Coinbase mark prices for supported markets. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable. Close requests use Jupiter&apos;s live Perps API transaction builder and still require an explicit wallet signature.
       </div>
     </div>
   );

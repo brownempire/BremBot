@@ -4,6 +4,7 @@ import { App } from "@capacitor/app";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
 import { WalletConnectWalletAdapter } from "@solana/wallet-adapter-walletconnect";
+import { VersionedTransaction } from "@solana/web3.js";
 
 type NativeJupiterWalletState = {
   walletAddress: string | null;
@@ -14,6 +15,7 @@ type NativeJupiterWalletState = {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   clearFeedback: () => void;
+  signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
 };
 
 const PENDING_CONNECT_STORAGE_KEY = "bremlogic.native.jupiter.pending-connect.v1";
@@ -216,6 +218,19 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     }
   }, [clearPendingTimeout]);
 
+  const signTransaction = useCallback(async (transaction: VersionedTransaction) => {
+    const adapter = adapterRef.current;
+    if (!adapter || !adapter.connected || !adapter.publicKey) {
+      throw new Error("Jupiter Mobile is not connected.");
+    }
+
+    if (typeof adapter.signTransaction !== "function") {
+      throw new Error("The connected Jupiter Mobile session does not expose transaction signing.");
+    }
+
+    return adapter.signTransaction(transaction);
+  }, []);
+
   useEffect(() => {
     if (!enabled) {
       clearPendingTimeout();
@@ -282,5 +297,6 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     connect,
     disconnect,
     clearFeedback,
+    signTransaction,
   };
 }

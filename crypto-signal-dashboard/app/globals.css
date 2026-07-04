@@ -937,10 +937,23 @@ button:disabled {
 }
 
 .perps-position-head {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "meta close price";
   align-items: flex-start;
   gap: 10px;
+}
+
+.perps-position-meta {
+  grid-area: meta;
+  min-width: 0;
+}
+
+.perps-position-close {
+  grid-area: close;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
 }
 
 .perps-position-symbol-row {
@@ -988,9 +1001,17 @@ button:disabled {
 }
 
 .perps-position-price {
+  grid-area: price;
   display: grid;
   gap: 2px;
   text-align: right;
+  justify-items: end;
+}
+
+.perps-close-button {
+  min-height: 44px;
+  min-width: 154px;
+  white-space: nowrap;
 }
 
 .perps-metric-grid {
@@ -1349,6 +1370,14 @@ button:disabled {
     align-items: stretch;
   }
 
+  .perps-position-head {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "meta"
+      "close"
+      "price";
+  }
+
   .perps-widget-actions {
     justify-content: flex-start;
   }
@@ -1366,6 +1395,11 @@ button:disabled {
 
   .perps-position-price {
     text-align: left;
+    justify-items: start;
+  }
+
+  .perps-position-close {
+    justify-content: flex-start;
   }
 
   .manual-swap-quote-row,
