@@ -117,6 +117,8 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   disableTpLock: false,
 };
 
+const PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS = 60_000;
+
 type WalletTokenHolding = {
   mint: string;
   amount: number;
@@ -366,6 +368,9 @@ function DashboardPage() {
   const perpsAutoTradeBusyRef = useRef(false);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
   const lastTpAttemptAtRef = useRef(0);
+  const perpsAutoTradeAttemptIdRef = useRef(0);
+  const perpsAutoTradeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -389,6 +394,36 @@ function DashboardPage() {
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
+
+  const clearPerpsAutoTradeTimeout = useCallback(() => {
+    if (perpsAutoTradeTimeoutRef.current) {
+      clearTimeout(perpsAutoTradeTimeoutRef.current);
+      perpsAutoTradeTimeoutRef.current = null;
+    }
+  }, []);
+
+  const getPerpsAutoTradeReadyStatus = useCallback((
+    tokenSymbol: string,
+    options?: {
+      activePositionLabel?: string | null;
+      unsupported?: boolean;
+      waitingForWallet?: boolean;
+    }
+  ) {
+    if (options?.unsupported) {
+      return `Perps auto-trade only supports SOL, ETH, or BTC. ${tokenSymbol} is not supported.`;
+    }
+
+    if (options?.waitingForWallet) {
+      return `Perps auto-trade is armed for ${tokenSymbol}, waiting for Jupiter Mobile`;
+    }
+
+    if (options?.activePositionLabel) {
+      return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x) · ${options.activePositionLabel}`;
+    }
+
+    return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`;
+  }, [autoTradeSettings.mode, autoTradeSettings.perpsLeverage, autoTradeSettings.walletPercent]);
 
   const sendSignalNotification = useCallback(async (title: string, body: string, url?: string) => {
     if (!pushEnabled) return;
@@ -813,6 +848,15 @@ function DashboardPage() {
                   : null;
 
               perpsAutoTradeBusyRef.current = true;
+              clearPerpsAutoTradeTimeout();
+              const perpsAttemptId = Date.now();
+              perpsAutoTradeAttemptIdRef.current = perpsAttemptId;
+              perpsAutoTradeTimeoutRef.current = setTimeout(() => {
+                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) return;
+                perpsAutoTradeAttemptIdRef.current = 0;
+                perpsAutoTradeBusyRef.current = false;
+                setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
+              }, PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS);
               setPerpsAutoTradeStatus(
                 `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
               );
@@ -826,14 +870,26 @@ function DashboardPage() {
                 takeProfitPrice,
                 uiAmount: collateralAmount,
               }).then(({ txid }) => {
+                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                  return;
+                }
+                clearPerpsAutoTradeTimeout();
+                perpsAutoTradeAttemptIdRef.current = 0;
                 setPerpsAutoTradeStatus(
                   `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
                 );
               }).catch((error: unknown) => {
+                if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                  return;
+                }
+                clearPerpsAutoTradeTimeout();
+                perpsAutoTradeAttemptIdRef.current = 0;
                 const message = error instanceof Error ? error.message : "Perps order failed";
                 setPerpsAutoTradeStatus(`Perps auto-trade failed for ${signal.symbol}: ${message}`);
               }).finally(() => {
-                perpsAutoTradeBusyRef.current = false;
+                if (perpsAutoTradeAttemptIdRef.current === perpsAttemptId || perpsAutoTradeAttemptIdRef.current === 0) {
+                  perpsAutoTradeBusyRef.current = false;
+                }
               });
             }
 
@@ -1102,40 +1158,99 @@ function DashboardPage() {
 
   useEffect(() => {
     if (!activePerpsAutoTradeToken) {
+      clearPerpsAutoTradeTimeout();
+      perpsAutoTradeAttemptIdRef.current += 1;
+      perpsAutoTradeBusyRef.current = false;
       setPerpsAutoTradeStatus("Perps auto-trade is off");
       return;
     }
 
     if (!isSupportedPerpsAutoTradeToken(activePerpsAutoTradeToken.symbol)) {
-      setPerpsAutoTradeStatus(`Perps auto-trade only supports SOL, ETH, or BTC. ${activePerpsAutoTradeToken.symbol} is not supported.`);
+      setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol, { unsupported: true }));
       return;
     }
 
     if (!jupiterPerpsController?.connected || !jupiterPerpsController.canWrite) {
-      setPerpsAutoTradeStatus(
-        `Perps auto-trade is armed for ${activePerpsAutoTradeToken.symbol}, waiting for Jupiter Mobile`
-      );
+      setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol, { waitingForWallet: true }));
       return;
     }
 
     if (readOnlyPerpsSnapshot.positions.length > 0) {
-      setPerpsAutoTradeStatus(
-        `Perps auto-trade is on (${activePerpsAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x) · active position open`
-      );
+      setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol, { activePositionLabel: "active position open" }));
       return;
     }
 
-    setPerpsAutoTradeStatus(
-      `Perps auto-trade is on (${activePerpsAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`
-    );
+    if (!perpsAutoTradeBusyRef.current) {
+      setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
+    }
   }, [
     activePerpsAutoTradeToken,
     autoTradeSettings.mode,
     autoTradeSettings.perpsLeverage,
     autoTradeSettings.walletPercent,
+    clearPerpsAutoTradeTimeout,
+    getPerpsAutoTradeReadyStatus,
     jupiterPerpsController,
     readOnlyPerpsSnapshot.positions.length,
   ]);
+
+  useEffect(() => {
+    return () => {
+      clearPerpsAutoTradeTimeout();
+      perpsAutoTradeAttemptIdRef.current = 0;
+      perpsAutoTradeBusyRef.current = false;
+    };
+  }, [clearPerpsAutoTradeTimeout]);
+
+  useEffect(() => {
+    if (nativeShell || typeof window === "undefined") return;
+
+    const shouldKeepAwake = autoTradeEnabled || perpsAutoTradeEnabled;
+    const wakeLockApi = (navigator as Navigator & {
+      wakeLock?: {
+        request?: (type: "screen") => Promise<{ release?: () => Promise<void> }>;
+      };
+    }).wakeLock;
+
+    if (!shouldKeepAwake || typeof wakeLockApi?.request !== "function") {
+      if (wakeLockRef.current) {
+        void wakeLockRef.current.release?.().catch(() => undefined);
+        wakeLockRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    const requestWakeLock = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        wakeLockRef.current = await wakeLockApi.request("screen");
+      } catch {
+        wakeLockRef.current = null;
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && !wakeLockRef.current) {
+        void requestWakeLock();
+      }
+    };
+
+    void requestWakeLock();
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibility);
+      if (!cancelled && wakeLockRef.current) {
+        void wakeLockRef.current.release?.().catch(() => undefined);
+      } else if (wakeLockRef.current) {
+        void wakeLockRef.current.release?.().catch(() => undefined);
+      }
+      wakeLockRef.current = null;
+    };
+  }, [autoTradeEnabled, nativeShell, perpsAutoTradeEnabled]);
 
   const requestRemoteAuthChallenge = useCallback(async (address: string) => {
     const response = await fetch("/api/trades/auth", {

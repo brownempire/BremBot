@@ -221,20 +221,47 @@ export function SolanaWalletProvider({ children }: PropsWithChildren) {
   const rpcEndpoint = envRpc && /^https?:\/\//.test(envRpc) ? envRpc : clusterApiUrl("mainnet-beta");
   const connection = useMemo(() => new Connection(rpcEndpoint, "confirmed"), [rpcEndpoint]);
 
+  const restoreStoredWallet = useCallback(async () => {
+    if (typeof window === "undefined") return false;
+
+    const payload = loadStoredWalletPayload();
+    setHasStoredWallet(Boolean(payload));
+    if (!payload) return false;
+
+    try {
+      const decoded = await decryptSecret(payload, DEFAULT_WALLET_PASSWORD);
+      setSecretKey(decoded);
+      setConnected(true);
+      return true;
+    } catch {
+      setConnected(false);
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const payload = loadStoredWalletPayload();
-    setHasStoredWallet(!!payload);
-    if (!payload) return;
-    decryptSecret(payload, DEFAULT_WALLET_PASSWORD)
-      .then((decoded) => {
-        setSecretKey(decoded);
-        setConnected(true);
-      })
-      .catch(() => {
-        setConnected(false);
-      });
-  }, []);
+    void restoreStoredWallet();
+  }, [restoreStoredWallet]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleResume = () => {
+      if (document.visibilityState === "hidden") return;
+      void restoreStoredWallet();
+    };
+
+    window.addEventListener("pageshow", handleResume);
+    window.addEventListener("focus", handleResume);
+    document.addEventListener("visibilitychange", handleResume);
+
+    return () => {
+      window.removeEventListener("pageshow", handleResume);
+      window.removeEventListener("focus", handleResume);
+      document.removeEventListener("visibilitychange", handleResume);
+    };
+  }, [restoreStoredWallet]);
 
   const keypair = useMemo(() => {
     if (!secretKey) return null;
