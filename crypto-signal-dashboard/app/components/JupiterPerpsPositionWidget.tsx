@@ -6,7 +6,11 @@ import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
 import { useJupiterPerpsClosePosition } from "@/hooks/useJupiterPerpsClosePosition";
-import { useJupiterPerpsOpenPosition, type PerpsOrderDraft, type PerpsOrderPreview } from "@/hooks/useJupiterPerpsOpenPosition";
+import {
+  useJupiterPerpsOpenPosition,
+  type PerpsOrderDraft,
+  type PerpsOrderPreview,
+} from "@/hooks/useJupiterPerpsOpenPosition";
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { formatUsd } from "@/lib/utils";
@@ -40,9 +44,14 @@ export type JupiterPerpsAutoTradeRequest = {
 };
 
 export type JupiterPerpsWidgetController = {
+  attachTpsl: (request: {
+    positionPubkey: string;
+    stopLossPrice?: number | null;
+    takeProfitPrice?: number | null;
+  }) => Promise<{ requestPubkeys: string[]; txid: string }>;
   canWrite: boolean;
   connected: boolean;
-  openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ txid: string }>;
+  openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ positionPubkey: string | null; txid: string }>;
   refresh: () => Promise<void>;
   walletAddress: string | null;
 };
@@ -585,6 +594,7 @@ function JupiterPerpsPositionWidgetBody({
     signTransaction: nativeJupiterAdapterEnabled ? nativeJupiterWallet.signTransaction : undefined,
   });
   const {
+    attachTpsl,
     buildPreview,
     clearError: clearOpenError,
     error: openError,
@@ -614,6 +624,37 @@ function JupiterPerpsPositionWidgetBody({
     if (!nativeJupiterAdapterEnabled) return null;
 
     return {
+      attachTpsl: async ({
+        positionPubkey,
+        stopLossPrice,
+        takeProfitPrice,
+      }) => {
+        if (!walletAddress) {
+          throw new Error("Connect Jupiter Mobile before attaching Perps TP/SL.");
+        }
+
+        const tpsl = [
+          ...(typeof takeProfitPrice === "number" && Number.isFinite(takeProfitPrice)
+            ? [{ receiveToken: "USDC" as const, requestType: "tp" as const, triggerPrice: takeProfitPrice.toFixed(6) }]
+            : []),
+          ...(typeof stopLossPrice === "number" && Number.isFinite(stopLossPrice)
+            ? [{ receiveToken: "USDC" as const, requestType: "sl" as const, triggerPrice: stopLossPrice.toFixed(6) }]
+            : []),
+        ];
+
+        if (tpsl.length === 0) {
+          throw new Error("No TP/SL values were provided to attach.");
+        }
+
+        const result = await attachTpsl({
+          positionPubkey,
+          tpsl,
+          walletAddress,
+        });
+
+        await refetch();
+        return result;
+      },
       canWrite: writeEnabled,
       connected: isConnected,
       refresh: refetch,
@@ -652,10 +693,13 @@ function JupiterPerpsPositionWidgetBody({
         });
 
         await refetch();
-        return { txid: result.txid };
+        return {
+          positionPubkey: result.preview.positionPubkey,
+          txid: result.txid,
+        };
       },
     };
-  }, [isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
+  }, [attachTpsl, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);
@@ -677,17 +721,6 @@ function JupiterPerpsPositionWidgetBody({
 
     return () => observer.disconnect();
   }, []);
-
-  useEffect(() => {
-    if (positions.length === 0 && recentTrades.length > 0) {
-      setActiveTab("recent");
-      return;
-    }
-
-    if (positions.length > 0 && activeTab !== "open" && activeTab !== "new") {
-      setActiveTab("open");
-    }
-  }, [activeTab, positions.length, recentTrades.length]);
 
   useEffect(() => {
     if (isConnected) {

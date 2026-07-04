@@ -62,11 +62,27 @@ type OpenPerpsResult = {
   txid: string;
 };
 
+export type PerpsTpslDraft = {
+  positionPubkey: string;
+  tpsl: Array<{
+    receiveToken: PerpsInputToken;
+    triggerPrice: string;
+    requestType: "tp" | "sl";
+  }>;
+  walletAddress: string;
+};
+
+type AttachTpslResult = {
+  requestPubkeys: string[];
+  txid: string;
+};
+
 type UseJupiterPerpsOpenPositionOptions = {
   signTransaction?: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
 };
 
 type UseJupiterPerpsOpenPositionResult = {
+  attachTpsl: (draft: PerpsTpslDraft) => Promise<AttachTpslResult>;
   buildPreview: (draft: PerpsOrderDraft) => Promise<PerpsOrderPreview>;
   error: string | null;
   isPreviewing: boolean;
@@ -84,6 +100,13 @@ type ExecuteSignedTransactionResponse = {
   error?: string;
   detail?: string;
   txid?: string;
+};
+
+type CreateTpslResponse = {
+  error?: string;
+  detail?: string;
+  serializedTxBase64?: string;
+  tpslPubkeys?: string[];
 };
 
 const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
@@ -179,6 +202,76 @@ export function useJupiterPerpsOpenPosition({
     }
   }, [requestOrder, setTimedError]);
 
+  const attachTpsl = useCallback(async (draft: PerpsTpslDraft) => {
+    if (!signTransaction) {
+      throw new Error("A connected Jupiter wallet is required to sign the Perps TP/SL request.");
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/jupiter/perps/tpsl", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(draft),
+      });
+
+      const payload = await response.json().catch(() => null) as CreateTpslResponse | null;
+      if (!response.ok || !payload) {
+        throw new Error(formatPerpsErrorMessage(payload?.error || "Unable to create Jupiter Perps TP/SL request.", payload?.detail));
+      }
+
+      const serializedTxBase64 = payload.serializedTxBase64?.trim();
+      if (!serializedTxBase64) {
+        throw new Error("Jupiter did not return a TP/SL transaction to sign.");
+      }
+
+      const transaction = VersionedTransaction.deserialize(fromBase64(serializedTxBase64));
+      const signedTransaction = await signTransaction(transaction);
+      const signedSerializedTxBase64 = toBase64(signedTransaction.serialize());
+
+      const executeResponse = await fetch("/api/jupiter/perps/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "create-tpsl",
+          serializedTxBase64: signedSerializedTxBase64,
+        }),
+      });
+
+      const executePayload = await executeResponse.json().catch(() => null) as ExecuteSignedTransactionResponse | null;
+      if (!executeResponse.ok) {
+        throw new Error(
+          formatPerpsErrorMessage(
+            executePayload?.error || "Jupiter could not execute the signed TP/SL transaction.",
+            executePayload?.detail
+          )
+        );
+      }
+
+      const txid = executePayload?.txid?.trim();
+      if (!txid) {
+        throw new Error("Jupiter did not return a TP/SL transaction signature.");
+      }
+
+      return {
+        requestPubkeys: payload.tpslPubkeys ?? [],
+        txid,
+      };
+    } catch (attachError) {
+      const message = attachError instanceof Error ? attachError.message : "Unable to attach Jupiter Perps TP/SL.";
+      setTimedError(message);
+      throw attachError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [setTimedError, signTransaction]);
+
   const openPosition = useCallback(async (draft: PerpsOrderDraft) => {
     if (!signTransaction) {
       throw new Error("A connected Jupiter wallet is required to sign the Perps order.");
@@ -237,6 +330,7 @@ export function useJupiterPerpsOpenPosition({
   }, [requestOrder, setTimedError, signTransaction]);
 
   return {
+    attachTpsl,
     buildPreview,
     error,
     isPreviewing,

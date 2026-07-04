@@ -296,6 +296,16 @@ function isSupportedPerpsAutoTradeToken(symbol: AutoTradeToken): symbol is "SOL"
   return symbol === "SOL" || symbol === "ETH" || symbol === "BTC";
 }
 
+function isPerpsBuildFailureMessage(message: string) {
+  const normalized = message.trim().toLowerCase();
+  return (
+    normalized.includes("could not build the order") ||
+    normalized.includes("unable to build the jupiter perps order") ||
+    normalized.includes("internal server error") ||
+    normalized.includes("jupiter support")
+  );
+}
+
 const PNL_DEFAULT_MINT = SOL_MINT;
 const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
   [SOL_MINT]: "SOL",
@@ -873,6 +883,7 @@ function DashboardPage() {
                 setPerpsAutoTradeStatus(`Perps auto-trade does not support ${activePerpsAutoTradeToken.symbol} yet`);
                 return;
               }
+              const perpsAssetSymbol = activePerpsAutoTradeToken.symbol;
 
               const isBullSignal = signal.direction === "bullish";
               if (autoTradeSettings.mode === "buy-only" && !isBullSignal) {
@@ -930,16 +941,21 @@ function DashboardPage() {
                 `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
               );
 
-              jupiterPerpsController.openMarketPosition({
-                asset: activePerpsAutoTradeToken.symbol,
+              const openAutoPerpsPosition = (options?: {
+                stopLossPrice?: number | null;
+                takeProfitPrice?: number | null;
+              }) => jupiterPerpsController.openMarketPosition({
+                asset: perpsAssetSymbol,
                 collateralToken: "USDC",
                 leverage: String(autoTradeSettings.perpsLeverage),
                 maxSlippageBps: "100",
                 side: isBullSignal ? "long" : "short",
-                stopLossPrice,
-                takeProfitPrice,
+                stopLossPrice: options?.stopLossPrice ?? stopLossPrice,
+                takeProfitPrice: options?.takeProfitPrice ?? takeProfitPrice,
                 uiAmount: collateralAmount,
-              }).then(({ txid }) => {
+              });
+
+              openAutoPerpsPosition().then(({ txid }) => {
                 if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
                   return;
                 }
@@ -963,6 +979,68 @@ function DashboardPage() {
                   return;
                 }
                 const message = error instanceof Error ? error.message : "Perps order failed";
+                const canRetryWithoutTpsl =
+                  (takeProfitPrice !== null || stopLossPrice !== null) &&
+                  isPerpsBuildFailureMessage(message) &&
+                  Boolean(jupiterPerpsController?.connected && jupiterPerpsController.canWrite);
+
+                if (canRetryWithoutTpsl) {
+                  try {
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade retrying for ${signal.symbol} without attached TP/SL after a Jupiter build failure`
+                    );
+                    const retryResult = await openAutoPerpsPosition({
+                      stopLossPrice: null,
+                      takeProfitPrice: null,
+                    });
+                    if (perpsAutoTradeAttemptIdRef.current !== 0 && perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
+                      return;
+                    }
+                    clearPerpsAutoTradeTimeout();
+                    perpsAutoTradeAttemptIdRef.current = 0;
+                    const openedPositionPubkey = retryResult.positionPubkey;
+
+                    const shouldAttachTpslAfterOpen =
+                      openedPositionPubkey &&
+                      (takeProfitPrice !== null || stopLossPrice !== null);
+
+                    if (shouldAttachTpslAfterOpen) {
+                      setPerpsAutoTradeStatus(
+                        `Perps auto-trade opened for ${signal.symbol}. Attaching TP/SL in a follow-up request...`
+                      );
+
+                      try {
+                        const attachResult = await jupiterPerpsController.attachTpsl({
+                          positionPubkey: openedPositionPubkey,
+                          stopLossPrice,
+                          takeProfitPrice,
+                        });
+                        setPerpsAutoTradeStatus(
+                          `Perps auto-trade opened for ${signal.symbol} and TP/SL attached · order ${retryResult.txid.slice(0, 10)}... · tpsl ${attachResult.txid.slice(0, 10)}...`
+                        );
+                        return;
+                      } catch (attachError) {
+                        const attachMessage =
+                          attachError instanceof Error ? attachError.message : "TP/SL attach failed";
+                        setPerpsAutoTradeStatus(
+                          `Perps auto-trade opened for ${signal.symbol}, but TP/SL attach failed: ${attachMessage}`
+                        );
+                        return;
+                      }
+                    }
+
+                    setPerpsAutoTradeStatus(
+                      `Perps auto-trade opened for ${signal.symbol} without attached TP/SL after a Jupiter build failure · ${retryResult.txid.slice(0, 10)}...`
+                    );
+                    return;
+                  } catch (retryError) {
+                    const retryMessage =
+                      retryError instanceof Error ? retryError.message : "Perps order retry failed";
+                    setPerpsAutoTradeFailureCooldown(signal.symbol, retryMessage);
+                    return;
+                  }
+                }
+
                 setPerpsAutoTradeFailureCooldown(signal.symbol, message);
               }).finally(() => {
                 if (perpsAutoTradeAttemptIdRef.current === perpsAttemptId || perpsAutoTradeAttemptIdRef.current === 0) {
