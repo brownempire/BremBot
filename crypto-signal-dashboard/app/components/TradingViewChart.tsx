@@ -254,6 +254,21 @@ export function TradingViewChart({
   }, []);
 
   useEffect(() => {
+    const node = frameRef.current;
+    if (!node) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+    };
+
+    node.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      node.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
+
+  useEffect(() => {
     refreshOverlay();
 
     const handleViewportChange = () => {
