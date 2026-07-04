@@ -25,6 +25,8 @@ type JupiterTradePanelProps = {
   defaultInputMint?: string;
   integratedTargetId?: string;
   tradeRequest?: JupiterTradeRequest | null;
+  passthroughWalletContextState?: unknown;
+  onRequestConnectWallet?: () => void | Promise<void>;
 };
 
 export function JupiterTradePanel({
@@ -32,13 +34,20 @@ export function JupiterTradePanel({
   defaultInputMint = "So11111111111111111111111111111111111111112",
   integratedTargetId = "target-container",
   tradeRequest = null,
+  passthroughWalletContextState,
+  onRequestConnectWallet,
 }: JupiterTradePanelProps) {
   const onTradeSuccessRef = useRef(onTradeSuccess);
+  const onRequestConnectWalletRef = useRef(onRequestConnectWallet);
   const lastHandledRequestId = useRef<string | null>(null);
 
   useEffect(() => {
     onTradeSuccessRef.current = onTradeSuccess;
   }, [onTradeSuccess]);
+
+  useEffect(() => {
+    onRequestConnectWalletRef.current = onRequestConnectWallet;
+  }, [onRequestConnectWallet]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +59,11 @@ export function JupiterTradePanel({
         mod.init({
           displayMode: "integrated",
           integratedTargetId,
+          enableWalletPassthrough: true,
+          passthroughWalletContextState: passthroughWalletContextState as never,
+          onRequestConnectWallet: async () => {
+            await onRequestConnectWalletRef.current?.();
+          },
           defaultExplorer: "Solscan",
           formProps: {
             swapMode: "ExactInOrOut",
@@ -83,7 +97,7 @@ export function JupiterTradePanel({
         })
         .catch(() => undefined);
     };
-  }, [defaultInputMint, integratedTargetId]);
+  }, [defaultInputMint, integratedTargetId, passthroughWalletContextState]);
 
   useEffect(() => {
     if (!tradeRequest || lastHandledRequestId.current === tradeRequest.id) return;
@@ -95,6 +109,11 @@ export function JupiterTradePanel({
         mod.init({
           displayMode: "integrated",
           integratedTargetId,
+          enableWalletPassthrough: true,
+          passthroughWalletContextState: passthroughWalletContextState as never,
+          onRequestConnectWallet: async () => {
+            await onRequestConnectWalletRef.current?.();
+          },
           defaultExplorer: "Solscan",
           formProps: {
             swapMode: "ExactInOrOut",
@@ -121,7 +140,25 @@ export function JupiterTradePanel({
         mod.resume();
       })
       .catch(() => undefined);
-  }, [integratedTargetId, tradeRequest]);
+  }, [integratedTargetId, passthroughWalletContextState, tradeRequest]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    import("@jup-ag/plugin")
+      .then((mod) => {
+        mod.syncProps({
+          enableWalletPassthrough: true,
+          passthroughWalletContextState: passthroughWalletContextState as never,
+        });
+        if (window.Jupiter) {
+          window.Jupiter.enableWalletPassthrough = true;
+          window.Jupiter.onRequestConnectWallet = async () => {
+            await onRequestConnectWalletRef.current?.();
+          };
+        }
+      })
+      .catch(() => undefined);
+  }, [passthroughWalletContextState]);
 
   return (
     <div className="manual-swap-shell">

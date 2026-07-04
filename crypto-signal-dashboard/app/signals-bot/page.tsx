@@ -2134,7 +2134,12 @@ function DashboardPage() {
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-grid" style={{ marginTop: 10 }}>
             <div className="wallet-trading-panel wallet-trading-panel-swap">
-              <JupiterTradePanel onTradeSuccess={handleManualSwapSuccess} integratedTargetId="bremlogic-manual-swap-widget" />
+              <JupiterTradePanel
+                onTradeSuccess={handleManualSwapSuccess}
+                integratedTargetId="bremlogic-manual-swap-widget"
+                passthroughWalletContextState={wallet.passthroughWalletContextState}
+                onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
+              />
             </div>
             <div className="wallet-trading-panel wallet-trading-panel-perps">
               <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} />
