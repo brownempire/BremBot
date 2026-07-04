@@ -427,9 +427,6 @@ function JupiterPerpsPositionWidgetBody({
             <span className="perps-readonly-badge">{writeEnabled ? "Close enabled" : "Read-only"}</span>
             {isMock ? <span className="perps-demo-badge">Demo</span> : null}
           </div>
-          <div className="subtext">
-            Connect a Solana wallet to view Jupiter Perps positions. Native Jupiter Mobile sessions can also submit a full close request.
-          </div>
         </div>
         <div className="wallet-controls perps-widget-actions">
           {isConnected ? (
@@ -474,20 +471,15 @@ function JupiterPerpsPositionWidgetBody({
               Close
             </button>
           </div>
-          {shouldRecommendJupiterMobile ? (
+          {shouldRecommendJupiterMobile && !nativeShell ? (
             <div className="perps-wallet-note">
-              {nativeJupiterAdapterEnabled
-                ? "BremLogic native app is configured to use a native WalletConnect/AppKit Jupiter flow. Selecting Jupiter should route through Jupiter Mobile and return to BremLogic once the wallet approval finishes."
-                : "Jupiter Mobile works best when BremLogic is opened inside Jupiter Mobile's dApp browser. External app handoffs from the native iPhone shell may still leave you in a mobile browser unless the native Jupiter Mobile Adapter is configured."}
+              Open BremLogic inside Jupiter Mobile&apos;s dApp browser if you want to use Jupiter wallet on mobile web.
             </div>
           ) : null}
           {nativeShell && nativeJupiterAdapterEnabled ? (
             <div className="perps-wallet-grid">
               <div className="perps-message-card">
                 <strong>Connect with Jupiter Mobile</strong>
-                <span className="subtext">
-                  Use the native iOS WalletConnect/AppKit Jupiter path. Approve in Jupiter Mobile, then return to BremLogic so the session can finalize here.
-                </span>
                 <div className="wallet-controls" style={{ marginTop: 12 }}>
                   <button
                     type="button"
@@ -497,9 +489,6 @@ function JupiterPerpsPositionWidgetBody({
                     <span>Open Jupiter Mobile</span>
                   </button>
                 </div>
-                <span className="subtext" style={{ marginTop: 12 }}>
-                  Adapter: Jupiter Mobile
-                </span>
               </div>
             </div>
           ) : (
@@ -581,9 +570,6 @@ function JupiterPerpsPositionWidgetBody({
         {!isLoading && activeTab === "open" && shouldShowDisconnectedState ? (
           <div className="perps-empty-state">
             <strong>Connect a Solana wallet</strong>
-            <span className="subtext">
-              This panel primarily reads positions. Native Jupiter Mobile sessions can also submit a full close request with an explicit wallet signature.
-            </span>
           </div>
         ) : null}
 
@@ -649,13 +635,8 @@ function JupiterPerpsPositionWidgetBody({
         {!isLoading && activeTab === "recent" && recentTrades.length === 0 ? (
           <div className="perps-empty-state">
             <strong>No recent Jupiter Perps trades found.</strong>
-            <span className="subtext">Closed positions and trigger fills will appear here after Jupiter records them on-chain.</span>
           </div>
         ) : null}
-      </div>
-
-      <div className="perps-widget-footnote">
-        Data source: Jupiter&apos;s live Perps API for positions and trade history, with direct Solana RPC account reads kept as a fallback. Liquidation marked &quot;est.&quot; is derived from current on-chain position value and collateral when Jupiter&apos;s own decoded liquidation field is unavailable. Close requests use Jupiter&apos;s live Perps API transaction builder and still require an explicit wallet signature.
       </div>
     </div>
   );
