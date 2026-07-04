@@ -1,7 +1,7 @@
 "use client";
 
 import { VersionedTransaction } from "@solana/web3.js";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type ClosePositionParams = {
   maxSlippageBps?: string;
@@ -34,6 +34,8 @@ type ExecuteSignedTransactionResponse = {
   error?: string;
 };
 
+const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
+
 function fromBase64(input: string) {
   const raw = atob(input);
   const bytes = new Uint8Array(raw.length);
@@ -52,10 +54,34 @@ export function useJupiterPerpsClosePosition({
 }: UseJupiterPerpsClosePositionOptions): UseJupiterPerpsClosePositionResult {
   const [closingPositionPubkey, setClosingPositionPubkey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearErrorTimeout = useCallback(() => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setTimedError = useCallback((message: string) => {
+    clearErrorTimeout();
+    setError(message);
+    errorTimeoutRef.current = setTimeout(() => {
+      setError(null);
+      errorTimeoutRef.current = null;
+    }, PERPS_ERROR_AUTO_CLEAR_MS);
+  }, [clearErrorTimeout]);
 
   const clearError = useCallback(() => {
+    clearErrorTimeout();
     setError(null);
-  }, []);
+  }, [clearErrorTimeout]);
+
+  useEffect(() => {
+    return () => {
+      clearErrorTimeout();
+    };
+  }, [clearErrorTimeout]);
 
   const closePosition = useCallback(async ({
     maxSlippageBps = "100",
@@ -121,12 +147,12 @@ export function useJupiterPerpsClosePosition({
       return { txid };
     } catch (closeError) {
       const message = closeError instanceof Error ? closeError.message : "Unable to close the Jupiter Perps position.";
-      setError(message);
+      setTimedError(message);
       throw closeError;
     } finally {
       setClosingPositionPubkey(null);
     }
-  }, [signTransaction]);
+  }, [setTimedError, signTransaction]);
 
   return {
     closePosition,

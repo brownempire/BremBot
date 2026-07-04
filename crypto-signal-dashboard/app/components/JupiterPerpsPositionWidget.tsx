@@ -43,6 +43,7 @@ export type JupiterPerpsWidgetController = {
   canWrite: boolean;
   connected: boolean;
   openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ txid: string }>;
+  refresh: () => Promise<void>;
   walletAddress: string | null;
 };
 
@@ -615,6 +616,7 @@ function JupiterPerpsPositionWidgetBody({
     return {
       canWrite: writeEnabled,
       connected: isConnected,
+      refresh: refetch,
       walletAddress,
       openMarketPosition: async ({
         asset,

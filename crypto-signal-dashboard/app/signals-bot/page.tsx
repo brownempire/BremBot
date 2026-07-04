@@ -94,6 +94,7 @@ type AutoTradeSlot = {
 type AutoTradeSettings = {
   walletPercent: number;
   takeProfitPercent: number;
+  stopLossPercent: number;
   perpsLeverage: number;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
@@ -105,6 +106,7 @@ type AutoTradeSettings = {
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
   takeProfitPercent: 0,
+  stopLossPercent: 0,
   perpsLeverage: 10,
   slots: [
     { id: "auto-slot-1", token: "SOL" },
@@ -118,6 +120,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
 };
 
 const PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS = 60_000;
+const AUTO_TRADE_ERROR_AUTO_RESET_MS = 60_000;
 
 type WalletTokenHolding = {
   mint: string;
@@ -367,9 +370,20 @@ function DashboardPage() {
   const autoTradeBusyRef = useRef(false);
   const perpsAutoTradeBusyRef = useRef(false);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
+  const readOnlyPerpsSnapshotRef = useRef<JupiterPerpsWidgetSnapshot>({
+    walletAddress: null,
+    positions: [],
+    pendingTriggers: [],
+    recentTrades: [],
+    isLoading: false,
+    error: null,
+    isMock: false,
+    connected: false,
+  });
   const lastTpAttemptAtRef = useRef(0);
   const perpsAutoTradeAttemptIdRef = useRef(0);
   const perpsAutoTradeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const perpsAutoTradeErrorResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
@@ -402,6 +416,13 @@ function DashboardPage() {
     }
   }, []);
 
+  const clearPerpsAutoTradeErrorResetTimeout = useCallback(() => {
+    if (perpsAutoTradeErrorResetTimeoutRef.current) {
+      clearTimeout(perpsAutoTradeErrorResetTimeoutRef.current);
+      perpsAutoTradeErrorResetTimeoutRef.current = null;
+    }
+  }, []);
+
   const getPerpsAutoTradeReadyStatus = useCallback((
     tokenSymbol: string,
     options?: {
@@ -409,7 +430,7 @@ function DashboardPage() {
       unsupported?: boolean;
       waitingForWallet?: boolean;
     }
-  ) {
+  ) => {
     if (options?.unsupported) {
       return `Perps auto-trade only supports SOL, ETH, or BTC. ${tokenSymbol} is not supported.`;
     }
@@ -454,6 +475,10 @@ function DashboardPage() {
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
   }, [pendingTakeProfit]);
+
+  useEffect(() => {
+    readOnlyPerpsSnapshotRef.current = readOnlyPerpsSnapshot;
+  }, [readOnlyPerpsSnapshot]);
 
   useEffect(() => {
     if (wallet.connected && walletAddress && !remoteAuthSource) {
@@ -846,6 +871,12 @@ function DashboardPage() {
                     ? marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100))
                     : marketEntryPrice * (1 - (autoTradeSettings.takeProfitPercent / 100))
                   : null;
+              const stopLossPrice =
+                autoTradeSettings.stopLossPercent > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
+                  ? isBullSignal
+                    ? marketEntryPrice * (1 - (autoTradeSettings.stopLossPercent / 100))
+                    : marketEntryPrice * (1 + (autoTradeSettings.stopLossPercent / 100))
+                  : null;
 
               perpsAutoTradeBusyRef.current = true;
               clearPerpsAutoTradeTimeout();
@@ -867,6 +898,7 @@ function DashboardPage() {
                 leverage: String(autoTradeSettings.perpsLeverage),
                 maxSlippageBps: "100",
                 side: isBullSignal ? "long" : "short",
+                stopLossPrice,
                 takeProfitPrice,
                 uiAmount: collateralAmount,
               }).then(({ txid }) => {
@@ -878,12 +910,20 @@ function DashboardPage() {
                 setPerpsAutoTradeStatus(
                   `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
                 );
-              }).catch((error: unknown) => {
+              }).catch(async (error: unknown) => {
                 if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
                   return;
                 }
                 clearPerpsAutoTradeTimeout();
                 perpsAutoTradeAttemptIdRef.current = 0;
+                await jupiterPerpsController.refresh().catch(() => undefined);
+                const activePositionAfterRefresh = readOnlyPerpsSnapshotRef.current.positions.find((position) => position.source !== "mock");
+                if (activePositionAfterRefresh) {
+                  setPerpsAutoTradeStatus(
+                    `Perps auto-trade likely filled for ${signal.symbol}; refreshed live positions after an uncertain Jupiter response`
+                  );
+                  return;
+                }
                 const message = error instanceof Error ? error.message : "Perps order failed";
                 setPerpsAutoTradeStatus(`Perps auto-trade failed for ${signal.symbol}: ${message}`);
               }).finally(() => {
@@ -917,9 +957,12 @@ function DashboardPage() {
     autoTradeSettings.disableTpLock,
     autoTradeSettings.mode,
     autoTradeSettings.perpsLeverage,
+    autoTradeSettings.stopLossPercent,
     autoTradeEnabled,
     autoTradeSettings.walletPercent,
     autoTradeSettings.takeProfitPercent,
+    clearPerpsAutoTradeTimeout,
+    getPerpsAutoTradeReadyStatus,
     jupiterPerpsController,
     lastSignalAt,
     newsItems,
@@ -1059,6 +1102,10 @@ function DashboardPage() {
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
         ? nextTakeProfit
         : DEFAULT_AUTO_TRADE_SETTINGS.takeProfitPercent;
+      const nextStopLoss = Number(parsed.stopLossPercent);
+      const stopLossPercent = Number.isFinite(nextStopLoss) && nextStopLoss >= 0
+        ? nextStopLoss
+        : DEFAULT_AUTO_TRADE_SETTINGS.stopLossPercent;
       const nextPerpsLeverage = Number(parsed.perpsLeverage);
       const perpsLeverage = Number.isFinite(nextPerpsLeverage) && nextPerpsLeverage >= 1
         ? Math.min(250, Math.max(1, Number(nextPerpsLeverage.toFixed(2))))
@@ -1098,6 +1145,7 @@ function DashboardPage() {
       setAutoTradeSettings({
         walletPercent: percent,
         takeProfitPercent,
+        stopLossPercent,
         perpsLeverage,
         slots: normalizedSlots,
         activeSlotId,
@@ -1158,6 +1206,7 @@ function DashboardPage() {
 
   useEffect(() => {
     if (!activePerpsAutoTradeToken) {
+      clearPerpsAutoTradeErrorResetTimeout();
       clearPerpsAutoTradeTimeout();
       perpsAutoTradeAttemptIdRef.current += 1;
       perpsAutoTradeBusyRef.current = false;
@@ -1188,6 +1237,7 @@ function DashboardPage() {
     autoTradeSettings.mode,
     autoTradeSettings.perpsLeverage,
     autoTradeSettings.walletPercent,
+    clearPerpsAutoTradeErrorResetTimeout,
     clearPerpsAutoTradeTimeout,
     getPerpsAutoTradeReadyStatus,
     jupiterPerpsController,
@@ -1195,12 +1245,37 @@ function DashboardPage() {
   ]);
 
   useEffect(() => {
+    clearPerpsAutoTradeErrorResetTimeout();
+
+    if (!activePerpsAutoTradeToken || !perpsAutoTradeStatus.startsWith("Perps auto-trade failed")) {
+      return;
+    }
+
+    perpsAutoTradeErrorResetTimeoutRef.current = setTimeout(() => {
+      if (!perpsAutoTradeBusyRef.current) {
+        setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
+      }
+      perpsAutoTradeErrorResetTimeoutRef.current = null;
+    }, AUTO_TRADE_ERROR_AUTO_RESET_MS);
+
     return () => {
+      clearPerpsAutoTradeErrorResetTimeout();
+    };
+  }, [
+    activePerpsAutoTradeToken,
+    clearPerpsAutoTradeErrorResetTimeout,
+    getPerpsAutoTradeReadyStatus,
+    perpsAutoTradeStatus,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      clearPerpsAutoTradeErrorResetTimeout();
       clearPerpsAutoTradeTimeout();
       perpsAutoTradeAttemptIdRef.current = 0;
       perpsAutoTradeBusyRef.current = false;
     };
-  }, [clearPerpsAutoTradeTimeout]);
+  }, [clearPerpsAutoTradeErrorResetTimeout, clearPerpsAutoTradeTimeout]);
 
   useEffect(() => {
     if (nativeShell || typeof window === "undefined") return;
@@ -2579,6 +2654,21 @@ function DashboardPage() {
                   const value = Number(event.target.value);
                   const takeProfitPercent = Number.isFinite(value) && value >= 0 ? value : 0;
                   const next = { ...autoTradeSettings, takeProfitPercent };
+                  persistAutoTradeSettings(next);
+                }}
+              />
+            </label>
+            <label>
+              Stop Loss % (Perps only)
+              <input
+                type="number"
+                value={autoTradeSettings.stopLossPercent}
+                min={0}
+                step={0.1}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  const stopLossPercent = Number.isFinite(value) && value >= 0 ? value : 0;
+                  const next = { ...autoTradeSettings, stopLossPercent };
                   persistAutoTradeSettings(next);
                 }}
               />

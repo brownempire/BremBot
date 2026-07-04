@@ -157,6 +157,21 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to build the Jupiter Perps order right now.";
-    return Response.json({ error: message }, { status: 500 });
+    console.error("[Perps Open Error]", {
+      asset,
+      inputToken,
+      orderType,
+      side,
+      walletAddress,
+      message,
+    });
+    return Response.json(
+      {
+        error:
+          "Jupiter Perps could not build the order right now. Check collateral, leverage, and trigger settings, then try again.",
+        detail: message,
+      },
+      { status: 500 }
+    );
   }
 }

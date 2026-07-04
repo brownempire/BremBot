@@ -21,6 +21,10 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load Jupiter Perps positions right now.";
+    console.error("[Perps Positions Error]", {
+      walletAddress,
+      message,
+    });
     return Response.json(
       { error: message },
       {

@@ -27,6 +27,7 @@ type JupiterPerpsPositionsState = {
 };
 
 const LIVE_PERPS_REFRESH_MS = 1000;
+const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) {
@@ -81,6 +82,28 @@ export function useJupiterPerpsPositions({
   const [isMock, setIsMock] = useState(false);
   const hasResolvedInitialLoadRef = useRef(false);
   const activeRequestRef = useRef<Promise<void> | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearErrorTimeout = useCallback(() => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearError = useCallback(() => {
+    clearErrorTimeout();
+    setError(null);
+  }, [clearErrorTimeout]);
+
+  const setTimedError = useCallback((message: string) => {
+    clearErrorTimeout();
+    setError(message);
+    errorTimeoutRef.current = setTimeout(() => {
+      setError(null);
+      errorTimeoutRef.current = null;
+    }, PERPS_ERROR_AUTO_CLEAR_MS);
+  }, [clearErrorTimeout]);
 
   const loadPositions = useCallback(async (options?: { silent?: boolean }) => {
     if (activeRequestRef.current) {
@@ -92,7 +115,7 @@ export function useJupiterPerpsPositions({
 
     if (!walletAddress) {
       hasResolvedInitialLoadRef.current = true;
-      setError(null);
+      clearError();
       setIsLoading(false);
       setIsMock(showMockData);
       setPositions(showMockData ? getMockJupiterPerpsPositions() : []);
@@ -106,7 +129,7 @@ export function useJupiterPerpsPositions({
       setIsLoading(true);
     }
     if (!silent) {
-      setError(null);
+      clearError();
     }
 
     const request = (async () => {
@@ -117,10 +140,10 @@ export function useJupiterPerpsPositions({
         setPendingTriggers(next.pendingTriggers);
         setRecentTrades(next.recentTrades);
         setIsMock(false);
-        setError(null);
+        clearError();
       } catch (loadError) {
         const friendlyError = getFriendlyErrorMessage(loadError);
-        setError(friendlyError);
+        setTimedError(friendlyError);
         if (!silent) {
           if (showMockData) {
             setPositions(getMockJupiterPerpsPositions());
@@ -146,7 +169,7 @@ export function useJupiterPerpsPositions({
 
     activeRequestRef.current = request;
     await request;
-  }, [showMockData, walletAddress]);
+  }, [clearError, setTimedError, showMockData, walletAddress]);
 
   useEffect(() => {
     hasResolvedInitialLoadRef.current = false;
@@ -165,6 +188,12 @@ export function useJupiterPerpsPositions({
       window.clearInterval(intervalId);
     };
   }, [loadPositions, pollingEnabled, showMockData, walletAddress]);
+
+  useEffect(() => {
+    return () => {
+      clearErrorTimeout();
+    };
+  }, [clearErrorTimeout]);
 
   return {
     positions,

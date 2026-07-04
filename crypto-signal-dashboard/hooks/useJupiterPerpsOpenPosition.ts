@@ -1,7 +1,7 @@
 "use client";
 
 import { VersionedTransaction } from "@solana/web3.js";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type PerpsAsset = "BTC" | "ETH" | "SOL";
 type PerpsInputToken = PerpsAsset | "USDC";
@@ -84,6 +84,8 @@ type ExecuteSignedTransactionResponse = {
   txid?: string;
 };
 
+const PERPS_ERROR_AUTO_CLEAR_MS = 60_000;
+
 function fromBase64(input: string) {
   const raw = atob(input);
   const bytes = new Uint8Array(raw.length);
@@ -103,10 +105,34 @@ export function useJupiterPerpsOpenPosition({
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearErrorTimeout = useCallback(() => {
+    if (errorTimeoutRef.current) {
+      clearTimeout(errorTimeoutRef.current);
+      errorTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setTimedError = useCallback((message: string) => {
+    clearErrorTimeout();
+    setError(message);
+    errorTimeoutRef.current = setTimeout(() => {
+      setError(null);
+      errorTimeoutRef.current = null;
+    }, PERPS_ERROR_AUTO_CLEAR_MS);
+  }, [clearErrorTimeout]);
 
   const clearError = useCallback(() => {
+    clearErrorTimeout();
     setError(null);
-  }, []);
+  }, [clearErrorTimeout]);
+
+  useEffect(() => {
+    return () => {
+      clearErrorTimeout();
+    };
+  }, [clearErrorTimeout]);
 
   const requestOrder = useCallback(async (draft: PerpsOrderDraft) => {
     const response = await fetch("/api/jupiter/perps/open", {
@@ -133,12 +159,12 @@ export function useJupiterPerpsOpenPosition({
       return await requestOrder(draft);
     } catch (previewError) {
       const message = previewError instanceof Error ? previewError.message : "Unable to preview the Jupiter Perps order.";
-      setError(message);
+      setTimedError(message);
       throw previewError;
     } finally {
       setIsPreviewing(false);
     }
-  }, [requestOrder]);
+  }, [requestOrder, setTimedError]);
 
   const openPosition = useCallback(async (draft: PerpsOrderDraft) => {
     if (!signTransaction) {
@@ -185,12 +211,12 @@ export function useJupiterPerpsOpenPosition({
       return { preview, txid };
     } catch (submitError) {
       const message = submitError instanceof Error ? submitError.message : "Unable to submit the Jupiter Perps order.";
-      setError(message);
+      setTimedError(message);
       throw submitError;
     } finally {
       setIsSubmitting(false);
     }
-  }, [requestOrder, signTransaction]);
+  }, [requestOrder, setTimedError, signTransaction]);
 
   return {
     buildPreview,
