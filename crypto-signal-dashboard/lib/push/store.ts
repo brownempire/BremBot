@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import { getRedisClient } from "@/lib/server/redis";
 
-export type PushSubscriptionRecord = PushSubscriptionJSON & { id: string };
+export type PushSubscriptionRecord = PushSubscriptionJSON & {
+  id: string;
+  walletAddress?: string | null;
+  nativeShell?: boolean;
+  platform?: "web" | "native" | null;
+};
 
 const STORE_FILE_PATH = process.env.PUSH_SUBSCRIPTIONS_FILE || "/tmp/brembot-push-subscriptions.json";
 const REDIS_SUBSCRIPTIONS_KEY = "brembot:push:subscriptions";
@@ -61,14 +66,35 @@ export async function addSubscription(sub: PushSubscriptionJSON) {
   const redisSubscriptions = await readRedisStore();
   const subscriptions = redisSubscriptions ?? readStore();
   const id = sub.endpoint ?? String(Date.now());
-  if (subscriptions.some((existing) => existing.endpoint === sub.endpoint)) {
-    return subscriptions;
-  }
-  const record = { ...sub, id };
-  const next = [...subscriptions, record];
-  const wroteRedis = await writeRedisEntry(record);
+  const nextRecord = {
+    ...sub,
+    id,
+    walletAddress: "walletAddress" in sub ? (sub as PushSubscriptionRecord).walletAddress ?? null : null,
+    nativeShell: "nativeShell" in sub ? Boolean((sub as PushSubscriptionRecord).nativeShell) : false,
+    platform: "platform" in sub ? ((sub as PushSubscriptionRecord).platform ?? null) : null,
+  } satisfies PushSubscriptionRecord;
+  const existingIndex = subscriptions.findIndex((existing) => existing.endpoint === sub.endpoint);
+  const next =
+    existingIndex >= 0
+      ? subscriptions.map((existing, index) => (index === existingIndex ? { ...existing, ...nextRecord } : existing))
+      : [...subscriptions, nextRecord];
+  const wroteRedis = await writeRedisEntry(nextRecord);
   if (!wroteRedis) writeStore(next);
   return next;
+}
+
+export async function listWalletSubscriptions(walletAddress: string) {
+  const subscriptions = await listSubscriptions();
+  return subscriptions.filter((entry) => entry.walletAddress === walletAddress);
+}
+
+export async function listSubscribedWalletAddresses() {
+  const subscriptions = await listSubscriptions();
+  return [...new Set(
+    subscriptions
+      .map((entry) => entry.walletAddress?.trim())
+      .filter((walletAddress): walletAddress is string => Boolean(walletAddress))
+  )];
 }
 
 export async function removeSubscription(endpoint: string) {

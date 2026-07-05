@@ -109,7 +109,7 @@ export async function GET(request: Request) {
     return new Response(JSON.stringify({ error: configError }), { status: 400 });
   }
 
-  const subscriptions = await getTargetSubscriptions(null);
+  const subscriptions = await getTargetSubscriptions();
   if (subscriptions.length === 0) {
     return new Response(JSON.stringify({ ok: true, sent: 0, reason: "No subscriptions" }));
   }
@@ -140,7 +140,7 @@ export async function GET(request: Request) {
         notifications.push({
           title: `Signal: ${signal.symbol}`,
           body: signal.summary,
-          url: "/",
+          url: "/signals-bot",
           signalId: signal.id,
         });
         state.sentSignalIds = [signal.id, ...state.sentSignalIds].slice(0, MAX_SENT_IDS);

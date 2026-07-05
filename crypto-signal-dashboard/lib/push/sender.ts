@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { listSubscriptions, removeSubscription } from "@/lib/push/store";
+import { listSubscriptions, removeSubscription, type PushSubscriptionRecord } from "@/lib/push/store";
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -14,13 +14,22 @@ function setupWebPush() {
   webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY!, VAPID_PRIVATE_KEY!);
 }
 
-export async function getTargetSubscriptions(subscription?: PushSubscriptionJSON | null) {
-  if (subscription?.endpoint) return [subscription];
-  return listSubscriptions();
+export async function getTargetSubscriptions(options?: {
+  subscription?: PushSubscriptionJSON | null;
+  walletAddress?: string | null;
+}) {
+  if (options?.subscription?.endpoint) return [options.subscription];
+
+  const subscriptions = await listSubscriptions();
+  const walletAddress = options?.walletAddress?.trim();
+  if (!walletAddress) return subscriptions;
+
+  const walletSubscriptions = subscriptions.filter((subscription) => subscription.walletAddress === walletAddress);
+  return walletSubscriptions.length > 0 ? walletSubscriptions : subscriptions;
 }
 
 export async function sendPushPayload(
-  subscriptions: PushSubscriptionJSON[],
+  subscriptions: Array<PushSubscriptionJSON | PushSubscriptionRecord>,
   payload: Record<string, unknown>
 ) {
   setupWebPush();

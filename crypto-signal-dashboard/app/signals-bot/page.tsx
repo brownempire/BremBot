@@ -179,6 +179,31 @@ type PendingTakeProfit = {
   createdAt: number;
 };
 
+type PendingPerpsApprovalRequest = {
+  asset: "BTC" | "ETH" | "SOL";
+  collateralToken: "BTC" | "ETH" | "SOL" | "USDC";
+  leverage: string;
+  maxSlippageBps?: string;
+  side: "long" | "short";
+  stopLossPrice?: number | null;
+  takeProfitPrice?: number | null;
+  uiAmount: number;
+};
+
+type StoredPerpsApproval = {
+  id: string;
+  walletAddress: string;
+  signalId: string;
+  signalSummary: string;
+  symbol: string;
+  status: "pending" | "opened" | "failed" | "cancelled";
+  createdAt: number;
+  updatedAt: number;
+  request: PendingPerpsApprovalRequest;
+  openedTxid?: string | null;
+  failureReason?: string | null;
+};
+
 type SmartPerpsTradePlan = {
   collateralPercent: number;
   leverage: number;
@@ -409,6 +434,15 @@ function writeNativeAlertsEnabled(enabled: boolean) {
   window.localStorage.setItem(NATIVE_ALERTS_ENABLED_STORAGE_KEY, enabled ? "true" : "false");
 }
 
+function navigateToNotificationUrl(url: string) {
+  if (typeof window === "undefined" || !url) return;
+  if (/^https?:\/\//i.test(url)) {
+    window.location.assign(url);
+    return;
+  }
+  window.location.assign(url.startsWith("/") ? url : `/${url}`);
+}
+
 function getPhantomAuthProvider(): PhantomAuthProvider | null {
   if (typeof window === "undefined") return null;
   const candidate =
@@ -513,6 +547,8 @@ function DashboardPage() {
   const [pushReady, setPushReady] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscriptionJSON | null>(null);
+  const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
+  const [activeApprovalStatus, setActiveApprovalStatus] = useState<string | null>(null);
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
@@ -576,6 +612,8 @@ function DashboardPage() {
   const perpsAutoTradeErrorResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const perpsAutoTradeFailureCooldownUntilRef = useRef(0);
   const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
+  const approvalConnectStartedRef = useRef<string | null>(null);
+  const approvalExecutionStartedRef = useRef<string | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -692,6 +730,55 @@ function DashboardPage() {
     }
   }, [nativeShell, pushEnabled]);
 
+  const sendRemotePushNotification = useCallback(async (payload: {
+    title: string;
+    body: string;
+    url: string;
+    walletAddress?: string | null;
+  }) => {
+    if (!pushEnabled || nativeShell) return;
+
+    await fetch("/api/push/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...payload,
+        subscription,
+      }),
+    }).catch(() => undefined);
+  }, [nativeShell, pushEnabled, subscription]);
+
+  const createPerpsApproval = useCallback(async (input: {
+    signal: Signal;
+    request: PendingPerpsApprovalRequest;
+    walletAddress: string;
+  }) => {
+    const response = await fetch("/api/perps/approvals", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        walletAddress: input.walletAddress,
+        signalId: input.signal.id,
+        signalSummary: input.signal.summary,
+        symbol: input.signal.symbol,
+        request: input.request,
+      }),
+    });
+
+    const payload = await response.json().catch(() => null) as
+      | { approval?: StoredPerpsApproval; approvalUrl?: string; error?: string }
+      | null;
+
+    if (!response.ok || !payload?.approval || !payload.approvalUrl) {
+      throw new Error(payload?.error ?? "Unable to create the Perps approval request.");
+    }
+
+    return {
+      approval: payload.approval,
+      approvalUrl: payload.approvalUrl,
+    };
+  }, []);
+
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
   }, [pendingTakeProfit]);
@@ -699,6 +786,93 @@ function DashboardPage() {
   useEffect(() => {
     readOnlyPerpsSnapshotRef.current = readOnlyPerpsSnapshot;
   }, [readOnlyPerpsSnapshot]);
+
+  useEffect(() => {
+    if (!activeApprovalId || !jupiterPerpsController) return;
+
+    if (!jupiterPerpsController.connected || !jupiterPerpsController.canWrite) {
+      if (approvalConnectStartedRef.current === activeApprovalId) return;
+      approvalConnectStartedRef.current = activeApprovalId;
+      setActiveApprovalStatus("Opening Jupiter Mobile for approval...");
+      void jupiterPerpsController.connect().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "Wallet connection failed.";
+        setActiveApprovalStatus(message);
+      });
+      return;
+    }
+
+    if (approvalExecutionStartedRef.current === activeApprovalId) return;
+    approvalExecutionStartedRef.current = activeApprovalId;
+    setActiveApprovalStatus("Submitting pending Perps approval...");
+
+    void (async () => {
+      const response = await fetch(`/api/perps/approvals?id=${encodeURIComponent(activeApprovalId)}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => null) as
+        | { approval?: StoredPerpsApproval; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.approval) {
+        setActiveApprovalStatus(payload?.error ?? "Approval request could not be loaded.");
+        approvalExecutionStartedRef.current = null;
+        return;
+      }
+
+      const approval = payload.approval;
+      if (approval.status === "opened") {
+        setActiveApprovalStatus("Approval already executed.");
+        return;
+      }
+
+      try {
+        const result = await jupiterPerpsController.openMarketPosition(approval.request);
+        await fetch("/api/perps/approvals", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: approval.id,
+            status: "opened",
+            openedTxid: result.txid,
+          }),
+        }).catch(() => undefined);
+        await sendSignalNotification(
+          `Trade Filled: ${approval.symbol}`,
+          `${approval.request.side === "long" ? "Long" : "Short"} executed · ${result.txid.slice(0, 10)}...`,
+          "/signals-bot?tab=perps"
+        );
+        await sendRemotePushNotification({
+          title: `Trade Filled: ${approval.symbol}`,
+          body: `${approval.request.side === "long" ? "Long" : "Short"} executed · ${result.txid.slice(0, 10)}...`,
+          url: "/signals-bot?tab=perps",
+          walletAddress: approval.walletAddress,
+        });
+        setPerpsAutoTradeStatus(
+          `Perps approval executed for ${approval.symbol}: ${approval.request.side === "long" ? "long" : "short"} · ${result.txid.slice(0, 10)}...`
+        );
+        setActiveApprovalStatus("Perps approval executed.");
+        if (typeof window !== "undefined") {
+          const nextUrl = new URL(window.location.href);
+          nextUrl.searchParams.delete("approval");
+          window.history.replaceState({}, "", nextUrl.toString());
+        }
+        setActiveApprovalId(null);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Unable to execute approval.";
+        await fetch("/api/perps/approvals", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: approval.id,
+            status: "failed",
+            failureReason: message,
+          }),
+        }).catch(() => undefined);
+        setActiveApprovalStatus(message);
+        approvalExecutionStartedRef.current = null;
+      }
+    })();
+  }, [activeApprovalId, jupiterPerpsController, sendRemotePushNotification, sendSignalNotification]);
 
   useEffect(() => {
     if (wallet.connected && walletAddress && !remoteAuthSource) {
@@ -1002,18 +1176,12 @@ function DashboardPage() {
                         `Auto-trade executed for ${signal.symbol}${result.gasless ? " · gasless" : ""}`
                       );
                     }
-                    if (!nativeShell && pushEnabled) {
-                      fetch("/api/push/notify", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          title: `Auto-trade executed: ${signal.symbol}`,
-                          body: `Tx: ${result.txid.slice(0, 12)}... · Tap to view on-chain.`,
-                          url: `https://solscan.io/tx/${result.txid}`,
-                          subscription,
-                        }),
-                      }).catch(() => undefined);
-                    }
+                    void sendRemotePushNotification({
+                      title: `Auto-trade executed: ${signal.symbol}`,
+                      body: `Tx: ${result.txid.slice(0, 12)}... · Tap to view on-chain.`,
+                      url: `https://solscan.io/tx/${result.txid}`,
+                      walletAddress: activeWallet,
+                    });
                   }).catch((error: unknown) => {
                     const message = error instanceof Error ? error.message : "swap failed";
                     setAutoTradeStatus(`Auto-trade failed for ${signal.symbol}: ${message}`);
@@ -1059,29 +1227,30 @@ function DashboardPage() {
                 setPerpsAutoTradeStatus(`Perps auto-trade does not support ${activePerpsAutoTradeToken.symbol} yet`);
                 return;
               }
-              const perpsAssetSymbol = activePerpsAutoTradeToken.symbol;
 
-              const isBullSignal = signal.direction === "bullish";
-              if (autoTradeSettings.mode === "buy-only" && !isBullSignal) {
-                setPerpsAutoTradeStatus(`Buy-only mode skipped bearish Perps signal for ${signal.symbol}`);
-                return;
-              }
-
-              if (!jupiterPerpsController?.connected || !jupiterPerpsController.canWrite) {
+              if (!jupiterPerpsController?.walletAddress) {
                 setPerpsAutoTradeStatus(
-                  `Perps signal detected for ${signal.symbol}, but Jupiter Mobile is not connected for trading`
+                  `Perps signal detected for ${signal.symbol}, but Jupiter Mobile needs to be connected once before approvals can be queued`
                 );
                 return;
               }
+              const perpsWalletAddress = jupiterPerpsController.walletAddress;
 
               const findActivePerpsPosition = () =>
                 readOnlyPerpsSnapshotRef.current.positions.find((position) => position.source !== "mock");
 
-              const activePerpsPosition = findActivePerpsPosition();
-              if (activePerpsPosition) {
+              if (findActivePerpsPosition()) {
+                const activePerpsPosition = findActivePerpsPosition();
                 setPerpsAutoTradeStatus(
-                  `Perps auto-trade is waiting: ${activePerpsPosition.marketSymbol} ${activePerpsPosition.side === "long" ? "long" : "short"} already open`
+                  `Perps auto-trade is waiting: ${activePerpsPosition?.marketSymbol} ${activePerpsPosition?.side === "long" ? "long" : "short"} already open`
                 );
+                return;
+              }
+
+              const perpsAssetSymbol = activePerpsAutoTradeToken.symbol;
+              const isBullSignal = signal.direction === "bullish";
+              if (autoTradeSettings.mode === "buy-only" && !isBullSignal) {
+                setPerpsAutoTradeStatus(`Buy-only mode skipped bearish Perps signal for ${signal.symbol}`);
                 return;
               }
 
@@ -1107,74 +1276,21 @@ function DashboardPage() {
                 return;
               }
 
-              const marketEntryPrice = points[points.length - 1]?.v ?? 0;
-              let takeProfitPrice: number | null = null;
-              let stopLossPrice: number | null = null;
-
-              const openAutoPerpsPosition = (options?: {
-                stopLossPrice?: number | null;
-                takeProfitPrice?: number | null;
-              }) => jupiterPerpsController.openMarketPosition({
-                asset: perpsAssetSymbol,
-                collateralToken: "USDC",
-                leverage: String(perpsTradePlan.leverage),
-                maxSlippageBps: "100",
-                side: isBullSignal ? "long" : "short",
-                stopLossPrice: options?.stopLossPrice ?? stopLossPrice,
-                takeProfitPrice: options?.takeProfitPrice ?? takeProfitPrice,
-                uiAmount: collateralAmount,
-              });
-
               void (async () => {
                 perpsAutoTradeBusyRef.current = true;
 
                 try {
-                  setPerpsAutoTradeStatus(`Refreshing live Perps positions for ${signal.symbol} before auto-trade...`);
-                  try {
-                    await jupiterPerpsController.refresh();
-                  } catch {
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade paused for ${signal.symbol}: unable to refresh live positions before opening`
-                    );
-                    return;
-                  }
-
-                  const activePositionAfterPreflightRefresh = findActivePerpsPosition();
-                  if (activePositionAfterPreflightRefresh) {
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade is waiting: ${activePositionAfterPreflightRefresh.marketSymbol} ${activePositionAfterPreflightRefresh.side === "long" ? "long" : "short"} already open`
-                    );
-                    return;
-                  }
-
-                  setPerpsAutoTradeStatus(`Double-checking live Perps positions for ${signal.symbol} before submit...`);
-                  try {
-                    await jupiterPerpsController.refresh();
-                  } catch {
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade paused for ${signal.symbol}: unable to confirm wallet positions right before submit`
-                    );
-                    return;
-                  }
-
-                  const activePositionAfterSubmitRefresh = findActivePerpsPosition();
-                  if (activePositionAfterSubmitRefresh) {
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade is waiting: ${activePositionAfterSubmitRefresh.marketSymbol} ${activePositionAfterSubmitRefresh.side === "long" ? "long" : "short"} already open`
-                    );
-                    return;
-                  }
+                  let takeProfitPrice: number | null = null;
+                  let stopLossPrice: number | null = null;
+                  const marketEntryPrice = points[points.length - 1]?.v ?? 0;
 
                   if (
                     (autoTradeSettings.takeProfitPercent > 0 || autoTradeSettings.stopLossPercent > 0) &&
                     Number.isFinite(marketEntryPrice) &&
                     marketEntryPrice > 0
                   ) {
-                    setPerpsAutoTradeStatus(`Estimating Perps TP/SL for ${signal.symbol} with fees included...`);
-
-                    let preview;
                     try {
-                      preview = await jupiterPerpsController.previewMarketPosition({
+                      const preview = await jupiterPerpsController.previewMarketPosition({
                         asset: perpsAssetSymbol,
                         collateralToken: "USDC",
                         leverage: String(perpsTradePlan.leverage),
@@ -1182,146 +1298,71 @@ function DashboardPage() {
                         side: isBullSignal ? "long" : "short",
                         uiAmount: collateralAmount,
                       });
+
+                      const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
+                        desiredStopLossPercent: perpsTradePlan.stopLossPercent,
+                        desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
+                        fallbackEntryPrice: marketEntryPrice,
+                        preview,
+                      });
+
+                      takeProfitPrice = adjustedTriggers.takeProfitPrice;
+                      stopLossPrice = adjustedTriggers.stopLossPrice;
                     } catch (previewError) {
                       const previewMessage =
                         previewError instanceof Error ? previewError.message : "Unable to estimate Perps TP/SL with fees.";
-                      setPerpsAutoTradeStatus(
-                        `Perps auto-trade paused for ${signal.symbol}: ${previewMessage}`
-                      );
+                      setPerpsAutoTradeStatus(`Perps auto-trade paused for ${signal.symbol}: ${previewMessage}`);
                       return;
                     }
-
-                    const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
-                      desiredStopLossPercent: perpsTradePlan.stopLossPercent,
-                      desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
-                      fallbackEntryPrice: marketEntryPrice,
-                      preview,
-                    });
-
-                    takeProfitPrice = adjustedTriggers.takeProfitPrice;
-                    stopLossPrice = adjustedTriggers.stopLossPrice;
                   }
 
-                  clearPerpsAutoTradeTimeout();
-                  const perpsAttemptId = Date.now();
-                  perpsAutoTradeAttemptIdRef.current = perpsAttemptId;
-                  perpsAutoTradeTimeoutRef.current = setTimeout(() => {
-                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) return;
-                    perpsAutoTradeAttemptIdRef.current = 0;
-                    perpsAutoTradeBusyRef.current = false;
-                    setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
-                  }, PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS);
+                  const approvalRequest: PendingPerpsApprovalRequest = {
+                    asset: perpsAssetSymbol,
+                    collateralToken: "USDC",
+                    leverage: String(perpsTradePlan.leverage),
+                    maxSlippageBps: "100",
+                    side: isBullSignal ? "long" : "short",
+                    stopLossPrice,
+                    takeProfitPrice,
+                    uiAmount: collateralAmount,
+                  };
+
+                  const { approval, approvalUrl } = await createPerpsApproval({
+                    signal,
+                    request: approvalRequest,
+                    walletAddress: perpsWalletAddress,
+                  });
+
                   setPerpsAutoTradeStatus(
-                    `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${perpsTradePlan.leverage}x${autoTradeSettings.perpsExecutionMode === "smart-trades" ? ` · smart ${autoTradeSettings.smartTradeProfile} · vol ${perpsTradePlan.volatilityPercent}%` : ""})`
+                    `Perps approval queued for ${signal.symbol}: ${approvalRequest.side === "long" ? "long" : "short"} ${perpsAssetSymbol} (${collateralAmount} USDC at ${perpsTradePlan.leverage}x)`
                   );
 
-                  try {
-                    const { txid } = await openAutoPerpsPosition();
-                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
-                      return;
-                    }
-                    clearPerpsAutoTradeTimeout();
-                    perpsAutoTradeAttemptIdRef.current = 0;
-                    setPerpsAutoTradeStatus(
-                      `Perps auto-trade opened for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} · ${txid.slice(0, 10)}...`
-                    );
-                  } catch (error: unknown) {
-                    if (perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
-                      return;
-                    }
-                    clearPerpsAutoTradeTimeout();
-                    perpsAutoTradeAttemptIdRef.current = 0;
-                    await jupiterPerpsController.refresh().catch(() => undefined);
-                    const activePositionAfterRefresh = findActivePerpsPosition();
-                    if (activePositionAfterRefresh) {
-                      setPerpsAutoTradeStatus(
-                        `Perps auto-trade likely filled for ${signal.symbol}; refreshed live positions after an uncertain Jupiter response`
-                      );
-                      return;
-                    }
-                    const message = error instanceof Error ? error.message : "Perps order failed";
-                    const canRetryWithoutTpsl =
-                      (takeProfitPrice !== null || stopLossPrice !== null) &&
-                      isPerpsBuildFailureMessage(message) &&
-                      Boolean(jupiterPerpsController?.connected && jupiterPerpsController.canWrite);
-
-                    if (canRetryWithoutTpsl) {
-                      try {
-                        setPerpsAutoTradeStatus(
-                          `Perps auto-trade retrying for ${signal.symbol} without attached TP/SL after a Jupiter build failure`
-                        );
-                        const retryResult = await openAutoPerpsPosition({
-                          stopLossPrice: null,
-                          takeProfitPrice: null,
-                        });
-                        if (perpsAutoTradeAttemptIdRef.current !== 0 && perpsAutoTradeAttemptIdRef.current !== perpsAttemptId) {
-                          return;
-                        }
-                        clearPerpsAutoTradeTimeout();
-                        perpsAutoTradeAttemptIdRef.current = 0;
-                        const openedPositionPubkey = retryResult.positionPubkey;
-
-                        const shouldAttachTpslAfterOpen =
-                          openedPositionPubkey &&
-                          (takeProfitPrice !== null || stopLossPrice !== null);
-
-                        if (shouldAttachTpslAfterOpen) {
-                          setPerpsAutoTradeStatus(
-                            `Perps auto-trade opened for ${signal.symbol}. Attaching TP/SL in a follow-up request...`
-                          );
-
-                          try {
-                            const attachResult = await jupiterPerpsController.attachTpsl({
-                              positionPubkey: openedPositionPubkey,
-                              stopLossPrice,
-                              takeProfitPrice,
-                            });
-                            setPerpsAutoTradeStatus(
-                              `Perps auto-trade opened for ${signal.symbol} and TP/SL attached · order ${retryResult.txid.slice(0, 10)}... · tpsl ${attachResult.txid.slice(0, 10)}...`
-                            );
-                            return;
-                          } catch (attachError) {
-                            const attachMessage =
-                              attachError instanceof Error ? attachError.message : "TP/SL attach failed";
-                            setPerpsAutoTradeStatus(
-                              `Perps auto-trade opened for ${signal.symbol}, but TP/SL attach failed: ${attachMessage}`
-                            );
-                            return;
-                          }
-                        }
-
-                        setPerpsAutoTradeStatus(
-                          `Perps auto-trade opened for ${signal.symbol} without attached TP/SL after a Jupiter build failure · ${retryResult.txid.slice(0, 10)}...`
-                        );
-                        return;
-                      } catch (retryError) {
-                        const retryMessage =
-                          retryError instanceof Error ? retryError.message : "Perps order retry failed";
-                        setPerpsAutoTradeFailureCooldown(signal.symbol, retryMessage);
-                        return;
-                      }
-                    }
-
-                    setPerpsAutoTradeFailureCooldown(signal.symbol, message);
-                  }
+                  await sendSignalNotification(
+                    `Approve Trade: ${signal.symbol}`,
+                    `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
+                    approvalUrl
+                  );
+                  await sendRemotePushNotification({
+                    title: `Approve Trade: ${signal.symbol}`,
+                    body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
+                    url: approvalUrl,
+                    walletAddress: approval.walletAddress,
+                  });
+                } catch (error: unknown) {
+                  const message = error instanceof Error ? error.message : "Unable to queue Perps approval.";
+                  setPerpsAutoTradeFailureCooldown(signal.symbol, message);
                 } finally {
                   perpsAutoTradeBusyRef.current = false;
                 }
               })();
             }
 
-            if (!nativeShell && pushEnabled) {
-              fetch("/api/push/notify", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  title: `Signal: ${signal.symbol}`,
-                  body: signal.summary,
-                  url: "/",
-                  subscription,
-                }),
-              }).catch(() => undefined);
-            }
+            void sendRemotePushNotification({
+              title: `Signal: ${signal.symbol}`,
+              body: signal.summary,
+              url: "/signals-bot",
+              walletAddress: walletAddress ?? jupiterPerpsController?.walletAddress ?? undefined,
+            });
           });
         }
       });
@@ -1344,15 +1385,17 @@ function DashboardPage() {
     priceHistory,
     pushEnabled,
     receiveSignalsForSlotId,
+    sendRemotePushNotification,
     sendSignalNotification,
     setPerpsAutoTradeFailureCooldown,
-    subscription,
     trackedMarkets,
+    createPerpsApproval,
     persistTradeRecord,
     perpsAutoTradeEnabled,
     readOnlyPerpsSnapshot.positions,
     wallet,
     wallet.executeSwap,
+    walletAddress,
     wallet.publicKey,
     walletTokens,
     solBalance,
@@ -1420,6 +1463,56 @@ function DashboardPage() {
         setPushStatus("Service worker registration failed");
       });
   }, [nativeShell]);
+
+  useEffect(() => {
+    if (!nativeShell) return;
+
+    let removed = false;
+    let handle: { remove: () => Promise<void> } | null = null;
+
+    LocalNotifications.addListener("localNotificationActionPerformed", (event) => {
+      const nextUrl = typeof event.notification.extra?.url === "string"
+        ? event.notification.extra.url
+        : "";
+      if (nextUrl) {
+        navigateToNotificationUrl(nextUrl);
+      }
+    }).then((listener) => {
+      if (removed) {
+        void listener.remove();
+        return;
+      }
+      handle = listener;
+    }).catch(() => undefined);
+
+    return () => {
+      removed = true;
+      void handle?.remove();
+    };
+  }, [nativeShell]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const approvalId = new URLSearchParams(window.location.search).get("approval")?.trim() ?? "";
+    if (!approvalId) return;
+    setActiveApprovalId(approvalId);
+    setActiveApprovalStatus("Opening approval request...");
+  }, []);
+
+  useEffect(() => {
+    if (!subscription?.endpoint || nativeShell) return;
+
+    fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...subscription,
+        walletAddress,
+        nativeShell,
+        platform: nativeShell ? "native" : "web",
+      }),
+    }).catch(() => undefined);
+  }, [nativeShell, subscription, walletAddress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3307,6 +3400,7 @@ function DashboardPage() {
             <div className="panel compact-panel alerts-row-panel">
               <strong>Alerts & Push</strong>
               <span className="subtext">{pushStatus}</span>
+              {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
               <div className="alerts-actions">
                 <button
                   onClick={togglePush}

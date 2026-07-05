@@ -1,7 +1,7 @@
 "use client";
 
 import { Browser } from "@capacitor/browser";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
 
@@ -50,6 +50,7 @@ export type JupiterPerpsWidgetController = {
     takeProfitPrice?: number | null;
   }) => Promise<{ requestPubkeys: string[]; txid: string }>;
   canWrite: boolean;
+  connect: () => Promise<void>;
   connected: boolean;
   openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ positionPubkey: string | null; txid: string }>;
   previewMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<PerpsOrderPreview>;
@@ -846,6 +847,19 @@ function JupiterPerpsPositionWidgetBody({
   });
   const pendingClosePositionPubkeySet = useMemo(() => new Set(pendingClosePositionPubkeys), [pendingClosePositionPubkeys]);
   const writeEnabled = nativeJupiterAdapterEnabled && isConnected && !isMock;
+  const handleNativeJupiterConnect = useCallback(async () => {
+    if (!nativeJupiterAdapterEnabled) {
+      return;
+    }
+
+    try {
+      nativeJupiterWallet.clearFeedback();
+      await nativeJupiterWallet.connect();
+      setWalletMenuOpen(false);
+    } catch {
+      // The hook surfaces the user-friendly error state.
+    }
+  }, [nativeJupiterAdapterEnabled, nativeJupiterWallet]);
 
   useEffect(() => {
     onSnapshotChange?.({
@@ -896,6 +910,7 @@ function JupiterPerpsPositionWidgetBody({
         return result;
       },
       canWrite: writeEnabled,
+      connect: handleNativeJupiterConnect,
       connected: isConnected,
       refresh: refetch,
       walletAddress,
@@ -972,7 +987,7 @@ function JupiterPerpsPositionWidgetBody({
         };
       },
     };
-  }, [attachTpsl, buildPreview, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
+  }, [attachTpsl, buildPreview, handleNativeJupiterConnect, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);
@@ -1024,20 +1039,6 @@ function JupiterPerpsPositionWidgetBody({
     }
 
     window.location.assign("https://jup.ag");
-  }
-
-  async function handleNativeJupiterConnect() {
-    if (!nativeJupiterAdapterEnabled) {
-      return;
-    }
-
-    try {
-      nativeJupiterWallet.clearFeedback();
-      await nativeJupiterWallet.connect();
-      setWalletMenuOpen(false);
-    } catch {
-      // The hook surfaces the user-friendly error state.
-    }
   }
 
   async function handleDisconnect() {
