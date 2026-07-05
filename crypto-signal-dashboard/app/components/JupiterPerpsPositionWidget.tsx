@@ -173,6 +173,25 @@ function getPerpsTpslReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH"
   return "USDC";
 }
 
+function getPerpsPositionMatchKey(parts: {
+  custodyAddress: string | null;
+  collateralCustodyAddress: string | null;
+  side: JupiterPerpsPosition["side"];
+}) {
+  return `${parts.custodyAddress ?? "unknown-custody"}:${parts.collateralCustodyAddress ?? "unknown-collateral"}:${parts.side}`;
+}
+
+function doesTriggerBelongToPosition(position: JupiterPerpsPosition, trigger: JupiterPerpsPendingTrigger) {
+  const positionPubkey = position.accountRef?.trim();
+  const triggerPositionPubkey = trigger.positionPubkey?.trim();
+
+  if (positionPubkey && triggerPositionPubkey && positionPubkey === triggerPositionPubkey) {
+    return true;
+  }
+
+  return getPerpsPositionMatchKey(position) === getPerpsPositionMatchKey(trigger);
+}
+
 function validatePerpsTriggerPrice(kind: "tp" | "sl", position: JupiterPerpsPosition, triggerPrice: number) {
   const entryPrice = position.entryPrice;
   if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) {
@@ -1295,9 +1314,8 @@ function JupiterPerpsPositionWidgetBody({
         {!isLoading && activeTab === "open" && positions.length > 0 ? (
           <div className="perps-list">
             {positions.map((position) => {
-              const positionPubkey = position.accountRef?.trim();
               const positionPendingTriggers = pendingTriggers.filter((trigger) => (
-                !!positionPubkey && trigger.positionPubkey?.trim() === positionPubkey
+                doesTriggerBelongToPosition(position, trigger)
               ));
 
               return (
