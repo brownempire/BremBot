@@ -49,6 +49,12 @@ npm run cap:open:ios
 5. In `Signing & Capabilities`:
    - choose your Apple ID team
    - keep the bundle id as `com.bremlogic.signalsbot`, or change it if that id is already in use
+   - Personal Team builds:
+     - local/native notifications work
+     - APNs push must stay disabled
+   - Paid Apple Developer account builds:
+     - set `APP_ENTITLEMENTS = App/BremLogic.entitlements` in `ios/debug.xcconfig` and `ios/release.xcconfig`
+     - then enable the Push Notifications capability in Apple Developer / Xcode signing
 6. Plug in your iPhone or select it from the device menu.
 7. Press the Run button in Xcode.
 8. If iOS warns about an untrusted developer certificate:

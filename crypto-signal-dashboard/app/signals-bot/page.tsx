@@ -556,6 +556,7 @@ function DashboardPage() {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscriptionJSON | null>(null);
   const [nativePushToken, setNativePushToken] = useState<string | null>(null);
+  const [nativePushIssue, setNativePushIssue] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [activeApprovalStatus, setActiveApprovalStatus] = useState<string | null>(null);
 
@@ -1438,6 +1439,11 @@ function DashboardPage() {
             setPushStatus("This installed iPhone app needs a rebuild/reinstall to add APNs push support");
             return;
           }
+          if (nativePushIssue && localPermission.display === "granted" && enabledPreference) {
+            setPushEnabled(true);
+            setPushStatus(`Local native alerts enabled. ${nativePushIssue}`);
+            return;
+          }
           if (localPermission.display === "granted" && pushPermission.receive === "granted" && enabledPreference) {
             setPushEnabled(true);
             setPushStatus(nativePushToken ? "Native alerts enabled" : "Native alerts enabled, waiting for APNs token");
@@ -1489,7 +1495,7 @@ function DashboardPage() {
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
-  }, [nativePushToken, nativeShell]);
+  }, [nativePushIssue, nativePushToken, nativeShell]);
 
   useEffect(() => {
     if (!nativeShell) return;
@@ -1522,12 +1528,25 @@ function DashboardPage() {
     }));
 
     void registerListener(PushNotifications.addListener("registration", (token) => {
+      setNativePushIssue(null);
       setNativePushToken(token.value);
       setPushStatus("Native push token ready");
     }));
 
     void registerListener(PushNotifications.addListener("registrationError", (error) => {
-      setPushStatus(error.error ?? "APNs registration failed");
+      setNativePushToken(null);
+      const message = error.error?.trim() || "APNs registration failed";
+      const lowerMessage = message.toLowerCase();
+      const profileMessage =
+        lowerMessage.includes("aps-environment")
+        || lowerMessage.includes("push notifications")
+        || lowerMessage.includes("not entitled")
+        || lowerMessage.includes("no valid")
+          ? "APNs push is unavailable in the current signing profile. Local native alerts still work."
+          : message;
+      setNativePushIssue(profileMessage);
+      setPushEnabled(readNativeAlertsEnabled());
+      setPushStatus(`Local native alerts enabled. ${profileMessage}`);
     }));
 
     void registerListener(PushNotifications.addListener("pushNotificationActionPerformed", (event) => {
@@ -2537,6 +2556,7 @@ function DashboardPage() {
         }
         if (!hasPushNotifications) {
           writeNativeAlertsEnabled(true);
+          setNativePushIssue("APNs push is not included in this installed app build yet.");
           setPushEnabled(true);
           setPushStatus("Local native alerts enabled. Reinstall the iPhone app build to add APNs push.");
           return;
@@ -2548,6 +2568,7 @@ function DashboardPage() {
           return;
         }
         await PushNotifications.register();
+        setNativePushIssue(null);
         writeNativeAlertsEnabled(true);
         setPushEnabled(true);
         setPushStatus("Native alerts enabled, registering APNs token...");
@@ -2614,6 +2635,7 @@ function DashboardPage() {
   async function disablePush() {
     if (nativeShell) {
       writeNativeAlertsEnabled(false);
+      setNativePushIssue(null);
       if (nativePushToken) {
         await fetch("/api/push/native/unsubscribe", {
           method: "POST",
