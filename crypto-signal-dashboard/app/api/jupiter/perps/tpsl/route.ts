@@ -9,7 +9,9 @@ type CreateTpslRequest = {
   positionPubkey?: string;
   positionRequestPubkey?: string;
   tpsl?: Array<{
+    entirePosition?: boolean;
     receiveToken?: InputToken;
+    sizeUsdDelta?: string | null;
     triggerPrice?: string | null;
     requestType?: "tp" | "sl";
   }>;
@@ -38,19 +40,23 @@ export async function POST(request: NextRequest) {
     .map((item) => {
       const receiveToken = item?.receiveToken?.trim();
       const triggerPrice = normalizePositiveNumberString(item?.triggerPrice);
+      const sizeUsdDelta = normalizePositiveNumberString(item?.sizeUsdDelta);
       const requestType = item?.requestType;
+      const entirePosition = item?.entirePosition !== false;
 
       if (!isInputToken(receiveToken) || !triggerPrice || (requestType !== "tp" && requestType !== "sl")) {
         return null;
       }
 
       return {
+        entirePosition,
         receiveToken,
+        sizeUsdDelta: entirePosition ? null : sizeUsdDelta,
         triggerPrice,
         requestType,
       };
     })
-    .filter((item): item is { receiveToken: InputToken; triggerPrice: string; requestType: "tp" | "sl" } => item !== null);
+    .filter((item): item is { entirePosition: boolean; receiveToken: InputToken; sizeUsdDelta: string | null; triggerPrice: string; requestType: "tp" | "sl" } => item !== null);
 
   if (!walletAddress || !positionPubkey || tpsl.length === 0) {
     return Response.json({ error: "Incomplete TP/SL request." }, { status: 400 });

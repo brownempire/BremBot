@@ -80,7 +80,25 @@ function computeGuidePositions(
   const validPoints = pricePoints.filter(
     (point): point is PricePoint => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0
   );
-  if (validPoints.length === 0) return [];
+  if (validPoints.length === 0) {
+    const guidePrices = validGuides.map((guide) => guide.price);
+    const minGuidePrice = Math.min(...guidePrices);
+    const maxGuidePrice = Math.max(...guidePrices);
+    const midpoint = (minGuidePrice + maxGuidePrice) / 2;
+    const span = Math.max(maxGuidePrice - minGuidePrice, midpoint * 0.02, 1e-6);
+    const paddedMin = minGuidePrice - span * 0.2;
+    const paddedMax = maxGuidePrice + span * 0.2;
+    const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
+
+    return validGuides.map((guide) => {
+      const relative = (guide.price - paddedMin) / paddedSpan;
+      const top = 100 - Math.min(100, Math.max(0, relative * 100));
+      return {
+        ...guide,
+        top,
+      };
+    });
+  }
 
   const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
   const intervalWindowMs = getIntervalWindowMs(interval);

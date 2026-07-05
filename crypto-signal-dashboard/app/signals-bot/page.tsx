@@ -1995,46 +1995,55 @@ function DashboardPage() {
   const selectedSignalMarket =
     trackedMarkets.find((market) => market.id === receiveSignalsForSlotId) ?? trackedMarkets[0];
   const selectedChartGuideKey = normalizeMarketGuideKey(selectedChartMarket?.pair ?? selectedChartMarket?.tvSymbol);
-  const selectedChartPerpsPosition =
-    readOnlyPerpsSnapshot.positions.find(
-      (position) =>
-        position.source !== "mock" &&
-        normalizeMarketGuideKey(position.marketSymbol) === selectedChartGuideKey
-    ) ?? null;
+  const selectedChartPerpsPositions = readOnlyPerpsSnapshot.positions.filter((position) => {
+    if (position.source === "mock") return false;
+    if (!selectedChartGuideKey) return false;
+
+    return (
+      normalizeMarketGuideKey(position.marketSymbol) === selectedChartGuideKey ||
+      normalizeMarketGuideKey(position.marketName) === selectedChartGuideKey ||
+      normalizeMarketGuideKey(position.marketAddress) === selectedChartGuideKey ||
+      normalizeMarketGuideKey(position.custodyAddress) === selectedChartGuideKey
+    );
+  });
   const selectedChartGuides = useMemo(() => {
-    if (!selectedChartPerpsPosition) return [];
+    if (selectedChartPerpsPositions.length === 0) return [];
 
     const guides: Array<{ id: string; label: string; price: number; tone: "entry" | "tp" | "sl" }> = [];
 
-    if (typeof selectedChartPerpsPosition.entryPrice === "number" && Number.isFinite(selectedChartPerpsPosition.entryPrice)) {
-      guides.push({
-        id: `${selectedChartPerpsPosition.id}-entry`,
-        label: "Entry",
-        price: selectedChartPerpsPosition.entryPrice,
-        tone: "entry",
-      });
-    }
+    selectedChartPerpsPositions.forEach((position, index) => {
+      const labelPrefix = selectedChartPerpsPositions.length > 1 ? `${index + 1} ` : "";
 
-    if (typeof selectedChartPerpsPosition.takeProfit === "number" && Number.isFinite(selectedChartPerpsPosition.takeProfit)) {
-      guides.push({
-        id: `${selectedChartPerpsPosition.id}-tp`,
-        label: "TP",
-        price: selectedChartPerpsPosition.takeProfit,
-        tone: "tp",
-      });
-    }
+      if (typeof position.entryPrice === "number" && Number.isFinite(position.entryPrice)) {
+        guides.push({
+          id: `${position.id}-entry`,
+          label: `${labelPrefix}Entry`,
+          price: position.entryPrice,
+          tone: "entry",
+        });
+      }
 
-    if (typeof selectedChartPerpsPosition.stopLoss === "number" && Number.isFinite(selectedChartPerpsPosition.stopLoss)) {
-      guides.push({
-        id: `${selectedChartPerpsPosition.id}-sl`,
-        label: "SL",
-        price: selectedChartPerpsPosition.stopLoss,
-        tone: "sl",
-      });
-    }
+      if (typeof position.takeProfit === "number" && Number.isFinite(position.takeProfit)) {
+        guides.push({
+          id: `${position.id}-tp`,
+          label: `${labelPrefix}TP`,
+          price: position.takeProfit,
+          tone: "tp",
+        });
+      }
+
+      if (typeof position.stopLoss === "number" && Number.isFinite(position.stopLoss)) {
+        guides.push({
+          id: `${position.id}-sl`,
+          label: `${labelPrefix}SL`,
+          price: position.stopLoss,
+          tone: "sl",
+        });
+      }
+    });
 
     return guides;
-  }, [selectedChartPerpsPosition]);
+  }, [selectedChartPerpsPositions]);
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];

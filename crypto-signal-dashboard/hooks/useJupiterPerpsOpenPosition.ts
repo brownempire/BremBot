@@ -65,7 +65,9 @@ type OpenPerpsResult = {
 export type PerpsTpslDraft = {
   positionPubkey: string;
   tpsl: Array<{
+    entirePosition?: boolean;
     receiveToken: PerpsInputToken;
+    sizeUsdDelta?: string | null;
     triggerPrice: string;
     requestType: "tp" | "sl";
   }>;

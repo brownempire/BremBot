@@ -1120,6 +1120,34 @@ button:disabled {
   font: inherit;
 }
 
+.perps-inline-input-shell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(130, 148, 181, 0.16);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 0 12px;
+}
+
+.perps-inline-input-shell .perps-inline-input {
+  border: 0;
+  background: transparent;
+  padding: 10px 0;
+  min-height: 38px;
+}
+
+.perps-inline-input-shell .perps-inline-input:focus {
+  outline: none;
+}
+
+.perps-inline-input-prefix {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .perps-metric-status {
   font-size: 11px;
   color: var(--muted);

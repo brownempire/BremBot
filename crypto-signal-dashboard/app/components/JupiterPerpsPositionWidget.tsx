@@ -138,6 +138,11 @@ function formatPercentNumber(value: number | null, fractionDigits = 2, suffix = 
   return `${value.toFixed(fractionDigits)}${suffix}`;
 }
 
+function formatEditableUsdPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "";
+  return value.toFixed(2);
+}
+
 function getPerpsTpslReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "SOL" | "USDC" {
   if (position.collateralSymbol === "BTC" || position.collateralSymbol === "ETH" || position.collateralSymbol === "SOL") {
     return position.collateralSymbol;
@@ -414,12 +419,12 @@ function EditableTpslMetric({
   value: number | null;
 }) {
   const [isEditing, setIsEditing] = useState(false);
-  const [draftValue, setDraftValue] = useState(value === null ? "" : value.toFixed(6));
+  const [draftValue, setDraftValue] = useState(formatEditableUsdPrice(value));
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isEditing) {
-      setDraftValue(value === null ? "" : value.toFixed(6));
+      setDraftValue(formatEditableUsdPrice(value));
     }
   }, [isEditing, value]);
 
@@ -434,7 +439,7 @@ function EditableTpslMetric({
     setStatus(null);
 
     try {
-      await onSubmit(parsed.toFixed(6), requestPubkey);
+      await onSubmit(parsed.toFixed(2), requestPubkey);
       setIsEditing(false);
       setStatus(`${kind === "tp" ? "Take profit" : "Stop loss"} updated.`);
     } catch (error) {
@@ -456,13 +461,16 @@ function EditableTpslMetric({
         </>
       ) : (
         <>
-          <input
-            className="perps-inline-input"
-            inputMode="decimal"
-            value={draftValue}
-            onChange={(event) => setDraftValue(event.target.value)}
-            placeholder={kind === "tp" ? "84.00" : "81.00"}
-          />
+          <label className="perps-inline-input-shell">
+            <span className="perps-inline-input-prefix">$</span>
+            <input
+              className="perps-inline-input"
+              inputMode="decimal"
+              value={draftValue}
+              onChange={(event) => setDraftValue(event.target.value.replace(/[^0-9.]/g, ""))}
+              placeholder={kind === "tp" ? "84.00" : "81.00"}
+            />
+          </label>
           <div className="wallet-controls perps-metric-actions">
             <button type="button" disabled={disabled || isSaving} onClick={() => void handleSave()}>
               {isSaving ? "Saving..." : value === null ? "Add" : "Save"}
@@ -472,7 +480,7 @@ function EditableTpslMetric({
               className="secondary"
               disabled={isSaving}
               onClick={() => {
-                setDraftValue(value === null ? "" : value.toFixed(6));
+                setDraftValue(formatEditableUsdPrice(value));
                 setStatus(null);
                 setIsEditing(false);
               }}
@@ -995,6 +1003,7 @@ function JupiterPerpsPositionWidgetBody({
         await attachTpsl({
           positionPubkey,
           tpsl: [{
+            entirePosition: true,
             receiveToken: getPerpsTpslReceiveToken(request.position),
             requestType: request.kind,
             triggerPrice: request.triggerPrice,
