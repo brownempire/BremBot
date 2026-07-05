@@ -1085,8 +1085,10 @@ function JupiterPerpsPositionWidgetBody({
       throw new Error("Connect Jupiter Mobile before editing this TP/SL request.");
     }
 
+    const confirmedPositionPubkey = positionPubkey;
+
     clearOpenError();
-    setPendingTpslMutationKey(`${positionPubkey}:${request.kind}`);
+    setPendingTpslMutationKey(`${confirmedPositionPubkey}:${request.kind}`);
 
     const matchedTriggers = pendingTriggers.filter((trigger) => doesTriggerBelongToPosition(request.position, trigger));
     const takeProfitTrigger = matchedTriggers.find((trigger) => trigger.kind === "take-profit");
@@ -1132,7 +1134,7 @@ function JupiterPerpsPositionWidgetBody({
       }
 
       await attachTpsl({
-        positionPubkey,
+        positionPubkey: confirmedPositionPubkey,
         tpsl: desiredTpsl,
         walletAddress,
       });
@@ -1146,7 +1148,7 @@ function JupiterPerpsPositionWidgetBody({
         });
       } else if (existingRequestPubkeys.length === 0) {
         await attachTpsl({
-          positionPubkey,
+          positionPubkey: confirmedPositionPubkey,
           tpsl: [{
             entirePosition: true,
             receiveToken: getPerpsTpslReceiveToken(request.position),
