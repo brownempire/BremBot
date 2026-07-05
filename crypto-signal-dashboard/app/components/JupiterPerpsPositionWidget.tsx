@@ -72,6 +72,28 @@ function formatSignedUsd(value: number | null) {
   return `${value >= 0 ? "+" : "-"}${formatUsd(Math.abs(value))}`;
 }
 
+function estimateTriggerPnl(position: JupiterPerpsPosition, triggerPrice: number | null) {
+  if (
+    triggerPrice === null ||
+    position.entryPrice === null ||
+    position.positionSize === null ||
+    !Number.isFinite(triggerPrice) ||
+    !Number.isFinite(position.entryPrice) ||
+    !Number.isFinite(position.positionSize)
+  ) {
+    return null;
+  }
+
+  const priceDelta = position.side === "long"
+    ? triggerPrice - position.entryPrice
+    : position.entryPrice - triggerPrice;
+
+  const estimatedPnl = priceDelta * position.positionSize;
+  return Number.isFinite(estimatedPnl) ? Number(estimatedPnl.toFixed(2)) : null;
+}
+
+const MIN_TPSL_EXPECTED_PNL_USD = 1;
+
 function formatTimestamp(timestamp: number | null) {
   if (!timestamp) return "Unavailable";
   return new Date(timestamp).toLocaleString();
@@ -408,6 +430,7 @@ function EditableTpslMetric({
   isSaving,
   kind,
   onSubmit,
+  position,
   requestPubkey,
   value,
 }: {
@@ -415,12 +438,18 @@ function EditableTpslMetric({
   isSaving: boolean;
   kind: "tp" | "sl";
   onSubmit: (nextValue: string, requestPubkey: string | null) => Promise<void>;
+  position: JupiterPerpsPosition;
   requestPubkey: string | null;
   value: number | null;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [draftValue, setDraftValue] = useState(formatEditableUsdPrice(value));
   const [status, setStatus] = useState<string | null>(null);
+  const parsedDraftValue = Number(draftValue.trim());
+  const estimatedPnl = Number.isFinite(parsedDraftValue) && parsedDraftValue > 0
+    ? estimateTriggerPnl(position, parsedDraftValue)
+    : null;
+  const estimatedPnlIsTooSmall = estimatedPnl !== null && Math.abs(estimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD;
 
   useEffect(() => {
     if (!isEditing) {
@@ -433,6 +462,12 @@ function EditableTpslMetric({
     const parsed = Number(trimmed);
     if (!trimmed || !Number.isFinite(parsed) || parsed <= 0) {
       setStatus("Enter a valid trigger price above 0.");
+      return;
+    }
+
+    const nextEstimatedPnl = estimateTriggerPnl(position, parsed);
+    if (nextEstimatedPnl !== null && Math.abs(nextEstimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD) {
+      setStatus(`Expected PnL is ${formatSignedUsd(nextEstimatedPnl)}. Move the trigger farther from entry so expected PnL is at least ${formatUsd(MIN_TPSL_EXPECTED_PNL_USD)}.`);
       return;
     }
 
@@ -471,8 +506,14 @@ function EditableTpslMetric({
               placeholder={kind === "tp" ? "84.00" : "81.00"}
             />
           </label>
+          <span className={`perps-metric-status ${estimatedPnl !== null ? (estimatedPnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
+            Expected PnL: {formatSignedUsd(estimatedPnl)}
+          </span>
+          {estimatedPnlIsTooSmall ? (
+            <span className="perps-metric-status">Minimum expected PnL: {formatUsd(MIN_TPSL_EXPECTED_PNL_USD)}</span>
+          ) : null}
           <div className="wallet-controls perps-metric-actions">
-            <button type="button" disabled={disabled || isSaving} onClick={() => void handleSave()}>
+            <button type="button" disabled={disabled || isSaving || estimatedPnlIsTooSmall} onClick={() => void handleSave()}>
               {isSaving ? "Saving..." : value === null ? "Add" : "Save"}
             </button>
             <button
@@ -576,8 +617,9 @@ function PositionCard({
             positionRequestPubkey,
             triggerPrice,
           })}
+          position={position}
           requestPubkey={takeProfitTrigger?.positionRequestPubkey ?? null}
-          value={position.takeProfit}
+          value={takeProfitTrigger?.triggerPrice ?? position.takeProfit}
         />
         <EditableTpslMetric
           disabled={!canClose}
@@ -589,8 +631,9 @@ function PositionCard({
             positionRequestPubkey,
             triggerPrice,
           })}
+          position={position}
           requestPubkey={stopLossTrigger?.positionRequestPubkey ?? null}
-          value={position.stopLoss}
+          value={stopLossTrigger?.triggerPrice ?? position.stopLoss}
         />
         <PositionMetric
           label="Unrealized PnL"
