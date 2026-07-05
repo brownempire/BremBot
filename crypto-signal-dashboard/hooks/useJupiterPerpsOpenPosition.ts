@@ -90,6 +90,7 @@ type UseJupiterPerpsOpenPositionOptions = {
 
 type UseJupiterPerpsOpenPositionResult = {
   attachTpsl: (draft: PerpsTpslDraft) => Promise<AttachTpslResult>;
+  cancelTpsl: (draft: { positionRequestPubkey: string }) => Promise<{ txid: string }>;
   updateTpsl: (draft: PerpsTpslUpdateDraft) => Promise<{ txid: string }>;
   buildPreview: (draft: PerpsOrderDraft) => Promise<PerpsOrderPreview>;
   error: string | null;
@@ -118,6 +119,12 @@ type CreateTpslResponse = {
 };
 
 type UpdateTpslResponse = {
+  error?: string;
+  detail?: string;
+  serializedTxBase64?: string;
+};
+
+type CancelTpslResponse = {
   error?: string;
   detail?: string;
   serializedTxBase64?: string;
@@ -353,6 +360,73 @@ export function useJupiterPerpsOpenPosition({
     }
   }, [setTimedError, signTransaction]);
 
+  const cancelTpsl = useCallback(async ({ positionRequestPubkey }: { positionRequestPubkey: string }) => {
+    if (!signTransaction) {
+      throw new Error("A connected Jupiter wallet is required to sign the Perps TP/SL cancellation.");
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/jupiter/perps/tpsl", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ positionRequestPubkey }),
+      });
+
+      const payload = await response.json().catch(() => null) as CancelTpslResponse | null;
+      if (!response.ok || !payload) {
+        throw new Error(formatPerpsErrorMessage(payload?.error || "Unable to cancel Jupiter Perps TP/SL request.", payload?.detail));
+      }
+
+      const serializedTxBase64 = payload.serializedTxBase64?.trim();
+      if (!serializedTxBase64) {
+        throw new Error("Jupiter did not return a TP/SL cancel transaction to sign.");
+      }
+
+      const transaction = VersionedTransaction.deserialize(fromBase64(serializedTxBase64));
+      const signedTransaction = await signTransaction(transaction);
+      const signedSerializedTxBase64 = toBase64(signedTransaction.serialize());
+
+      const executeResponse = await fetch("/api/jupiter/perps/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "cancel-tpsl",
+          serializedTxBase64: signedSerializedTxBase64,
+        }),
+      });
+
+      const executePayload = await executeResponse.json().catch(() => null) as ExecuteSignedTransactionResponse | null;
+      if (!executeResponse.ok) {
+        throw new Error(
+          formatPerpsErrorMessage(
+            executePayload?.error || "Jupiter could not execute the signed TP/SL cancellation.",
+            executePayload?.detail
+          )
+        );
+      }
+
+      const txid = executePayload?.txid?.trim();
+      if (!txid) {
+        throw new Error("Jupiter did not return a TP/SL cancel transaction signature.");
+      }
+
+      return { txid };
+    } catch (cancelError) {
+      const message = cancelError instanceof Error ? cancelError.message : "Unable to cancel Jupiter Perps TP/SL.";
+      setTimedError(message);
+      throw cancelError;
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [setTimedError, signTransaction]);
+
   const openPosition = useCallback(async (draft: PerpsOrderDraft) => {
     if (!signTransaction) {
       throw new Error("A connected Jupiter wallet is required to sign the Perps order.");
@@ -412,6 +486,7 @@ export function useJupiterPerpsOpenPosition({
 
   return {
     attachTpsl,
+    cancelTpsl,
     updateTpsl,
     buildPreview,
     error,

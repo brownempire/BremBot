@@ -119,3 +119,33 @@ export async function PATCH(request: NextRequest) {
     );
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  const payload = await request.json().catch(() => null) as { positionRequestPubkey?: string } | null;
+  const positionRequestPubkey = payload?.positionRequestPubkey?.trim();
+
+  if (!positionRequestPubkey) {
+    return Response.json({ error: "Missing TP/SL request reference." }, { status: 400 });
+  }
+
+  try {
+    const response = await perps.trading.cancelTpsl({
+      positionRequestPubkey,
+    });
+
+    return Response.json(response);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to cancel the Jupiter Perps TP/SL request right now.";
+    console.error("[Perps TP/SL Cancel Error]", {
+      positionRequestPubkey,
+      message,
+    });
+    return Response.json(
+      {
+        error: "Jupiter Perps could not cancel the TP/SL request right now.",
+        detail: message,
+      },
+      { status: 500 }
+    );
+  }
+}

@@ -565,7 +565,7 @@ function EditableTpslMetric({
           ) : null}
           <div className="wallet-controls perps-metric-actions">
             <button type="button" disabled={disabled || isSaving || estimatedPnlIsTooSmall} onClick={() => void handleSave()}>
-              {isSaving ? "Saving..." : value === null ? "Add" : "Save"}
+              {isSaving ? "Saving..." : "Save"}
             </button>
             <button
               type="button"
@@ -834,6 +834,7 @@ function JupiterPerpsPositionWidgetBody({
   const {
     attachTpsl,
     buildPreview,
+    cancelTpsl,
     clearError: clearOpenError,
     error: openError,
     isPreviewing,
@@ -1087,13 +1088,63 @@ function JupiterPerpsPositionWidgetBody({
     clearOpenError();
     setPendingTpslMutationKey(`${positionPubkey}:${request.kind}`);
 
+    const matchedTriggers = pendingTriggers.filter((trigger) => doesTriggerBelongToPosition(request.position, trigger));
+    const takeProfitTrigger = matchedTriggers.find((trigger) => trigger.kind === "take-profit");
+    const stopLossTrigger = matchedTriggers.find((trigger) => trigger.kind === "stop-loss");
+    const desiredTakeProfitPrice =
+      request.kind === "tp"
+        ? request.triggerPrice
+        : (takeProfitTrigger?.triggerPrice ?? request.position.takeProfit)?.toFixed(2) ?? null;
+    const desiredStopLossPrice =
+      request.kind === "sl"
+        ? request.triggerPrice
+        : (stopLossTrigger?.triggerPrice ?? request.position.stopLoss)?.toFixed(2) ?? null;
+    const desiredTpsl = [
+      ...(desiredTakeProfitPrice
+        ? [{
+            entirePosition: true,
+            receiveToken: getPerpsTpslReceiveToken(request.position),
+            requestType: "tp" as const,
+            triggerPrice: desiredTakeProfitPrice,
+          }]
+        : []),
+      ...(desiredStopLossPrice
+        ? [{
+            entirePosition: true,
+            receiveToken: getPerpsTpslReceiveToken(request.position),
+            requestType: "sl" as const,
+            triggerPrice: desiredStopLossPrice,
+          }]
+        : []),
+    ];
+    const existingRequestPubkeys = [...new Set(
+      matchedTriggers
+        .map((trigger) => trigger.positionRequestPubkey?.trim() ?? "")
+        .filter((pubkey) => pubkey.length > 0)
+    )];
+    let usedRebuildPath = false;
+
+    async function rebuildTpsl() {
+      usedRebuildPath = true;
+
+      for (const existingRequestPubkey of existingRequestPubkeys) {
+        await cancelTpsl({ positionRequestPubkey: existingRequestPubkey });
+      }
+
+      await attachTpsl({
+        positionPubkey,
+        tpsl: desiredTpsl,
+        walletAddress,
+      });
+    }
+
     try {
       if (request.positionRequestPubkey) {
         await updateTpsl({
           positionRequestPubkey: request.positionRequestPubkey,
           triggerPrice: request.triggerPrice,
         });
-      } else {
+      } else if (existingRequestPubkeys.length === 0) {
         await attachTpsl({
           positionPubkey,
           tpsl: [{
@@ -1104,10 +1155,17 @@ function JupiterPerpsPositionWidgetBody({
           }],
           walletAddress,
         });
+      } else {
+        await rebuildTpsl();
+      }
+    } catch (error) {
+      if (usedRebuildPath || existingRequestPubkeys.length === 0 || desiredTpsl.length === 0) {
+        throw error;
       }
 
-      await refetch();
+      await rebuildTpsl();
     } finally {
+      await refetch();
       setPendingTpslMutationKey(null);
     }
   }
