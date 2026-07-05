@@ -3109,7 +3109,8 @@ function DashboardPage() {
               <select
                 value={autoTradeSettings.perpsExecutionMode}
                 onChange={(event) => {
-                  const perpsExecutionMode = event.target.value === "smart-trades" ? "smart-trades" : "set-parameters";
+                  const perpsExecutionMode: PerpsExecutionMode =
+                    event.target.value === "smart-trades" ? "smart-trades" : "set-parameters";
                   const next = { ...autoTradeSettings, perpsExecutionMode };
                   persistAutoTradeSettings(next);
                 }}
