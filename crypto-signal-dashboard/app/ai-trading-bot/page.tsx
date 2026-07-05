@@ -1,5 +1,30 @@
-const officeUrl = process.env.CLAW3D_OFFICE_URL?.trim() ?? "";
-const officeHost = officeUrl ? new URL(officeUrl).host : "tailnet office URL not configured";
+function readOfficeConfig() {
+  const rawOfficeUrl = process.env.CLAW3D_OFFICE_URL?.trim() ?? "";
+  if (!rawOfficeUrl) {
+    return {
+      officeUrl: "",
+      officeHost: "tailnet office URL not configured",
+      officeConfigWarning: "",
+    };
+  }
+
+  try {
+    const parsedUrl = new URL(rawOfficeUrl);
+    return {
+      officeUrl: parsedUrl.toString(),
+      officeHost: parsedUrl.host,
+      officeConfigWarning: "",
+    };
+  } catch {
+    return {
+      officeUrl: "",
+      officeHost: "tailnet office URL not configured",
+      officeConfigWarning: "CLAW3D_OFFICE_URL is set but is not a valid URL.",
+    };
+  }
+}
+
+const { officeUrl, officeHost, officeConfigWarning } = readOfficeConfig();
 
 const agents = [
   {
@@ -63,8 +88,12 @@ export default function AiTradingBotPage() {
             </>
           ) : (
             <div className="war-room-warning">
-              Set <code>CLAW3D_OFFICE_URL</code> to your tailnet-accessible Claw3D office URL to
-              enable embed + launch.
+              {officeConfigWarning || (
+                <>
+                  Set <code>CLAW3D_OFFICE_URL</code> to your tailnet-accessible Claw3D office URL to
+                  enable embed + launch.
+                </>
+              )}
             </div>
           )}
         </div>
@@ -132,9 +161,13 @@ export default function AiTradingBotPage() {
             <div className="war-room-empty-state">
               <h3>Office embed not configured yet</h3>
               <p>
-                Once you expose Claw3D on your tailnet, set <code>CLAW3D_OFFICE_URL</code> to
-                something like <code>https://your-tailnet-host/office</code> and this tab will load
-                it directly.
+                {officeConfigWarning || (
+                  <>
+                    Once you expose Claw3D on your tailnet, set <code>CLAW3D_OFFICE_URL</code> to
+                    something like <code>https://your-tailnet-host/office</code> and this tab will load
+                    it directly.
+                  </>
+                )}
               </p>
             </div>
           )}
