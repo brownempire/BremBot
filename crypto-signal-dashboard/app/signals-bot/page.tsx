@@ -320,25 +320,25 @@ function deriveSmartPerpsTradePlan(options: {
     leverageCapMultiplier: number;
   }> = {
     conservative: {
-      collateralBase: 0.58,
-      leverageBase: 0.62,
-      defaultTp: 1.4,
-      defaultSl: 0.85,
-      leverageCapMultiplier: 0.8,
+      collateralBase: 0.4,
+      leverageBase: 0.3,
+      defaultTp: 0.9,
+      defaultSl: 1.5,
+      leverageCapMultiplier: 0.45,
     },
     balanced: {
-      collateralBase: 0.82,
-      leverageBase: 0.9,
-      defaultTp: 1.15,
-      defaultSl: 0.75,
-      leverageCapMultiplier: 1.05,
+      collateralBase: 0.65,
+      leverageBase: 0.5,
+      defaultTp: 1.5,
+      defaultSl: 3.5,
+      leverageCapMultiplier: 0.65,
     },
     aggressive: {
-      collateralBase: 1.0,
-      leverageBase: 1.08,
-      defaultTp: 0.95,
-      defaultSl: 0.65,
-      leverageCapMultiplier: 1.35,
+      collateralBase: 0.8,
+      leverageBase: 1.35,
+      defaultTp: 3,
+      defaultSl: 7,
+      leverageCapMultiplier: 2,
     },
   };
 
