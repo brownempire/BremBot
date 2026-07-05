@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
+import { PushNotifications } from "@capacitor/push-notifications";
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import bs58 from "bs58";
@@ -547,6 +548,7 @@ function DashboardPage() {
   const [pushReady, setPushReady] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [subscription, setSubscription] = useState<PushSubscriptionJSON | null>(null);
+  const [nativePushToken, setNativePushToken] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [activeApprovalStatus, setActiveApprovalStatus] = useState<string | null>(null);
 
@@ -736,7 +738,7 @@ function DashboardPage() {
     url: string;
     walletAddress?: string | null;
   }) => {
-    if (!pushEnabled || nativeShell) return;
+    if (!pushEnabled) return;
 
     await fetch("/api/push/notify", {
       method: "POST",
@@ -744,9 +746,10 @@ function DashboardPage() {
       body: JSON.stringify({
         ...payload,
         subscription,
+        nativeToken: nativePushToken,
       }),
     }).catch(() => undefined);
-  }, [nativeShell, pushEnabled, subscription]);
+  }, [nativePushToken, pushEnabled, subscription]);
 
   const createPerpsApproval = useCallback(async (input: {
     signal: Signal;
@@ -1407,14 +1410,17 @@ function DashboardPage() {
 
       async function initNativeNotifications() {
         try {
-          const permission = await LocalNotifications.checkPermissions();
+          const [localPermission, pushPermission] = await Promise.all([
+            LocalNotifications.checkPermissions(),
+            PushNotifications.checkPermissions(),
+          ]);
           if (cancelled) return;
           const enabledPreference = readNativeAlertsEnabled();
           setPushReady(true);
-          if (permission.display === "granted" && enabledPreference) {
+          if (localPermission.display === "granted" && pushPermission.receive === "granted" && enabledPreference) {
             setPushEnabled(true);
-            setPushStatus("Native alerts enabled");
-          } else if (permission.display === "granted") {
+            setPushStatus(nativePushToken ? "Native alerts enabled" : "Native alerts enabled, waiting for APNs token");
+          } else if (localPermission.display === "granted" || pushPermission.receive === "granted") {
             setPushEnabled(false);
             setPushStatus("Native alerts available");
           } else {
@@ -1462,32 +1468,67 @@ function DashboardPage() {
       .catch(() => {
         setPushStatus("Service worker registration failed");
       });
-  }, [nativeShell]);
+  }, [nativePushToken, nativeShell]);
 
   useEffect(() => {
     if (!nativeShell) return;
 
     let removed = false;
-    let handle: { remove: () => Promise<void> } | null = null;
+    const handles: Array<{ remove: () => Promise<void> }> = [];
 
-    LocalNotifications.addListener("localNotificationActionPerformed", (event) => {
+    const registerListener = async (
+      promise: Promise<{ remove: () => Promise<void> }>
+    ) => {
+      try {
+        const handle = await promise;
+        if (removed) {
+          await handle.remove();
+          return;
+        }
+        handles.push(handle);
+      } catch {
+        // Ignore listener registration failures.
+      }
+    };
+
+    void registerListener(LocalNotifications.addListener("localNotificationActionPerformed", (event) => {
       const nextUrl = typeof event.notification.extra?.url === "string"
         ? event.notification.extra.url
         : "";
       if (nextUrl) {
         navigateToNotificationUrl(nextUrl);
       }
-    }).then((listener) => {
-      if (removed) {
-        void listener.remove();
-        return;
+    }));
+
+    void registerListener(PushNotifications.addListener("registration", (token) => {
+      setNativePushToken(token.value);
+      setPushStatus("Native push token ready");
+    }));
+
+    void registerListener(PushNotifications.addListener("registrationError", (error) => {
+      setPushStatus(error.error ?? "APNs registration failed");
+    }));
+
+    void registerListener(PushNotifications.addListener("pushNotificationActionPerformed", (event) => {
+      const nextUrl = typeof event.notification.data?.url === "string"
+        ? event.notification.data.url
+        : "";
+      if (nextUrl) {
+        navigateToNotificationUrl(nextUrl);
       }
-      handle = listener;
-    }).catch(() => undefined);
+    }));
+
+    void registerListener(PushNotifications.addListener("pushNotificationReceived", (event) => {
+      if (typeof event.notification.title === "string") {
+        setPushStatus(`Push received: ${event.notification.title}`);
+      }
+    }));
 
     return () => {
       removed = true;
-      void handle?.remove();
+      handles.forEach((handle) => {
+        void handle.remove();
+      });
     };
   }, [nativeShell]);
 
@@ -1513,6 +1554,19 @@ function DashboardPage() {
       }),
     }).catch(() => undefined);
   }, [nativeShell, subscription, walletAddress]);
+
+  useEffect(() => {
+    if (!nativeShell || !nativePushToken) return;
+
+    fetch("/api/push/native/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        token: nativePushToken,
+        walletAddress,
+      }),
+    }).catch(() => undefined);
+  }, [nativePushToken, nativeShell, walletAddress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2445,16 +2499,20 @@ function DashboardPage() {
     if (!pushReady) return;
     if (nativeShell) {
       try {
-        const permission = await LocalNotifications.requestPermissions();
-        if (permission.display !== "granted") {
+        const [localPermission, pushPermission] = await Promise.all([
+          LocalNotifications.requestPermissions(),
+          PushNotifications.requestPermissions(),
+        ]);
+        if (localPermission.display !== "granted" || pushPermission.receive !== "granted") {
           writeNativeAlertsEnabled(false);
           setPushEnabled(false);
           setPushStatus("Native alerts disabled");
           return;
         }
+        await PushNotifications.register();
         writeNativeAlertsEnabled(true);
         setPushEnabled(true);
-        setPushStatus("Native alerts enabled");
+        setPushStatus("Native alerts enabled, registering APNs token...");
       } catch (error) {
         setPushStatus(error instanceof Error ? error.message : "Native alerts could not be enabled");
       }
@@ -2493,7 +2551,12 @@ function DashboardPage() {
       const response = await fetch("/api/push/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(subscriptionJson),
+        body: JSON.stringify({
+          ...subscriptionJson,
+          walletAddress,
+          nativeShell: false,
+          platform: "web",
+        }),
       });
 
       const payload = await response.json().catch(() => null);
@@ -2513,6 +2576,14 @@ function DashboardPage() {
   async function disablePush() {
     if (nativeShell) {
       writeNativeAlertsEnabled(false);
+      if (nativePushToken) {
+        await fetch("/api/push/native/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: nativePushToken }),
+        }).catch(() => undefined);
+      }
+      setNativePushToken(null);
       setPushEnabled(false);
       setPushStatus("Native alerts disabled");
       return;
@@ -2554,19 +2625,27 @@ function DashboardPage() {
         setPushStatus("Enable native alerts first");
         return;
       }
+      if (!nativePushToken) {
+        setPushStatus("Waiting for APNs device token");
+        return;
+      }
       try {
-        await LocalNotifications.schedule({
-          notifications: [
-            {
-              id: Date.now() % 2147483000,
-              title: "BremLogic",
-              body: "Test notification from your native Signals Bot app.",
-            },
-          ],
+        const response = await fetch("/api/push/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nativeToken: nativePushToken,
+            walletAddress,
+          }),
         });
-        setPushStatus("Native test alert sent");
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          setPushStatus(payload?.error ?? "Native push test failed");
+          return;
+        }
+        setPushStatus("Native test push sent");
       } catch (error) {
-        setPushStatus(error instanceof Error ? error.message : "Native test alert failed");
+        setPushStatus(error instanceof Error ? error.message : "Native push test failed");
       }
       return;
     }
@@ -2581,7 +2660,7 @@ function DashboardPage() {
       const response = await fetch("/api/push/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subscription }),
+        body: JSON.stringify({ subscription, walletAddress }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {

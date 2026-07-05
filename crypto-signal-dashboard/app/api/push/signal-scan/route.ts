@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { detectSignals, type UserParams } from "@/lib/signal/engine";
-import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
+import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
 import { getRedisClient } from "@/lib/server/redis";
 
 type ScanPoint = { t: number; v: number };
@@ -104,14 +104,9 @@ export async function GET(request: Request) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
-  const configError = getPushConfigError();
+  const configError = getAnyPushConfigError();
   if (configError) {
     return new Response(JSON.stringify({ error: configError }), { status: 400 });
-  }
-
-  const subscriptions = await getTargetSubscriptions();
-  if (subscriptions.length === 0) {
-    return new Response(JSON.stringify({ ok: true, sent: 0, reason: "No subscriptions" }));
   }
 
   const state = await loadState();
@@ -157,7 +152,7 @@ export async function GET(request: Request) {
   }
 
   const sendResults = await Promise.all(
-    notifications.map((payload) => sendPushPayload(subscriptions, payload))
+    notifications.map((payload) => sendNotificationPayload(payload))
   );
   const sent = sendResults.reduce((sum, result) => sum + result.sent, 0);
 

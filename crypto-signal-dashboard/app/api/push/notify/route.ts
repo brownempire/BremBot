@@ -1,7 +1,7 @@
-import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
+import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
 
 export async function POST(request: Request) {
-  const configError = getPushConfigError();
+  const configError = getAnyPushConfigError();
   if (configError) {
     return new Response(
       JSON.stringify({ error: configError }),
@@ -16,23 +16,19 @@ export async function POST(request: Request) {
     url: body?.url ?? "/",
   };
 
-  const subs = await getTargetSubscriptions({
+  const result = await sendNotificationPayload({
+    title: payload.title,
+    body: payload.body,
+    url: payload.url,
     subscription: body?.subscription ?? null,
     walletAddress: typeof body?.walletAddress === "string" ? body.walletAddress : null,
+    nativeToken: typeof body?.nativeToken === "string" ? body.nativeToken : null,
   });
-  if (subs.length === 0) {
+  if (result.sent === 0) {
     return new Response(JSON.stringify({ error: "No push subscriptions found. Enable push first." }), {
       status: 400,
     });
   }
 
-  const { sent, results } = await sendPushPayload(subs, payload);
-  if (sent === 0) {
-    return new Response(
-      JSON.stringify({ error: "Failed to send push to active subscription(s).", results }),
-      { status: 500 }
-    );
-  }
-
-  return new Response(JSON.stringify({ ok: true, sent, results }));
+  return new Response(JSON.stringify({ ok: true, sent: result.sent, web: result.web, native: result.native }));
 }

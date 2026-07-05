@@ -1,7 +1,8 @@
 import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPendingTrigger, type JupiterPerpsPosition, type JupiterPerpsTrade } from "@/lib/jupiterPerps";
-import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
 import { listSubscribedWalletAddresses } from "@/lib/push/store";
 import { getPerpsWatchState, savePerpsWatchState } from "@/lib/perpsWatchStore";
+import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
+import { listNativePushDevices } from "@/lib/push/nativeStore";
 
 export const dynamic = "force-dynamic";
 
@@ -45,18 +46,21 @@ export async function GET(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const configError = getPushConfigError();
+  const configError = getAnyPushConfigError();
   if (configError) {
     return Response.json({ error: configError }, { status: 400 });
   }
 
-  const walletAddresses = await listSubscribedWalletAddresses();
+  const nativeWallets = await listNativePushDevices();
+  const walletAddresses = [...new Set([
+    ...(await listSubscribedWalletAddresses()),
+    ...nativeWallets
+      .map((device) => device.walletAddress?.trim())
+      .filter((walletAddress): walletAddress is string => Boolean(walletAddress)),
+  ])];
   const notifications: Array<{ walletAddress: string; title: string; body: string; url: string }> = [];
 
   for (const walletAddress of walletAddresses) {
-    const subscriptions = await getTargetSubscriptions({ walletAddress });
-    if (subscriptions.length === 0) continue;
-
     const previousState = await getPerpsWatchState(walletAddress);
     const snapshot = await fetchJupiterPerpsAccountSnapshot(walletAddress).catch(() => null);
     if (!snapshot) continue;
@@ -95,14 +99,7 @@ export async function GET(request: Request) {
   }
 
   const results = await Promise.all(
-    notifications.map(async (notification) => {
-      const subscriptions = await getTargetSubscriptions({ walletAddress: notification.walletAddress });
-      return sendPushPayload(subscriptions, {
-        title: notification.title,
-        body: notification.body,
-        url: notification.url,
-      });
-    })
+    notifications.map((notification) => sendNotificationPayload(notification))
   );
 
   return Response.json({

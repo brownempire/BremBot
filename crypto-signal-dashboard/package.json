@@ -22,6 +22,7 @@
     "@capacitor/core": "^8.4.1",
     "@capacitor/ios": "^8.4.1",
     "@capacitor/local-notifications": "^8.2.0",
+    "@capacitor/push-notifications": "^8.1.1",
     "@capacitor/status-bar": "^8.0.2",
     "@jup-ag/jup-mobile-adapter": "^0.0.2",
     "@jup-ag/plugin": "^1.0.13",

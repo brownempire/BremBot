@@ -5,9 +5,13 @@ const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? process.env.NEXT_PUBLIC
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT ?? "mailto:dev@example.com";
 
-export function getPushConfigError() {
+export function getWebPushConfigError() {
   if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return "Missing VAPID keys";
   return null;
+}
+
+export function hasWebPushConfig() {
+  return !getWebPushConfigError();
 }
 
 function setupWebPush() {

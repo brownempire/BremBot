@@ -1,7 +1,7 @@
-import { getPushConfigError, getTargetSubscriptions, sendPushPayload } from "@/lib/push/sender";
+import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
 
 export async function POST(request: Request) {
-  const configError = getPushConfigError();
+  const configError = getAnyPushConfigError();
   if (configError) {
     return new Response(
       JSON.stringify({ error: configError }),
@@ -15,27 +15,24 @@ export async function POST(request: Request) {
   } catch {
     body = null;
   }
-
-  const subs = await getTargetSubscriptions({ subscription: body?.subscription ?? null });
-  if (subs.length === 0) {
-    return new Response(
-      JSON.stringify({ error: "No push subscriptions found. Enable push first." }),
-      { status: 400 }
-    );
-  }
-
-  const payload = {
+  const result = await sendNotificationPayload({
     title: "BremLogic",
     body: "Test push notification from your signal desk.",
-    url: "/",
-  };
-  const { sent, results } = await sendPushPayload(subs, payload);
-  if (sent === 0) {
+    url: "/signals-bot",
+    subscription: body?.subscription ?? null,
+    walletAddress: typeof (body as { walletAddress?: string } | null)?.walletAddress === "string"
+      ? (body as { walletAddress?: string }).walletAddress ?? null
+      : null,
+    nativeToken: typeof (body as { nativeToken?: string } | null)?.nativeToken === "string"
+      ? (body as { nativeToken?: string }).nativeToken ?? null
+      : null,
+  });
+  if (result.sent === 0) {
     return new Response(
-      JSON.stringify({ error: "Failed to send push to active subscription(s).", results }),
+      JSON.stringify({ error: "Failed to send push to active subscription(s)." }),
       { status: 500 }
     );
   }
 
-  return new Response(JSON.stringify({ ok: true, sent, results }));
+  return new Response(JSON.stringify({ ok: true, sent: result.sent, web: result.web, native: result.native }));
 }
