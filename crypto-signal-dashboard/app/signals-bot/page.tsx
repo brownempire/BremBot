@@ -3125,7 +3125,7 @@ function DashboardPage() {
                 <select
                   value={autoTradeSettings.smartTradeProfile}
                   onChange={(event) => {
-                    const smartTradeProfile =
+                    const smartTradeProfile: SmartTradeProfile =
                       event.target.value === "conservative" || event.target.value === "aggressive"
                         ? event.target.value
                         : "balanced";
