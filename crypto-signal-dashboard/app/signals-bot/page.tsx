@@ -317,28 +317,28 @@ function deriveSmartPerpsTradePlan(options: {
     leverageBase: number;
     defaultTp: number;
     defaultSl: number;
-    leverageCap: number;
+    leverageCapMultiplier: number;
   }> = {
     conservative: {
       collateralBase: 0.58,
       leverageBase: 0.62,
       defaultTp: 1.4,
       defaultSl: 0.85,
-      leverageCap: 8,
+      leverageCapMultiplier: 0.8,
     },
     balanced: {
       collateralBase: 0.82,
       leverageBase: 0.9,
       defaultTp: 1.15,
       defaultSl: 0.75,
-      leverageCap: 15,
+      leverageCapMultiplier: 1.05,
     },
     aggressive: {
       collateralBase: 1.0,
       leverageBase: 1.08,
       defaultTp: 0.95,
       defaultSl: 0.65,
-      leverageCap: 25,
+      leverageCapMultiplier: 1.35,
     },
   };
 
@@ -351,7 +351,7 @@ function deriveSmartPerpsTradePlan(options: {
   const leverage = clampNumber(
     options.settings.perpsLeverage * (profileConfig.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
     1,
-    Math.min(250, Math.max(profileConfig.leverageCap, options.settings.perpsLeverage))
+    Math.min(250, Math.max(1, options.settings.perpsLeverage * profileConfig.leverageCapMultiplier))
   );
   const baseTp = options.settings.takeProfitPercent > 0 ? options.settings.takeProfitPercent : profileConfig.defaultTp;
   const baseSl = options.settings.stopLossPercent > 0 ? options.settings.stopLossPercent : profileConfig.defaultSl;
