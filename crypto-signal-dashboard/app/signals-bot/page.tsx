@@ -435,6 +435,13 @@ function writeNativeAlertsEnabled(enabled: boolean) {
   window.localStorage.setItem(NATIVE_ALERTS_ENABLED_STORAGE_KEY, enabled ? "true" : "false");
 }
 
+function getNativePushPluginStatus() {
+  return {
+    hasLocalNotifications: Capacitor.isPluginAvailable("LocalNotifications"),
+    hasPushNotifications: Capacitor.isPluginAvailable("PushNotifications"),
+  };
+}
+
 function navigateToNotificationUrl(url: string) {
   if (typeof window === "undefined" || !url) return;
   if (/^https?:\/\//i.test(url)) {
@@ -1409,14 +1416,28 @@ function DashboardPage() {
       let cancelled = false;
 
       async function initNativeNotifications() {
+        const { hasLocalNotifications, hasPushNotifications } = getNativePushPluginStatus();
+        if (!hasLocalNotifications) {
+          if (!cancelled) {
+            setPushReady(false);
+            setPushStatus("Native notifications plugin missing in this app build");
+          }
+          return;
+        }
+
         try {
-          const [localPermission, pushPermission] = await Promise.all([
-            LocalNotifications.checkPermissions(),
-            PushNotifications.checkPermissions(),
-          ]);
+          const localPermission = await LocalNotifications.checkPermissions();
+          const pushPermission = hasPushNotifications
+            ? await PushNotifications.checkPermissions()
+            : { receive: "prompt" as const };
           if (cancelled) return;
           const enabledPreference = readNativeAlertsEnabled();
           setPushReady(true);
+          if (!hasPushNotifications) {
+            setPushEnabled(localPermission.display === "granted" && enabledPreference);
+            setPushStatus("This installed iPhone app needs a rebuild/reinstall to add APNs push support");
+            return;
+          }
           if (localPermission.display === "granted" && pushPermission.receive === "granted" && enabledPreference) {
             setPushEnabled(true);
             setPushStatus(nativePushToken ? "Native alerts enabled" : "Native alerts enabled, waiting for APNs token");
@@ -1427,10 +1448,10 @@ function DashboardPage() {
             setPushEnabled(false);
             setPushStatus("Native alerts disabled");
           }
-        } catch {
+        } catch (error) {
           if (cancelled) return;
           setPushReady(false);
-          setPushStatus("Native notifications unavailable");
+          setPushStatus(error instanceof Error && error.message ? error.message : "Native notifications unavailable");
         }
       }
 
@@ -2498,15 +2519,32 @@ function DashboardPage() {
   async function enablePush() {
     if (!pushReady) return;
     if (nativeShell) {
+      const { hasLocalNotifications, hasPushNotifications } = getNativePushPluginStatus();
+      if (!hasLocalNotifications) {
+        setPushStatus("Native notifications plugin missing in this app build");
+        return;
+      }
       try {
-        const [localPermission, pushPermission] = await Promise.all([
-          LocalNotifications.requestPermissions(),
-          PushNotifications.requestPermissions(),
-        ]);
-        if (localPermission.display !== "granted" || pushPermission.receive !== "granted") {
+        const localPermission = await LocalNotifications.requestPermissions();
+        const pushPermission = hasPushNotifications
+          ? await PushNotifications.requestPermissions()
+          : { receive: "prompt" as const };
+        if (localPermission.display !== "granted") {
           writeNativeAlertsEnabled(false);
           setPushEnabled(false);
           setPushStatus("Native alerts disabled");
+          return;
+        }
+        if (!hasPushNotifications) {
+          writeNativeAlertsEnabled(true);
+          setPushEnabled(true);
+          setPushStatus("Local native alerts enabled. Reinstall the iPhone app build to add APNs push.");
+          return;
+        }
+        if (pushPermission.receive !== "granted") {
+          writeNativeAlertsEnabled(false);
+          setPushEnabled(false);
+          setPushStatus("Native push disabled");
           return;
         }
         await PushNotifications.register();
@@ -2623,6 +2661,24 @@ function DashboardPage() {
     if (nativeShell) {
       if (!pushEnabled) {
         setPushStatus("Enable native alerts first");
+        return;
+      }
+      const { hasPushNotifications } = getNativePushPluginStatus();
+      if (!hasPushNotifications) {
+        try {
+          await LocalNotifications.schedule({
+            notifications: [
+              {
+                id: Date.now() % 2147483000,
+                title: "BremLogic",
+                body: "Local native notification works. Install the rebuilt iPhone app to test APNs push.",
+              },
+            ],
+          });
+          setPushStatus("Local native test alert sent. APNs push requires the rebuilt app binary.");
+        } catch (error) {
+          setPushStatus(error instanceof Error ? error.message : "Native local test alert failed");
+        }
         return;
       }
       if (!nativePushToken) {
