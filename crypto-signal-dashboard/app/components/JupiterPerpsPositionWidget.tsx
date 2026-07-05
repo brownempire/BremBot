@@ -173,6 +173,37 @@ function getPerpsTpslReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH"
   return "USDC";
 }
 
+function validatePerpsTriggerPrice(kind: "tp" | "sl", position: JupiterPerpsPosition, triggerPrice: number) {
+  const entryPrice = position.entryPrice;
+  if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) {
+    return "Enter a valid trigger price above 0.";
+  }
+
+  if (typeof entryPrice !== "number" || !Number.isFinite(entryPrice) || entryPrice <= 0) {
+    return null;
+  }
+
+  if (position.side === "long") {
+    if (kind === "tp" && triggerPrice <= entryPrice) {
+      return `Take profit must be above the entry price of ${formatUsd(entryPrice)} for a long position.`;
+    }
+
+    if (kind === "sl" && triggerPrice >= entryPrice) {
+      return `Stop loss must be below the entry price of ${formatUsd(entryPrice)} for a long position.`;
+    }
+  } else {
+    if (kind === "tp" && triggerPrice >= entryPrice) {
+      return `Take profit must be below the entry price of ${formatUsd(entryPrice)} for a short position.`;
+    }
+
+    if (kind === "sl" && triggerPrice <= entryPrice) {
+      return `Stop loss must be above the entry price of ${formatUsd(entryPrice)} for a short position.`;
+    }
+  }
+
+  return null;
+}
+
 function NewPerpComposer({
   buildPreview,
   connected,
@@ -460,8 +491,9 @@ function EditableTpslMetric({
   async function handleSave() {
     const trimmed = draftValue.trim();
     const parsed = Number(trimmed);
-    if (!trimmed || !Number.isFinite(parsed) || parsed <= 0) {
-      setStatus("Enter a valid trigger price above 0.");
+    const validationMessage = validatePerpsTriggerPrice(kind, position, parsed);
+    if (!trimmed || validationMessage) {
+      setStatus(validationMessage ?? "Enter a valid trigger price above 0.");
       return;
     }
 
