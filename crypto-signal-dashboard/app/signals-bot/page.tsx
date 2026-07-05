@@ -781,7 +781,9 @@ function DashboardPage() {
       | null;
 
     if (!response.ok || !payload?.approval || !payload.approvalUrl) {
-      throw new Error(payload?.error ?? "Unable to create the Perps approval request.");
+      const detail = payload?.error?.trim();
+      const statusLabel = response.status ? `HTTP ${response.status}` : "request failed";
+      throw new Error(detail ? `Unable to create the Perps approval request. ${statusLabel}: ${detail}` : `Unable to create the Perps approval request. ${statusLabel}.`);
     }
 
     return {
@@ -1289,6 +1291,7 @@ function DashboardPage() {
 
               void (async () => {
                 perpsAutoTradeBusyRef.current = true;
+                let approvalRequest: PendingPerpsApprovalRequest | null = null;
 
                 try {
                   let takeProfitPrice: number | null = null;
@@ -1327,7 +1330,7 @@ function DashboardPage() {
                     }
                   }
 
-                  const approvalRequest: PendingPerpsApprovalRequest = {
+                  approvalRequest = {
                     asset: perpsAssetSymbol,
                     collateralToken: "USDC",
                     leverage: String(perpsTradePlan.leverage),
@@ -1361,6 +1364,50 @@ function DashboardPage() {
                   });
                 } catch (error: unknown) {
                   const message = error instanceof Error ? error.message : "Unable to queue Perps approval.";
+                  const shouldFallbackToDirectOpen =
+                    Boolean(jupiterPerpsController.connected && jupiterPerpsController.canWrite);
+
+                  if (shouldFallbackToDirectOpen) {
+                    try {
+                      setPerpsAutoTradeStatus(
+                        `Perps approval queue unavailable for ${signal.symbol}. Falling back to direct Jupiter Mobile approval...`
+                      );
+                      if (!approvalRequest) {
+                        throw new Error("Perps approval request was not prepared for fallback execution.");
+                      }
+                      const directResult = await jupiterPerpsController.openMarketPosition({
+                        asset: approvalRequest.asset,
+                        collateralToken: approvalRequest.collateralToken,
+                        leverage: approvalRequest.leverage,
+                        maxSlippageBps: approvalRequest.maxSlippageBps,
+                        side: approvalRequest.side,
+                        stopLossPrice: approvalRequest.stopLossPrice,
+                        takeProfitPrice: approvalRequest.takeProfitPrice,
+                        uiAmount: approvalRequest.uiAmount,
+                      });
+                      setPerpsAutoTradeStatus(
+                        `Perps auto-trade opened for ${signal.symbol} via direct Jupiter Mobile approval · ${directResult.txid.slice(0, 10)}...`
+                      );
+                      await sendSignalNotification(
+                        `Trade Filled: ${signal.symbol}`,
+                        `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
+                        "/signals-bot?tab=perps"
+                      );
+                      await sendRemotePushNotification({
+                        title: `Trade Filled: ${signal.symbol}`,
+                        body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
+                        url: "/signals-bot?tab=perps",
+                        walletAddress: perpsWalletAddress,
+                      });
+                      return;
+                    } catch (fallbackError: unknown) {
+                      const fallbackMessage =
+                        fallbackError instanceof Error ? fallbackError.message : "Direct Jupiter Mobile approval failed.";
+                      setPerpsAutoTradeFailureCooldown(signal.symbol, `${message} Fallback failed: ${fallbackMessage}`);
+                      return;
+                    }
+                  }
+
                   setPerpsAutoTradeFailureCooldown(signal.symbol, message);
                 } finally {
                   perpsAutoTradeBusyRef.current = false;
