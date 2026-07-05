@@ -76,6 +76,8 @@ type AutoTradeTokenOption = {
 };
 
 type AutoTradeMode = "all" | "buy-only";
+type PerpsExecutionMode = "set-parameters" | "smart-trades";
+type SmartTradeProfile = "conservative" | "balanced" | "aggressive";
 
 const AUTO_TRADE_TOKEN_OPTIONS: AutoTradeTokenOption[] = [
   { symbol: "SOL", label: "Solana (SOL)", mint: SOL_MINT },
@@ -96,6 +98,8 @@ type AutoTradeSettings = {
   takeProfitPercent: number;
   stopLossPercent: number;
   perpsLeverage: number;
+  perpsExecutionMode: PerpsExecutionMode;
+  smartTradeProfile: SmartTradeProfile;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
   perpsActiveSlotId: string | null;
@@ -108,6 +112,8 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   takeProfitPercent: 0,
   stopLossPercent: 0,
   perpsLeverage: 10,
+  perpsExecutionMode: "set-parameters",
+  smartTradeProfile: "balanced",
   slots: [
     { id: "auto-slot-1", token: "SOL" },
     { id: "auto-slot-2", token: "ETH" },
@@ -171,6 +177,14 @@ type PendingTakeProfit = {
   targetPrice: number;
   signalId: string;
   createdAt: number;
+};
+
+type SmartPerpsTradePlan = {
+  collateralPercent: number;
+  leverage: number;
+  stopLossPercent: number;
+  takeProfitPercent: number;
+  volatilityPercent: number;
 };
 
 type RemoteAuthChallenge = {
@@ -269,6 +283,95 @@ function deriveFeeAdjustedPerpsTriggers(options: {
     estimatedRoundTripFeesUsd,
     stopLossPrice: typeof stopLossPrice === "number" && Number.isFinite(stopLossPrice) ? stopLossPrice : null,
     takeProfitPrice: typeof takeProfitPrice === "number" && Number.isFinite(takeProfitPrice) ? takeProfitPrice : null,
+  };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function computeRecentVolatilityPercent(points: PricePoint[]) {
+  const valid = points.filter((point) => Number.isFinite(point.v) && point.v > 0);
+  if (valid.length < 2) return 0;
+  const recent = valid.slice(-Math.min(60, valid.length));
+  const values = recent.map((point) => point.v);
+  const high = Math.max(...values);
+  const low = Math.min(...values);
+  const last = recent[recent.length - 1]?.v ?? high;
+  if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(last) || last <= 0) return 0;
+  return ((high - low) / last) * 100;
+}
+
+function deriveSmartPerpsTradePlan(options: {
+  points: PricePoint[];
+  settings: AutoTradeSettings;
+  signal: Signal;
+}): SmartPerpsTradePlan {
+  const volatilityPercent = computeRecentVolatilityPercent(options.points);
+  const volatilityFactor = clampNumber(volatilityPercent / 2.5, 0, 1.35);
+  const confidenceBias = clampNumber((options.signal.confidence - 0.55) / 0.35, -0.5, 1);
+  const profile = options.settings.smartTradeProfile;
+
+  const profileSettings: Record<SmartTradeProfile, {
+    collateralBase: number;
+    leverageBase: number;
+    defaultTp: number;
+    defaultSl: number;
+    leverageCap: number;
+  }> = {
+    conservative: {
+      collateralBase: 0.58,
+      leverageBase: 0.62,
+      defaultTp: 1.4,
+      defaultSl: 0.85,
+      leverageCap: 8,
+    },
+    balanced: {
+      collateralBase: 0.82,
+      leverageBase: 0.9,
+      defaultTp: 1.15,
+      defaultSl: 0.75,
+      leverageCap: 15,
+    },
+    aggressive: {
+      collateralBase: 1.0,
+      leverageBase: 1.08,
+      defaultTp: 0.95,
+      defaultSl: 0.65,
+      leverageCap: 25,
+    },
+  };
+
+  const profileConfig = profileSettings[profile];
+  const collateralPercent = clampNumber(
+    options.settings.walletPercent * (profileConfig.collateralBase + confidenceBias * 0.18 - volatilityFactor * 0.16),
+    5,
+    100
+  );
+  const leverage = clampNumber(
+    options.settings.perpsLeverage * (profileConfig.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
+    1,
+    Math.min(250, Math.max(profileConfig.leverageCap, options.settings.perpsLeverage))
+  );
+  const baseTp = options.settings.takeProfitPercent > 0 ? options.settings.takeProfitPercent : profileConfig.defaultTp;
+  const baseSl = options.settings.stopLossPercent > 0 ? options.settings.stopLossPercent : profileConfig.defaultSl;
+  const takeProfitPercent = clampNumber(
+    baseTp * (1 + volatilityFactor * 0.28 + confidenceBias * 0.08),
+    0.2,
+    6
+  );
+  const stopLossPercent = clampNumber(
+    baseSl * (1 + volatilityFactor * 0.18 - confidenceBias * 0.06),
+    0.2,
+    5
+  );
+
+  return {
+    collateralPercent: Number(collateralPercent.toFixed(0)),
+    leverage: Number(leverage.toFixed(2)),
+    stopLossPercent: Number(stopLossPercent.toFixed(2)),
+    takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
+    volatilityPercent: Number(volatilityPercent.toFixed(2)),
   };
 }
 
@@ -528,6 +631,11 @@ function DashboardPage() {
       waitingForWallet?: boolean;
     }
   ) => {
+    const perpsModeLabel =
+      autoTradeSettings.perpsExecutionMode === "smart-trades"
+        ? `smart ${autoTradeSettings.smartTradeProfile}`
+        : "set params";
+
     if (options?.unsupported) {
       return `Perps auto-trade only supports SOL, ETH, or BTC. ${tokenSymbol} is not supported.`;
     }
@@ -537,11 +645,11 @@ function DashboardPage() {
     }
 
     if (options?.activePositionLabel) {
-      return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x) · ${options.activePositionLabel}`;
+      return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${perpsModeLabel}) · ${options.activePositionLabel}`;
     }
 
-    return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`;
-  }, [autoTradeSettings.mode, autoTradeSettings.perpsLeverage, autoTradeSettings.walletPercent]);
+    return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"}, ${perpsModeLabel})`;
+  }, [autoTradeSettings.mode, autoTradeSettings.perpsExecutionMode, autoTradeSettings.perpsLeverage, autoTradeSettings.smartTradeProfile, autoTradeSettings.walletPercent]);
 
   const setPerpsAutoTradeFailureCooldown = useCallback((tokenSymbol: string, message: string) => {
     clearPerpsAutoTradeErrorResetTimeout();
@@ -977,8 +1085,23 @@ function DashboardPage() {
                 return;
               }
 
+              const perpsTradePlan =
+                autoTradeSettings.perpsExecutionMode === "smart-trades"
+                  ? deriveSmartPerpsTradePlan({
+                      points,
+                      settings: autoTradeSettings,
+                      signal,
+                    })
+                  : {
+                      collateralPercent: autoTradeSettings.walletPercent,
+                      leverage: autoTradeSettings.perpsLeverage,
+                      stopLossPercent: autoTradeSettings.stopLossPercent,
+                      takeProfitPercent: autoTradeSettings.takeProfitPercent,
+                      volatilityPercent: computeRecentVolatilityPercent(points),
+                    };
+
               const usdcBalance = walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0;
-              const collateralAmount = Number((usdcBalance * (autoTradeSettings.walletPercent / 100)).toFixed(6));
+              const collateralAmount = Number((usdcBalance * (perpsTradePlan.collateralPercent / 100)).toFixed(6));
               if (!Number.isFinite(collateralAmount) || collateralAmount <= 0) {
                 setPerpsAutoTradeStatus(`Perps signal detected for ${signal.symbol} but no USDC collateral is available`);
                 return;
@@ -994,7 +1117,7 @@ function DashboardPage() {
               }) => jupiterPerpsController.openMarketPosition({
                 asset: perpsAssetSymbol,
                 collateralToken: "USDC",
-                leverage: String(autoTradeSettings.perpsLeverage),
+                leverage: String(perpsTradePlan.leverage),
                 maxSlippageBps: "100",
                 side: isBullSignal ? "long" : "short",
                 stopLossPrice: options?.stopLossPrice ?? stopLossPrice,
@@ -1054,7 +1177,7 @@ function DashboardPage() {
                       preview = await jupiterPerpsController.previewMarketPosition({
                         asset: perpsAssetSymbol,
                         collateralToken: "USDC",
-                        leverage: String(autoTradeSettings.perpsLeverage),
+                        leverage: String(perpsTradePlan.leverage),
                         maxSlippageBps: "100",
                         side: isBullSignal ? "long" : "short",
                         uiAmount: collateralAmount,
@@ -1069,8 +1192,8 @@ function DashboardPage() {
                     }
 
                     const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
-                      desiredStopLossPercent: autoTradeSettings.stopLossPercent,
-                      desiredTakeProfitPercent: autoTradeSettings.takeProfitPercent,
+                      desiredStopLossPercent: perpsTradePlan.stopLossPercent,
+                      desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
                       fallbackEntryPrice: marketEntryPrice,
                       preview,
                     });
@@ -1089,7 +1212,7 @@ function DashboardPage() {
                     setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol));
                   }, PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS);
                   setPerpsAutoTradeStatus(
-                    `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${autoTradeSettings.perpsLeverage}x)`
+                    `Executing Perps auto-trade for ${signal.symbol}: ${isBullSignal ? "long" : "short"} ${activePerpsAutoTradeToken.symbol} (${collateralAmount} USDC at ${perpsTradePlan.leverage}x${autoTradeSettings.perpsExecutionMode === "smart-trades" ? ` · smart ${autoTradeSettings.smartTradeProfile} · vol ${perpsTradePlan.volatilityPercent}%` : ""})`
                   );
 
                   try {
@@ -1208,13 +1331,8 @@ function DashboardPage() {
   }, [
     activeAutoTradeToken,
     activePerpsAutoTradeToken,
-    autoTradeSettings.disableTpLock,
-    autoTradeSettings.mode,
-    autoTradeSettings.perpsLeverage,
-    autoTradeSettings.stopLossPercent,
+    autoTradeSettings,
     autoTradeEnabled,
-    autoTradeSettings.walletPercent,
-    autoTradeSettings.takeProfitPercent,
     clearPerpsAutoTradeTimeout,
     getPerpsAutoTradeReadyStatus,
     isPerpsAutoTradeFailureCooldownActive,
@@ -1367,6 +1485,11 @@ function DashboardPage() {
         ? Math.min(250, Math.max(1, Number(nextPerpsLeverage.toFixed(2))))
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
+      const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
+      const smartTradeProfile =
+        parsed.smartTradeProfile === "conservative" || parsed.smartTradeProfile === "aggressive"
+          ? parsed.smartTradeProfile
+          : "balanced";
       const disableTpLock = Boolean(parsed.disableTpLock);
       const parsedSlots = Array.isArray(parsed.slots)
         ? parsed.slots
@@ -1403,6 +1526,8 @@ function DashboardPage() {
         takeProfitPercent,
         stopLossPercent,
         perpsLeverage,
+        perpsExecutionMode,
+        smartTradeProfile,
         slots: normalizedSlots,
         activeSlotId,
         perpsActiveSlotId,
@@ -2979,11 +3104,50 @@ function DashboardPage() {
                 }}
               />
             </label>
+            <label>
+              Perps trade style
+              <select
+                value={autoTradeSettings.perpsExecutionMode}
+                onChange={(event) => {
+                  const perpsExecutionMode = event.target.value === "smart-trades" ? "smart-trades" : "set-parameters";
+                  const next = { ...autoTradeSettings, perpsExecutionMode };
+                  persistAutoTradeSettings(next);
+                }}
+              >
+                <option value="set-parameters">Set Parameter Trades</option>
+                <option value="smart-trades">Smart Trades</option>
+              </select>
+            </label>
+            {autoTradeSettings.perpsExecutionMode === "smart-trades" ? (
+              <label>
+                Smart trade profile
+                <select
+                  value={autoTradeSettings.smartTradeProfile}
+                  onChange={(event) => {
+                    const smartTradeProfile =
+                      event.target.value === "conservative" || event.target.value === "aggressive"
+                        ? event.target.value
+                        : "balanced";
+                    const next = { ...autoTradeSettings, smartTradeProfile };
+                    persistAutoTradeSettings(next);
+                  }}
+                >
+                  <option value="conservative">Conservative</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="aggressive">Aggressive</option>
+                </select>
+              </label>
+            ) : null}
           </div>
           <div className="auto-trade-selector-wrap">
             <div className="auto-trade-selector-header">
               <strong>Auto-Trade Selector</strong>
               <span className="subtext">Bull signal: buy selected token with USDC. Bear signal: sell selected token to USDC.</span>
+              <span className="subtext">
+                Perps mode: {autoTradeSettings.perpsExecutionMode === "smart-trades"
+                  ? `Smart Trades (${autoTradeSettings.smartTradeProfile}) adjusts collateral, leverage, TP, and SL from confidence and recent volatility.`
+                  : "Set Parameter Trades uses the exact wallet %, leverage, TP, and SL values set above."}
+              </span>
               {pendingTakeProfit && !autoTradeSettings.disableTpLock ? (
                 <span className="subtext">
                   TP lock active: sell {pendingTakeProfit.amount.toFixed(6)} {pendingTakeProfit.tokenSymbol} at {formatUsd(pendingTakeProfit.targetPrice)}
