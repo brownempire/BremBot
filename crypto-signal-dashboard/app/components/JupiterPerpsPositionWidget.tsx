@@ -1086,6 +1086,7 @@ function JupiterPerpsPositionWidgetBody({
     }
 
     const confirmedPositionPubkey = positionPubkey;
+    const confirmedWalletAddress = walletAddress;
 
     clearOpenError();
     setPendingTpslMutationKey(`${confirmedPositionPubkey}:${request.kind}`);
@@ -1136,7 +1137,7 @@ function JupiterPerpsPositionWidgetBody({
       await attachTpsl({
         positionPubkey: confirmedPositionPubkey,
         tpsl: desiredTpsl,
-        walletAddress,
+        walletAddress: confirmedWalletAddress,
       });
     }
 
@@ -1155,7 +1156,7 @@ function JupiterPerpsPositionWidgetBody({
             requestType: request.kind,
             triggerPrice: request.triggerPrice,
           }],
-          walletAddress,
+          walletAddress: confirmedWalletAddress,
         });
       } else {
         await rebuildTpsl();
