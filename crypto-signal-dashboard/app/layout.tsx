@@ -1,7 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { NativeShellConfigurator } from "@/app/components/NativeShellConfigurator";
-import { NativeSplashOverlay } from "@/app/components/NativeSplashOverlay";
+import { NativeSplashController } from "@/app/components/NativeSplashController";
 import { TopMenu } from "@/app/components/TopMenu";
 
 export const metadata: Metadata = {
@@ -61,9 +61,33 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var isNative=!!(window.Capacitor||window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.bridge);document.documentElement.classList.add(isNative?'native-preload-shell':'web-preload-shell');}catch(e){document.documentElement.classList.add('web-preload-shell');}})();`,
+          }}
+        />
+      </head>
       <body>
+        <div
+          id="native-boot-splash"
+          className="native-splash-overlay native-splash-overlay-boot"
+          aria-hidden="true"
+        >
+          <video
+            className="native-splash-video"
+            autoPlay
+            playsInline
+            muted
+            loop
+            preload="auto"
+          >
+            <source src="/splash/splashscreen.mp4" type="video/mp4" />
+          </video>
+          <div className="native-splash-shade" />
+        </div>
         <NativeShellConfigurator />
-        <NativeSplashOverlay />
+        <NativeSplashController />
         <TopMenu />
         {children}
       </body>

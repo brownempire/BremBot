@@ -59,6 +59,20 @@ body.native-ios-shell {
   pointer-events: none;
 }
 
+.native-splash-overlay-boot {
+  display: none;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+html.native-preload-shell .native-splash-overlay-boot {
+  display: block;
+}
+
+.native-splash-overlay-boot.is-hidden {
+  opacity: 0;
+}
+
 .native-splash-video {
   width: 100%;
   height: 100%;
