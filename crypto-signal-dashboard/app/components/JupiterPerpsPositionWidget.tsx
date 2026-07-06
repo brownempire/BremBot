@@ -121,6 +121,14 @@ function getCloseReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "
   return "USDC";
 }
 
+function isIgnorableTpslCancelError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /404|not found|missing|already (?:closed|executed|cancelled)|does not exist/i.test(error.message);
+}
+
 const PERPS_ASSET_OPTIONS = [
   { value: "SOL", label: "SOL" },
   { value: "ETH", label: "ETH" },
@@ -1131,8 +1139,23 @@ function JupiterPerpsPositionWidgetBody({
     async function rebuildTpsl() {
       usedRebuildPath = true;
 
+      const cancelFailures: Error[] = [];
       for (const existingRequestPubkey of existingRequestPubkeys) {
-        await cancelTpsl({ positionRequestPubkey: existingRequestPubkey });
+        try {
+          await cancelTpsl({ positionRequestPubkey: existingRequestPubkey });
+        } catch (error) {
+          if (!isIgnorableTpslCancelError(error)) {
+            cancelFailures.push(
+              error instanceof Error
+                ? error
+                : new Error("Unable to cancel the existing Jupiter TP/SL request.")
+            );
+          }
+        }
+      }
+
+      if (cancelFailures.length > 0) {
+        throw cancelFailures[0];
       }
 
       await attachTpsl({

@@ -4,6 +4,8 @@ import { MINTS, createPerpsClient, type Asset, type InputToken, type Side } from
 export const dynamic = "force-dynamic";
 
 const perps = createPerpsClient();
+const UPSTREAM_RETRY_MS = 750;
+const MAX_UPSTREAM_ATTEMPTS = 2;
 
 type OpenPerpsRequest = {
   asset?: Asset;
@@ -81,6 +83,36 @@ function emptyPoolInfo() {
   };
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryPerpsError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /500|internal server error|backend returned/i.test(error.message);
+}
+
+async function withPerpsRetry<T>(task: () => Promise<T>) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_UPSTREAM_ATTEMPTS; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (attempt === MAX_UPSTREAM_ATTEMPTS || !shouldRetryPerpsError(error)) {
+        throw error;
+      }
+      await wait(UPSTREAM_RETRY_MS);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Jupiter Perps request failed.");
+}
+
 export async function POST(request: NextRequest) {
   const payload = await request.json().catch(() => null) as OpenPerpsRequest | null;
 
@@ -109,7 +141,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const orderResponse = await (
+    const orderResponse = await withPerpsRetry(() => (
       orderType === "limit"
         ? perps.trading.createLimitOrder({
             asset,
@@ -134,7 +166,7 @@ export async function POST(request: NextRequest) {
               ...(stopLossPrice ? [{ receiveToken: inputToken, requestType: "sl" as const, triggerPrice: stopLossPrice }] : []),
             ],
           })
-    );
+    ));
 
     const [marketStatsResult, poolInfoResult] = await Promise.allSettled([
       perps.markets.getStats({ mint: ASSET_TO_MINT[asset] }),

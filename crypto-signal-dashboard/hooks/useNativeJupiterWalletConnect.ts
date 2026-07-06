@@ -22,7 +22,9 @@ const PENDING_CONNECT_STORAGE_KEY = "bremlogic.native.jupiter.pending-connect.v1
 const CONNECT_STARTED_MESSAGE = "Opening Jupiter Mobile...";
 const CONNECT_RESUME_MESSAGE = "Return to BremLogic after approval so the wallet session can finish attaching here.";
 const CONNECT_TIMEOUT_MESSAGE = "Jupiter Mobile connection timed out after 20 seconds. Reopen Jupiter Mobile and try again.";
+const SIGN_TIMEOUT_MESSAGE = "Jupiter Mobile approval timed out after 20 seconds. Retry the request if you still want to continue.";
 const STALE_PENDING_MS = 20 * 1000;
+const SIGN_TIMEOUT_MS = 20 * 1000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -239,7 +241,23 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
       throw new Error("The connected Jupiter Mobile session does not expose transaction signing.");
     }
 
-    return adapter.signTransaction(transaction);
+    let timeoutId = 0;
+
+    try {
+      return await Promise.race([
+        adapter.signTransaction(transaction),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            setFeedback(SIGN_TIMEOUT_MESSAGE);
+            reject(new Error(SIGN_TIMEOUT_MESSAGE));
+          }, SIGN_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    }
   }, []);
 
   useEffect(() => {

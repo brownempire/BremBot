@@ -137,6 +137,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
 
 const PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS = 60_000;
 const AUTO_TRADE_ERROR_AUTO_RESET_MS = 20_000;
+const ACTIVE_APPROVAL_TIMEOUT_MS = 20_000;
 
 type WalletTokenHolding = {
   mint: string;
@@ -633,6 +634,7 @@ function DashboardPage() {
   const wakeLockRef = useRef<{ release?: () => Promise<void> } | null>(null);
   const approvalConnectStartedRef = useRef<string | null>(null);
   const approvalExecutionStartedRef = useRef<string | null>(null);
+  const activeApprovalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -679,6 +681,26 @@ function DashboardPage() {
   const isPerpsAutoTradeFailureCooldownActive = useCallback(() => {
     return perpsAutoTradeFailureCooldownUntilRef.current > Date.now();
   }, []);
+
+  const clearActiveApprovalTimeout = useCallback(() => {
+    if (activeApprovalTimeoutRef.current) {
+      clearTimeout(activeApprovalTimeoutRef.current);
+      activeApprovalTimeoutRef.current = null;
+    }
+  }, []);
+
+  const clearActiveApprovalState = useCallback(() => {
+    clearActiveApprovalTimeout();
+    approvalConnectStartedRef.current = null;
+    approvalExecutionStartedRef.current = null;
+    setActiveApprovalId(null);
+    setActiveApprovalStatus(null);
+    if (typeof window !== "undefined") {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("approval");
+      window.history.replaceState({}, "", nextUrl.toString());
+    }
+  }, [clearActiveApprovalTimeout]);
 
   const getPerpsAutoTradeReadyStatus = useCallback((
     tokenSymbol: string,
@@ -882,12 +904,7 @@ function DashboardPage() {
           `Perps approval executed for ${approval.symbol}: ${approval.request.side === "long" ? "long" : "short"} · ${result.txid.slice(0, 10)}...`
         );
         setActiveApprovalStatus("Perps approval executed.");
-        if (typeof window !== "undefined") {
-          const nextUrl = new URL(window.location.href);
-          nextUrl.searchParams.delete("approval");
-          window.history.replaceState({}, "", nextUrl.toString());
-        }
-        setActiveApprovalId(null);
+        clearActiveApprovalState();
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : "Unable to execute approval.";
         await fetch("/api/perps/approvals", {
@@ -903,7 +920,34 @@ function DashboardPage() {
         approvalExecutionStartedRef.current = null;
       }
     })();
-  }, [activeApprovalId, jupiterPerpsController, sendRemotePushNotification, sendSignalNotification]);
+  }, [activeApprovalId, clearActiveApprovalState, jupiterPerpsController, sendRemotePushNotification, sendSignalNotification]);
+
+  useEffect(() => {
+    clearActiveApprovalTimeout();
+
+    if (!activeApprovalId) {
+      return;
+    }
+
+    activeApprovalTimeoutRef.current = setTimeout(() => {
+      const timeoutMessage = "Perps approval timed out after 20 seconds with no action.";
+      void fetch("/api/perps/approvals", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: activeApprovalId,
+          status: "cancelled",
+          failureReason: timeoutMessage,
+        }),
+      }).catch(() => undefined);
+      setPerpsAutoTradeStatus(timeoutMessage);
+      clearActiveApprovalState();
+    }, ACTIVE_APPROVAL_TIMEOUT_MS);
+
+    return () => {
+      clearActiveApprovalTimeout();
+    };
+  }, [activeApprovalId, clearActiveApprovalState, clearActiveApprovalTimeout]);
 
   useEffect(() => {
     if (wallet.connected && walletAddress && !remoteAuthSource) {

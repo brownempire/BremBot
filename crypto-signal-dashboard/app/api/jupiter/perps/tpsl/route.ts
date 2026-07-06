@@ -4,6 +4,8 @@ import { createPerpsClient, type InputToken } from "jupiter-perps-api-sdk";
 export const dynamic = "force-dynamic";
 
 const perps = createPerpsClient();
+const UPSTREAM_RETRY_MS = 750;
+const MAX_UPSTREAM_ATTEMPTS = 2;
 
 type CreateTpslRequest = {
   positionPubkey?: string;
@@ -30,6 +32,36 @@ function normalizePositiveNumberString(value: string | null | undefined) {
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return trimmed;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryPerpsError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /500|internal server error|backend returned/i.test(error.message);
+}
+
+async function withPerpsRetry<T>(task: () => Promise<T>) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_UPSTREAM_ATTEMPTS; attempt += 1) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      if (attempt === MAX_UPSTREAM_ATTEMPTS || !shouldRetryPerpsError(error)) {
+        throw error;
+      }
+      await wait(UPSTREAM_RETRY_MS);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Jupiter Perps request failed.");
 }
 
 export async function POST(request: NextRequest) {
@@ -63,11 +95,11 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const response = await perps.trading.createTpsl({
+    const response = await withPerpsRetry(() => perps.trading.createTpsl({
       walletAddress,
       positionPubkey,
       tpsl,
-    });
+    }));
 
     return Response.json(response);
   } catch (error) {
@@ -98,10 +130,10 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
-    const response = await perps.trading.updateTpsl({
+    const response = await withPerpsRetry(() => perps.trading.updateTpsl({
       positionRequestPubkey,
       triggerPrice,
-    });
+    }));
 
     return Response.json(response);
   } catch (error) {
@@ -129,9 +161,9 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const response = await perps.trading.cancelTpsl({
+    const response = await withPerpsRetry(() => perps.trading.cancelTpsl({
       positionRequestPubkey,
-    });
+    }));
 
     return Response.json(response);
   } catch (error) {
