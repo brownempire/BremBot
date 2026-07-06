@@ -43,6 +43,7 @@ export async function sendApnsPayload(
     title: string;
     body: string;
     url?: string;
+    sound?: string;
   }
 ) {
   const jwt = createJwt();
@@ -93,7 +94,7 @@ export async function sendApnsPayload(
             title: payload.title,
             body: payload.body,
           },
-          sound: "default",
+          sound: payload.sound ?? "default",
         },
         url: payload.url ?? "/signals-bot",
       }));

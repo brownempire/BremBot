@@ -35,6 +35,15 @@ const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
+const NATIVE_NOTIFICATION_SOUNDS = {
+  appOpen: "brem_open.wav",
+  signal: "brem_signal.wav",
+  approval: "brem_approval.wav",
+  tp: "brem_tp.wav",
+  sl: "brem_sl.wav",
+} as const;
+
+type NativeNotificationSound = (typeof NATIVE_NOTIFICATION_SOUNDS)[keyof typeof NATIVE_NOTIFICATION_SOUNDS];
 
 type TrackedMarket = {
   id: string;
@@ -714,7 +723,12 @@ function DashboardPage() {
     }, AUTO_TRADE_ERROR_AUTO_RESET_MS);
   }, [clearPerpsAutoTradeErrorResetTimeout, getPerpsAutoTradeReadyStatus]);
 
-  const sendSignalNotification = useCallback(async (title: string, body: string, url?: string) => {
+  const sendSignalNotification = useCallback(async (
+    title: string,
+    body: string,
+    url?: string,
+    sound: NativeNotificationSound = NATIVE_NOTIFICATION_SOUNDS.signal,
+  ) => {
     if (!pushEnabled) return;
 
     if (nativeShell) {
@@ -725,6 +739,7 @@ function DashboardPage() {
               id: Date.now() % 2147483000,
               title,
               body,
+              sound,
               extra: url ? { url } : undefined,
             },
           ],
@@ -745,6 +760,7 @@ function DashboardPage() {
     body: string;
     url: string;
     walletAddress?: string | null;
+    sound?: NativeNotificationSound;
   }) => {
     if (!pushEnabled) return;
 
@@ -852,13 +868,15 @@ function DashboardPage() {
         await sendSignalNotification(
           `Trade Filled: ${approval.symbol}`,
           `${approval.request.side === "long" ? "Long" : "Short"} executed · ${result.txid.slice(0, 10)}...`,
-          "/signals-bot?tab=perps"
+          "/signals-bot?tab=perps",
+          NATIVE_NOTIFICATION_SOUNDS.approval,
         );
         await sendRemotePushNotification({
           title: `Trade Filled: ${approval.symbol}`,
           body: `${approval.request.side === "long" ? "Long" : "Short"} executed · ${result.txid.slice(0, 10)}...`,
           url: "/signals-bot?tab=perps",
           walletAddress: approval.walletAddress,
+          sound: NATIVE_NOTIFICATION_SOUNDS.approval,
         });
         setPerpsAutoTradeStatus(
           `Perps approval executed for ${approval.symbol}: ${approval.request.side === "long" ? "long" : "short"} · ${result.txid.slice(0, 10)}...`
@@ -1096,7 +1114,7 @@ function DashboardPage() {
             if (next.some((existing) => existing.id === signal.id)) return;
             next = [signal, ...next].slice(0, 12);
 
-            void sendSignalNotification(`Signal: ${signal.symbol}`, signal.summary);
+            void sendSignalNotification(`Signal: ${signal.symbol}`, signal.summary, undefined, NATIVE_NOTIFICATION_SOUNDS.signal);
 
             if (autoTradeEnabled && activeAutoTradeToken) {
               if (autoTradeBusyRef.current) {
@@ -1194,6 +1212,7 @@ function DashboardPage() {
                       body: `Tx: ${result.txid.slice(0, 12)}... · Tap to view on-chain.`,
                       url: `https://solscan.io/tx/${result.txid}`,
                       walletAddress: activeWallet,
+                      sound: NATIVE_NOTIFICATION_SOUNDS.signal,
                     });
                   }).catch((error: unknown) => {
                     const message = error instanceof Error ? error.message : "swap failed";
@@ -1354,13 +1373,15 @@ function DashboardPage() {
                   await sendSignalNotification(
                     `Approve Trade: ${signal.symbol}`,
                     `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
-                    approvalUrl
+                    approvalUrl,
+                    NATIVE_NOTIFICATION_SOUNDS.approval,
                   );
                   await sendRemotePushNotification({
                     title: `Approve Trade: ${signal.symbol}`,
                     body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
                     url: approvalUrl,
                     walletAddress: approval.walletAddress,
+                    sound: NATIVE_NOTIFICATION_SOUNDS.approval,
                   });
                 } catch (error: unknown) {
                   const message = error instanceof Error ? error.message : "Unable to queue Perps approval.";
@@ -1391,13 +1412,15 @@ function DashboardPage() {
                       await sendSignalNotification(
                         `Trade Filled: ${signal.symbol}`,
                         `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
-                        "/signals-bot?tab=perps"
+                        "/signals-bot?tab=perps",
+                        NATIVE_NOTIFICATION_SOUNDS.approval,
                       );
                       await sendRemotePushNotification({
                         title: `Trade Filled: ${signal.symbol}`,
                         body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
                         url: "/signals-bot?tab=perps",
                         walletAddress: perpsWalletAddress,
+                        sound: NATIVE_NOTIFICATION_SOUNDS.approval,
                       });
                       return;
                     } catch (fallbackError: unknown) {
@@ -1420,6 +1443,7 @@ function DashboardPage() {
               body: signal.summary,
               url: "/signals-bot",
               walletAddress: walletAddress ?? jupiterPerpsController?.walletAddress ?? undefined,
+              sound: NATIVE_NOTIFICATION_SOUNDS.signal,
             });
           });
         }
@@ -1577,7 +1601,7 @@ function DashboardPage() {
     void registerListener(PushNotifications.addListener("registration", (token) => {
       setNativePushIssue(null);
       setNativePushToken(token.value);
-      setPushStatus("Native push token ready");
+        setPushStatus("Native push token ready");
     }));
 
     void registerListener(PushNotifications.addListener("registrationError", (error) => {
@@ -1626,6 +1650,14 @@ function DashboardPage() {
     setActiveApprovalId(approvalId);
     setActiveApprovalStatus("Opening approval request...");
   }, []);
+
+  useEffect(() => {
+    if (!nativeShell || typeof window === "undefined") return;
+
+    const audio = new Audio(`/sounds/${NATIVE_NOTIFICATION_SOUNDS.appOpen}`);
+    audio.volume = 1;
+    void audio.play().catch(() => undefined);
+  }, [nativeShell]);
 
   useEffect(() => {
     if (!subscription?.endpoint || nativeShell) return;
@@ -2091,6 +2123,19 @@ function DashboardPage() {
       setPendingTakeProfit(null);
       pendingTakeProfitRef.current = null;
       setAutoTradeStatus(`TP executed for ${pendingTakeProfit.symbol} at ${formatUsd(latestPrice)}`);
+      void sendSignalNotification(
+        `TP Hit: ${pendingTakeProfit.symbol}`,
+        `${pendingTakeProfit.tokenSymbol} take profit executed at ${formatUsd(latestPrice)}.`,
+        "/signals-bot?tab=trades",
+        NATIVE_NOTIFICATION_SOUNDS.tp,
+      );
+      void sendRemotePushNotification({
+        title: `TP Hit: ${pendingTakeProfit.symbol}`,
+        body: `${pendingTakeProfit.tokenSymbol} take profit executed at ${formatUsd(latestPrice)}.`,
+        url: "/signals-bot?tab=trades",
+        walletAddress: walletPublicKey?.toBase58() ?? walletAddress ?? undefined,
+        sound: NATIVE_NOTIFICATION_SOUNDS.tp,
+      });
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : "swap failed";
       setAutoTradeStatus(`TP execution failed for ${pendingTakeProfit.symbol}: ${message}`);
@@ -2102,6 +2147,8 @@ function DashboardPage() {
     pendingTakeProfit,
     persistTradeRecord,
     priceHistory,
+    sendRemotePushNotification,
+    sendSignalNotification,
     trackedMarkets,
     wallet.publicKey,
     walletExecuteSwap,
@@ -2735,15 +2782,16 @@ function DashboardPage() {
       const { hasPushNotifications } = getNativePushPluginStatus();
       if (!hasPushNotifications) {
         try {
-          await LocalNotifications.schedule({
-            notifications: [
-              {
-                id: Date.now() % 2147483000,
-                title: "BremLogic",
-                body: "Local native notification works. Install the rebuilt iPhone app to test APNs push.",
-              },
-            ],
-          });
+        await LocalNotifications.schedule({
+          notifications: [
+            {
+              id: Date.now() % 2147483000,
+              title: "BremLogic",
+              body: "Local native notification works. Install the rebuilt iPhone app to test APNs push.",
+              sound: NATIVE_NOTIFICATION_SOUNDS.signal,
+            },
+          ],
+        });
           setPushStatus("Local native test alert sent. APNs push requires the rebuilt app binary.");
         } catch (error) {
           setPushStatus(error instanceof Error ? error.message : "Native local test alert failed");
@@ -2761,6 +2809,7 @@ function DashboardPage() {
           body: JSON.stringify({
             nativeToken: nativePushToken,
             walletAddress,
+            sound: NATIVE_NOTIFICATION_SOUNDS.signal,
           }),
         });
         const payload = await response.json().catch(() => null);
@@ -2785,7 +2834,7 @@ function DashboardPage() {
       const response = await fetch("/api/push/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subscription, walletAddress }),
+        body: JSON.stringify({ subscription, walletAddress, sound: NATIVE_NOTIFICATION_SOUNDS.signal }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) {

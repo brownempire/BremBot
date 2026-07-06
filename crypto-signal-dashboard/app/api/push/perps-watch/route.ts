@@ -58,7 +58,7 @@ export async function GET(request: Request) {
       .map((device) => device.walletAddress?.trim())
       .filter((walletAddress): walletAddress is string => Boolean(walletAddress)),
   ])];
-  const notifications: Array<{ walletAddress: string; title: string; body: string; url: string }> = [];
+  const notifications: Array<{ walletAddress: string; title: string; body: string; url: string; sound?: string }> = [];
 
   for (const walletAddress of walletAddresses) {
     const previousState = await getPerpsWatchState(walletAddress);
@@ -77,6 +77,7 @@ export async function GET(request: Request) {
         title: `Trade Filled: ${position.marketSymbol}`,
         body: `${position.side === "long" ? "Long" : "Short"} opened${position.entryPrice ? ` at $${position.entryPrice}` : ""}.`,
         url: "/signals-bot?tab=perps",
+        sound: "brem_approval.wav",
       });
     });
 
@@ -88,6 +89,7 @@ export async function GET(request: Request) {
         title: `Trade Closed: ${position.marketSymbol}`,
         body: `${position.side === "long" ? "Long" : "Short"} closed by ${closeReason}.`,
         url: "/signals-bot?tab=perps",
+        sound: closeReason === "TP" ? "brem_tp.wav" : closeReason === "SL" ? "brem_sl.wav" : undefined,
       });
     });
 

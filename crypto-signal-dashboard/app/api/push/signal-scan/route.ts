@@ -111,7 +111,7 @@ export async function GET(request: Request) {
 
   const state = await loadState();
   const now = Date.now();
-  const notifications: Array<{ title: string; body: string; url: string; signalId: string }> = [];
+  const notifications: Array<{ title: string; body: string; url: string; signalId: string; sound: string }> = [];
 
   for (const market of TRACKED_MARKETS) {
     const price = await fetchPrice(market.coinbaseProduct).catch(() => null);
@@ -137,6 +137,7 @@ export async function GET(request: Request) {
           body: signal.summary,
           url: "/signals-bot",
           signalId: signal.id,
+          sound: "brem_signal.wav",
         });
         state.sentSignalIds = [signal.id, ...state.sentSignalIds].slice(0, MAX_SENT_IDS);
       }

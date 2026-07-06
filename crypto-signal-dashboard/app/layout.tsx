@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { NativeShellConfigurator } from "@/app/components/NativeShellConfigurator";
+import { NativeSplashOverlay } from "@/app/components/NativeSplashOverlay";
 import { TopMenu } from "@/app/components/TopMenu";
 
 export const metadata: Metadata = {
@@ -62,6 +63,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <NativeShellConfigurator />
+        <NativeSplashOverlay />
         <TopMenu />
         {children}
       </body>

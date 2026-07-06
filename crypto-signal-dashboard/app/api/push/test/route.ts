@@ -19,6 +19,9 @@ export async function POST(request: Request) {
     title: "BremLogic",
     body: "Test push notification from your signal desk.",
     url: "/signals-bot",
+    sound: typeof (body as { sound?: string } | null)?.sound === "string"
+      ? (body as { sound?: string }).sound ?? undefined
+      : undefined,
     subscription: body?.subscription ?? null,
     walletAddress: typeof (body as { walletAddress?: string } | null)?.walletAddress === "string"
       ? (body as { walletAddress?: string }).walletAddress ?? null

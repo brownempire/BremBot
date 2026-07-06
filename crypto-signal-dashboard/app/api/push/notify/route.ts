@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     title: body?.title ?? "BremLogic",
     body: body?.body ?? "A new signal was triggered.",
     url: body?.url ?? "/",
+    sound: typeof body?.sound === "string" ? body.sound : undefined,
   };
 
   const result = await sendNotificationPayload({

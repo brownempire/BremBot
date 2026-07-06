@@ -15,6 +15,7 @@ export async function sendNotificationPayload(options: {
   title: string;
   body: string;
   url: string;
+  sound?: string;
   subscription?: PushSubscriptionJSON | null;
   walletAddress?: string | null;
   nativeToken?: string | null;
@@ -46,6 +47,7 @@ export async function sendNotificationPayload(options: {
           title: options.title,
           body: options.body,
           url: options.url,
+          sound: options.sound,
         })
       : Promise.resolve({ sent: 0, results: [] as Array<{ token: string; ok: boolean; statusCode: number }> }),
   ]);
