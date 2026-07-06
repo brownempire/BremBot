@@ -1,5 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { NativeShellConfigurator } from "@/app/components/NativeShellConfigurator";
 import { NativeSplashController } from "@/app/components/NativeSplashController";
 import { TopMenu } from "@/app/components/TopMenu";
@@ -54,17 +55,21 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const headerStore = await headers();
+  const userAgent = headerStore.get("user-agent") ?? "";
+  const isNativeRequest = /BremLogicNative|Capacitor/i.test(userAgent);
+
   return (
-    <html lang="en">
+    <html lang="en" className={isNativeRequest ? "native-preload-shell" : undefined}>
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var isNative=!!(window.Capacitor||window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.bridge);document.documentElement.classList.add(isNative?'native-preload-shell':'web-preload-shell');}catch(e){document.documentElement.classList.add('web-preload-shell');}})();`,
+            __html: `(function(){try{var ua=navigator.userAgent||'';var hasBridge=!!(window.Capacitor||window.webkit&&window.webkit.messageHandlers&&(window.webkit.messageHandlers.bridge||window.webkit.messageHandlers.capacitor));if(hasBridge||/BremLogicNative|Capacitor/i.test(ua)){document.documentElement.classList.add('native-preload-shell');}else{document.documentElement.classList.remove('native-preload-shell');}}catch(e){document.documentElement.classList.remove('native-preload-shell');}})();`,
           }}
         />
       </head>

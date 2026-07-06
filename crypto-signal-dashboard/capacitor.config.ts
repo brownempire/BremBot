@@ -4,6 +4,7 @@ const config: CapacitorConfig = {
   appId: "com.bremlogic.signalsbot",
   appName: "BremLogic",
   webDir: "native-shell",
+  appendUserAgent: " BremLogicNative",
   plugins: {
     LocalNotifications: {
       presentationOptions: ["badge", "sound", "banner", "list"],
