@@ -1,9 +1,9 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { BottomTabs } from "@/app/components/BottomTabs";
 import { NativeShellConfigurator } from "@/app/components/NativeShellConfigurator";
 import { NativeSplashController } from "@/app/components/NativeSplashController";
-import { TopMenu } from "@/app/components/TopMenu";
 
 export const metadata: Metadata = {
   title: "BremLogic — Crypto Signals",
@@ -101,7 +101,7 @@ export default async function RootLayout({
         </div>
         <NativeShellConfigurator />
         <NativeSplashController />
-        <TopMenu />
+        <BottomTabs />
         {children}
       </body>
     </html>
