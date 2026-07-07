@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const MENU_ITEMS = [
@@ -13,17 +13,9 @@ const MENU_ITEMS = [
 
 export function TopMenu() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
+  const [currentTab, setCurrentTab] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const currentTab = searchParams.get("tab");
-
-  const navigateTo = (href: string) => {
-    setOpen(false);
-    if (typeof window !== "undefined") {
-      window.location.assign(href);
-    }
-  };
 
   const isActive = (href: string) => {
     if (href === "/signals-bot") {
@@ -39,13 +31,25 @@ export function TopMenu() {
   };
 
   useEffect(() => {
+    const syncTab = () => {
+      if (typeof window === "undefined") return;
+      setCurrentTab(new URLSearchParams(window.location.search).get("tab"));
+    };
+
+    syncTab();
+
     const onPointerDown = (event: PointerEvent) => {
       if (!containerRef.current) return;
       if (containerRef.current.contains(event.target as Node)) return;
       setOpen(false);
     };
+
     window.addEventListener("pointerdown", onPointerDown);
-    return () => window.removeEventListener("pointerdown", onPointerDown);
+    window.addEventListener("popstate", syncTab);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("popstate", syncTab);
+    };
   }, []);
 
   return (
@@ -65,14 +69,14 @@ export function TopMenu() {
       {open ? (
         <div className="top-menu-dropdown">
           {MENU_ITEMS.map((item) => (
-            <button
-              type="button"
+            <a
               key={item.href}
+              href={item.href}
               className={`top-menu-link ${isActive(item.href) ? "active" : ""}`}
-              onPointerDown={() => navigateTo(item.href)}
+              onClick={() => setOpen(false)}
             >
               {item.label}
-            </button>
+            </a>
           ))}
         </div>
       ) : null}

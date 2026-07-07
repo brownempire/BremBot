@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 
 type TabItem = {
   href: string;
@@ -138,18 +139,18 @@ const TAB_ITEMS: TabItem[] = [
 
 export function BottomTabs() {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const currentTab = searchParams.get("tab");
+  const [currentTab, setCurrentTab] = useState<string | null>(null);
 
-  const navigateTo = (item: TabItem) => {
-    if (item.external) {
-      window.location.assign(item.href);
-      return;
-    }
+  useEffect(() => {
+    const syncTab = () => {
+      if (typeof window === "undefined") return;
+      setCurrentTab(new URLSearchParams(window.location.search).get("tab"));
+    };
 
-    router.push(item.href);
-  };
+    syncTab();
+    window.addEventListener("popstate", syncTab);
+    return () => window.removeEventListener("popstate", syncTab);
+  }, []);
 
   return (
     <nav className="bottom-tabs" aria-label="Primary">
@@ -157,16 +158,15 @@ export function BottomTabs() {
         {TAB_ITEMS.map((item) => {
           const active = item.match ? item.match(pathname, currentTab) : pathname === item.href;
           return (
-            <button
+            <a
               key={item.href}
-              type="button"
+              href={item.href}
               className={`bottom-tab-button ${active ? "active" : ""}`}
               aria-current={active ? "page" : undefined}
-              onClick={() => navigateTo(item)}
             >
               <span className="bottom-tab-icon">{item.icon(active)}</span>
               <span className="bottom-tab-label">{item.label}</span>
-            </button>
+            </a>
           );
         })}
       </div>

@@ -8,7 +8,6 @@ import Image from "next/image";
 import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
-import { useSearchParams } from "next/navigation";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -656,14 +655,23 @@ function DashboardPage() {
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
-  const searchParams = useSearchParams();
-  const activeSignalsTab: SignalsAppTab = useMemo(() => {
-    const tab = searchParams.get("tab");
-    if (tab === "perps" || tab === "wallet") {
-      return tab;
-    }
-    return "signals";
-  }, [searchParams]);
+  const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
+
+  useEffect(() => {
+    const syncActiveTab = () => {
+      if (typeof window === "undefined") return;
+      const tab = new URLSearchParams(window.location.search).get("tab");
+      if (tab === "perps" || tab === "wallet") {
+        setActiveSignalsTab(tab);
+        return;
+      }
+      setActiveSignalsTab("signals");
+    };
+
+    syncActiveTab();
+    window.addEventListener("popstate", syncActiveTab);
+    return () => window.removeEventListener("popstate", syncActiveTab);
+  }, []);
 
   const clearPerpsAutoTradeTimeout = useCallback(() => {
     if (perpsAutoTradeTimeoutRef.current) {
