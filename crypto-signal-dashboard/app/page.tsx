@@ -35,14 +35,9 @@ const BOT_ITEMS = [
     description: "Real-time crypto signal dashboard with wallet, push alerts, and auto-trade controls.",
   },
   {
-    href: "/memecoin-bot",
-    title: "Memecoin Bot",
-    description: "Focused memecoin monitoring and execution workspace.",
-  },
-  {
-    href: "/ai-trading-bot",
-    title: "AI Trading Bot",
-    description: "AI-assisted strategy and execution interface.",
+    href: "/simulator",
+    title: "Simulator",
+    description: "Open the BremLogic simulator inside the same app shell and navigation tabs.",
   },
 ];
 

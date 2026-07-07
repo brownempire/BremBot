@@ -107,7 +107,7 @@ html {
   margin: 0 auto;
   min-height: 76px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   padding: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -244,6 +244,43 @@ main {
   text-align: center;
 }
 
+.simulator-page {
+  min-height: 100dvh;
+}
+
+.simulator-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.simulator-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.simulator-link-button {
+  white-space: nowrap;
+}
+
+.simulator-frame-shell {
+  width: 100%;
+  min-height: 72dvh;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(126, 148, 189, 0.16);
+  background: rgba(3, 6, 12, 0.78);
+}
+
+.simulator-frame {
+  width: 100%;
+  min-height: 72dvh;
+  border: 0;
+  display: block;
+  background: #05070c;
+}
+
 @media (max-width: 720px) {
   main {
     padding:
@@ -261,6 +298,11 @@ main {
 
   .bottom-tab-label {
     font-size: 10px;
+  }
+
+  .simulator-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
