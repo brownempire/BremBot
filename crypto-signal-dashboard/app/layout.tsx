@@ -86,6 +86,14 @@ export default async function RootLayout({
             muted
             loop
             preload="auto"
+            disablePictureInPicture
+            controls={false}
+            controlsList="nodownload noplaybackrate nofullscreen noremoteplayback"
+            aria-hidden="true"
+            suppressHydrationWarning
+            {...{
+              "webkit-playsinline": "true",
+            }}
           >
             <source src="/splash/splashscreen.mp4" type="video/mp4" />
           </video>
