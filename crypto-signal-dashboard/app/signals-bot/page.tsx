@@ -8,6 +8,7 @@ import Image from "next/image";
 import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
+import { useSearchParams } from "next/navigation";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -20,7 +21,6 @@ import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
-import { getMockNews, type NewsItem } from "@/lib/news/mock";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -73,9 +73,10 @@ const DEFAULT_PARAMS: UserParams = {
   trendWindow: 5,
   trendThreshold: 0.5,
   breakoutPercent: 0.8,
-  newsBias: 0.5,
   cooldownSeconds: 60,
 };
+
+type SignalsAppTab = "signals" | "perps" | "wallet";
 
 type AutoTradeToken = "SOL" | "ETH" | "BTC" | "USDC" | "JUP" | "BONK";
 
@@ -172,7 +173,7 @@ type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
 type PnlMode = "app" | "chain";
 type RemoteAuthSource = "in-app" | "phantom";
-type DashboardSectionId = "chart" | "wallet" | "perps" | "pnl" | "params" | "signals" | "trades" | "news";
+type DashboardSectionId = "chart" | "wallet" | "perps" | "pnl" | "params" | "signals" | "trades";
 type DashboardSectionLayout = {
   id: DashboardSectionId;
   width: number;
@@ -488,7 +489,6 @@ const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
   { id: "params", width: 1080, height: 500 },
   { id: "signals", width: 1080, height: 430 },
   { id: "trades", width: 1080, height: 500 },
-  { id: "news", width: 1080, height: 430 },
 ];
 
 const DASHBOARD_SECTION_TITLES: Record<DashboardSectionId, string> = {
@@ -499,7 +499,6 @@ const DASHBOARD_SECTION_TITLES: Record<DashboardSectionId, string> = {
   params: "Signal Parameters",
   signals: "Live Signals",
   trades: "Recent Trades",
-  news: "News Pulse",
 };
 
 function getAutoTradeTokenOption(symbol: AutoTradeToken) {
@@ -558,7 +557,6 @@ function DashboardPage() {
   const [receiveSignalsForSlotId, setReceiveSignalsForSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
-  const [newsItems, setNewsItems] = useState<NewsItem[]>(getMockNews());
   const [editingSignalTarget, setEditingSignalTarget] = useState(false);
 
   const [pushStatus, setPushStatus] = useState("Push not enabled");
@@ -658,6 +656,14 @@ function DashboardPage() {
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
+  const searchParams = useSearchParams();
+  const activeSignalsTab: SignalsAppTab = useMemo(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "perps" || tab === "wallet") {
+      return tab;
+    }
+    return "signals";
+  }, [searchParams]);
 
   const clearPerpsAutoTradeTimeout = useCallback(() => {
     if (perpsAutoTradeTimeoutRef.current) {
@@ -1119,9 +1125,6 @@ function DashboardPage() {
   }, [trackedMarkets]);
 
   useEffect(() => {
-    const newsScore = newsItems.reduce((sum, item) => sum + item.sentiment, 0) /
-      Math.max(newsItems.length, 1);
-
     setSignals((prev) => {
       let next = [...prev];
       const targetMarket =
@@ -1144,7 +1147,6 @@ function DashboardPage() {
           symbol: market.pair,
           points: recentPoints,
           params,
-          newsScore: newsScore * params.newsBias,
           lastSignalAt: lastSignalAt[market.id],
         });
 
@@ -1505,7 +1507,6 @@ function DashboardPage() {
     isPerpsAutoTradeFailureCooldownActive,
     jupiterPerpsController,
     lastSignalAt,
-    newsItems,
     nativeShell,
     params,
     priceHistory,
@@ -1732,30 +1733,6 @@ function DashboardPage() {
   }, [nativePushToken, nativeShell, walletAddress]);
 
   useEffect(() => {
-    let cancelled = false;
-    const pollNews = async () => {
-      try {
-        const response = await fetch("/api/news/trending", { cache: "no-store" });
-        const payload = await response.json();
-        if (!response.ok || !Array.isArray(payload?.items) || cancelled) return;
-        setNewsItems(payload.items as NewsItem[]);
-      } catch (_error) {
-        if (!cancelled) setNewsItems(getMockNews());
-      }
-    };
-
-    pollNews().catch(() => undefined);
-    const interval = setInterval(() => {
-      pollNews().catch(() => undefined);
-    }, 60000);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
     try {
       const raw = window.localStorage.getItem(PARAMS_STORAGE_KEY);
       if (!raw) return;
@@ -1764,7 +1741,6 @@ function DashboardPage() {
         trendWindow: Number(parsed.trendWindow ?? DEFAULT_PARAMS.trendWindow),
         trendThreshold: Number(parsed.trendThreshold ?? DEFAULT_PARAMS.trendThreshold),
         breakoutPercent: Number(parsed.breakoutPercent ?? DEFAULT_PARAMS.breakoutPercent),
-        newsBias: Number(parsed.newsBias ?? DEFAULT_PARAMS.newsBias),
         cooldownSeconds: Number(parsed.cooldownSeconds ?? DEFAULT_PARAMS.cooldownSeconds),
       });
       setParamsSaveStatus("Saved preset loaded");
@@ -2436,8 +2412,6 @@ function DashboardPage() {
 
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
-
-  const latestNews = useMemo(() => newsItems, [newsItems]);
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
@@ -3432,7 +3406,6 @@ function DashboardPage() {
             <label>Trend window (min)<input type="number" value={params.trendWindow} min={1} max={180} step={1} onChange={(event) => setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))} /></label>
             <label>Trend threshold %<input type="number" value={params.trendThreshold} min={0.1} max={10} step={0.1} onChange={(event) => setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))} /></label>
             <label>Breakout %<input type="number" value={params.breakoutPercent} min={0.8} max={8} step={0.2} onChange={(event) => setParams((prev) => ({ ...prev, breakoutPercent: Number(event.target.value) }))} /></label>
-            <label>News bias (0-1)<input type="number" value={params.newsBias} min={0} max={1} step={0.05} onChange={(event) => setParams((prev) => ({ ...prev, newsBias: Number(event.target.value) }))} /></label>
             <label>Cooldown (sec)<input type="number" value={params.cooldownSeconds} min={5} max={900} step={5} onChange={(event) => setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))} /></label>
             <label>
               Auto-trade wallet allocation (%)
@@ -3664,15 +3637,27 @@ function DashboardPage() {
       );
     }
 
+    return null;
+  }
+
+  function renderStructuredPanel(id: DashboardSectionId) {
     return (
-      <>
-        {latestNews.map((item) => (
-          <div key={item.id} className="news-item">
-            <div>{item.url ? (<a href={item.url} target="_blank" rel="noreferrer">{item.headline}</a>) : item.headline}</div>
-            <div className="news-meta"><span>{item.source}</span><span>{item.sentiment >= 0 ? "Positive" : "Negative"}</span></div>
+      <article key={id} className="panel dashboard-panel dashboard-panel-static">
+        <div className="dashboard-panel-toolbar">
+          <div className="dashboard-panel-title-group">
+            <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[id]}</span>
+            {id === "chart" && selectedChartCard ? (
+              <span className="subtext">
+                {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
+                {selectedChartCard.change24h.toFixed(2)}%
+              </span>
+            ) : null}
           </div>
-        ))}
-      </>
+        </div>
+        <div className="dashboard-panel-content">
+          {renderDashboardSection(id)}
+        </div>
+      </article>
     );
   }
 
@@ -3719,53 +3704,22 @@ function DashboardPage() {
       </div>
       </header>
 
-      <section className="dashboard-layout" style={{ marginBottom: 22 }}>
-        {dashboardLayout.map((section) => (
-          <article
-            key={section.id}
-            className={`panel dashboard-panel ${dragSectionId === section.id ? "dragging" : ""}`}
-            style={{ width: section.width, height: section.height }}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
-              if (dragSectionId) reorderDashboardSections(dragSectionId, section.id);
-              setDragSectionId(null);
-            }}
-          >
-            <div className="dashboard-panel-toolbar">
-              <div className="dashboard-panel-title-group">
-                <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[section.id]}</span>
-                {section.id === "chart" && selectedChartCard ? (
-                  <span className="subtext">
-                    {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
-                    {selectedChartCard.change24h.toFixed(2)}%
-                  </span>
-                ) : null}
-              </div>
-              <button
-                type="button"
-                draggable
-                className="drag-handle"
-                title="Drag to reorder"
-                onDragStart={() => setDragSectionId(section.id)}
-                onDragEnd={() => setDragSectionId(null)}
-              >
-                Drag
-              </button>
-            </div>
-            <div className="dashboard-panel-content">
-              {renderDashboardSection(section.id)}
-            </div>
-            <button
-              type="button"
-              className="resize-handle"
-              title="Drag to resize"
-              onPointerDown={(event) => startResizeSection(section.id, event)}
-              onPointerMove={resizeSection}
-              onPointerUp={stopResizeSection}
-              onPointerCancel={stopResizeSection}
-            />
-          </article>
-        ))}
+      <section className="dashboard-layout dashboard-layout-static" style={{ marginBottom: 22 }}>
+        {activeSignalsTab === "signals" ? (
+          <>
+            {renderStructuredPanel("chart")}
+            {renderStructuredPanel("params")}
+            {renderStructuredPanel("signals")}
+          </>
+        ) : null}
+        {activeSignalsTab === "perps" ? renderStructuredPanel("perps") : null}
+        {activeSignalsTab === "wallet" ? (
+          <>
+            {renderStructuredPanel("wallet")}
+            {renderStructuredPanel("pnl")}
+            {renderStructuredPanel("trades")}
+          </>
+        ) : null}
       </section>
 
       {showDepositModal && wallet.publicKey ? (

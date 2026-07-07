@@ -5,14 +5,13 @@ export type UserParams = {
   trendWindow: number; // minutes
   trendThreshold: number; // percent
   breakoutPercent: number; // percent
-  newsBias: number; // -1 to 1
   cooldownSeconds: number;
 };
 
 export type Signal = {
   id: string;
   symbol: string;
-  type: "trend" | "breakout" | "news";
+  type: "trend" | "breakout";
   direction: "bullish" | "bearish";
   confidence: number;
   summary: string;
@@ -43,13 +42,11 @@ export function detectSignals({
   symbol,
   points,
   params,
-  newsScore,
   lastSignalAt,
 }: {
   symbol: string;
   points: PricePoint[];
   params: UserParams;
-  newsScore: number;
   lastSignalAt?: number;
 }): Signal[] {
   if (points.length < 3) return [];
@@ -100,18 +97,6 @@ export function detectSignals({
       direction: shortMomentum >= 0 ? "bullish" : "bearish",
       confidence: scoreConfidence(Math.abs(shortMomentum), Math.max(params.breakoutPercent * 0.6, 0.1)),
       summary: `Short-term momentum move of ${shortMomentum.toFixed(2)}% in the recent window.`,
-      timestamp: now,
-    });
-  }
-
-  if (Math.abs(newsScore) > 0.65) {
-    signals.push({
-      id: `${symbol}-news-${now}`,
-      symbol,
-      type: "news",
-      direction: newsScore >= 0 ? "bullish" : "bearish",
-      confidence: Math.max(0.35, Math.min(0.8, Math.abs(newsScore))),
-      summary: `News sentiment suggests ${newsScore >= 0 ? "positive" : "negative"} bias.`,
       timestamp: now,
     });
   }

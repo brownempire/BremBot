@@ -107,7 +107,7 @@ html {
   margin: 0 auto;
   min-height: 76px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
   padding: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -751,6 +751,11 @@ button:disabled {
   align-items: flex-start;
 }
 
+.dashboard-layout-static {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .dashboard-panel {
   position: relative;
   min-width: 320px;
@@ -798,6 +803,18 @@ button:disabled {
   height: calc(100% - 34px);
   overflow: auto;
   padding-right: 4px;
+}
+
+.dashboard-panel-static {
+  width: 100%;
+  min-height: 0;
+  height: auto;
+}
+
+.dashboard-panel-static .dashboard-panel-content {
+  height: auto;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .resize-handle {

@@ -1,25 +1,41 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const MENU_ITEMS = [
-  { href: "/", label: "Home" },
-  { href: "/signals-bot", label: "Signals Bot" },
-  { href: "/memecoin-bot", label: "Memecoin Bot" },
-  { href: "/ai-trading-bot", label: "AI Trading Bot" },
-  { href: "https://www.bremlogic.com/simulator", label: "Simulator" },
+  { href: "https://www.bremlogic.com", label: "Home", external: true },
+  { href: "/signals-bot", label: "Signals" },
+  { href: "/signals-bot?tab=perps", label: "Perps" },
+  { href: "/simulator", label: "Simulator" },
+  { href: "/signals-bot?tab=wallet", label: "Wallet" },
 ];
 
 export function TopMenu() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const currentTab = searchParams.get("tab");
+
   const navigateTo = (href: string) => {
     setOpen(false);
     if (typeof window !== "undefined") {
       window.location.assign(href);
     }
+  };
+
+  const isActive = (href: string) => {
+    if (href === "/signals-bot") {
+      return pathname === "/signals-bot" && currentTab !== "perps" && currentTab !== "wallet";
+    }
+    if (href === "/signals-bot?tab=perps") {
+      return pathname === "/signals-bot" && currentTab === "perps";
+    }
+    if (href === "/signals-bot?tab=wallet") {
+      return pathname === "/signals-bot" && currentTab === "wallet";
+    }
+    return pathname === href;
   };
 
   useEffect(() => {
@@ -52,7 +68,7 @@ export function TopMenu() {
             <button
               type="button"
               key={item.href}
-              className={`top-menu-link ${pathname === item.href ? "active" : ""}`}
+              className={`top-menu-link ${isActive(item.href) ? "active" : ""}`}
               onPointerDown={() => navigateTo(item.href)}
             >
               {item.label}

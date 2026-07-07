@@ -19,7 +19,6 @@ const DEFAULT_PARAMS: UserParams = {
   trendWindow: 5,
   trendThreshold: 1.0,
   breakoutPercent: 0.9,
-  newsBias: 0.25,
   cooldownSeconds: 120,
 };
 
@@ -124,7 +123,6 @@ export async function GET(request: Request) {
       symbol: market.pair,
       points: recentPoints,
       params: DEFAULT_PARAMS,
-      newsScore: 0,
       lastSignalAt: marketState.lastSignalAt,
     });
 
