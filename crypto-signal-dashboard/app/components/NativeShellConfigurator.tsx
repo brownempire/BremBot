@@ -1,23 +1,37 @@
 "use client";
 
 import { useEffect } from "react";
-import { Capacitor } from "@capacitor/core";
-import { StatusBar, Style } from "@capacitor/status-bar";
+import { isNativeIosRuntime, isNativeShellRuntime } from "@/app/lib/nativeShell";
 
 export function NativeShellConfigurator() {
   useEffect(() => {
-    if (typeof document === "undefined" || !Capacitor.isNativePlatform()) {
+    if (typeof document === "undefined" || !isNativeShellRuntime()) {
       return;
     }
 
     document.body.classList.add("native-shell");
 
-    if (Capacitor.getPlatform() === "ios") {
+    if (isNativeIosRuntime()) {
       document.body.classList.add("native-ios-shell");
     }
 
-    void StatusBar.setOverlaysWebView({ overlay: false }).catch(() => undefined);
-    void StatusBar.setStyle({ style: Style.Dark }).catch(() => undefined);
+    void (async () => {
+      try {
+        const [{ StatusBar, Style }, { Capacitor }] = await Promise.all([
+          import("@capacitor/status-bar"),
+          import("@capacitor/core"),
+        ]);
+
+        if (!Capacitor.isNativePlatform()) {
+          return;
+        }
+
+        await StatusBar.setOverlaysWebView({ overlay: false }).catch(() => undefined);
+        await StatusBar.setStyle({ style: Style.Dark }).catch(() => undefined);
+      } catch {
+        // Ignore plugin/bootstrap errors outside the native shell.
+      }
+    })();
   }, []);
 
   return null;

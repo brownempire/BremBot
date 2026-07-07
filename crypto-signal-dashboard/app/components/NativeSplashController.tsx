@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { Capacitor } from "@capacitor/core";
+import { isNativeShellRuntime } from "@/app/lib/nativeShell";
 
 const MIN_SPLASH_MS = 1600;
 const BOOT_SPLASH_ID = "native-boot-splash";
@@ -13,7 +13,7 @@ export function NativeSplashController() {
       return;
     }
 
-    if (!Capacitor.isNativePlatform()) {
+    if (!isNativeShellRuntime()) {
       overlay.remove();
       return;
     }
