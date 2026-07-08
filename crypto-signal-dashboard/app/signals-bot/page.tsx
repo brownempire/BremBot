@@ -10,7 +10,7 @@ import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
-import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
+import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
@@ -78,7 +78,7 @@ const DEFAULT_PARAMS: UserParams = {
   cooldownSeconds: 60,
 };
 
-type SignalsAppTab = "signals" | "perps" | "simulator" | "wallet";
+type SignalsAppTab = "home" | "signals" | "perps" | "simulator" | "wallet";
 
 type AutoTradeToken = "SOL" | "ETH" | "BTC" | "USDC" | "JUP" | "BONK";
 
@@ -720,17 +720,20 @@ function DashboardPage() {
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
-  const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
+  const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("home");
 
   useEffect(() => {
     const syncActiveTab = () => {
       if (typeof window === "undefined") return;
       const tab = new URLSearchParams(window.location.search).get("tab");
-      if (tab === "perps" || tab === "simulator" || tab === "wallet") {
+      if (tab === "home" || tab === "signals" || tab === "perps" || tab === "simulator" || tab === "wallet") {
         setActiveSignalsTab(tab);
         return;
       }
-      setActiveSignalsTab("signals");
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("tab", "home");
+      window.history.replaceState({}, "", nextUrl.toString());
+      setActiveSignalsTab("home");
     };
 
     syncActiveTab();
@@ -3097,7 +3100,7 @@ function DashboardPage() {
     setLastSignalAt({});
   }
 
-  async function handleManualSwapSuccess(result: ManualSwapSuccess) {
+  async function handleManualSwapSuccess(result: JupiterTradeRecord) {
     const manualTradeRecord: StoredTradeRecord = {
       id: `manual-${result.txid}-${Date.now()}`,
       txid: result.txid,
@@ -3108,8 +3111,8 @@ function DashboardPage() {
       outputMint: result.outputMint,
       inputAmount: result.inputAmount,
       outputAmount: result.outputAmount,
-      signalSummary: `${result.inputSymbol} -> ${result.outputSymbol} manual swap`,
-      gasless: result.gasless,
+      signalSummary: "Jupiter widget manual swap",
+      gasless: false,
     };
     await persistTradeRecord(manualTradeRecord);
     refreshWalletPortfolio().catch(() => undefined);
@@ -3352,13 +3355,11 @@ function DashboardPage() {
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-panel wallet-trading-panel-swap" style={{ marginTop: 10 }}>
-            <ManualSwapWidget
-              connected={wallet.connected}
-              walletAddress={wallet.publicKey?.toBase58() ?? null}
-              solBalance={solBalance}
-              walletTokens={walletTokens}
-              onExecuteSwap={walletExecuteSwap}
+            <JupiterTradePanel
               onTradeSuccess={handleManualSwapSuccess}
+              integratedTargetId="bremlogic-manual-swap-widget"
+              passthroughWalletContextState={wallet.passthroughWalletContextState}
+              onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
             />
           </div>
           <div className="wallet-holdings">
@@ -3778,6 +3779,34 @@ function DashboardPage() {
       </header>
 
       <section className="dashboard-layout dashboard-layout-static" style={{ marginBottom: 22 }}>
+        <div className="tab-panel" hidden={activeSignalsTab !== "home"}>
+          <article className="panel dashboard-panel dashboard-panel-static">
+            <div className="dashboard-panel-toolbar">
+              <div className="dashboard-panel-title-group">
+                <span className="dashboard-panel-title">Home</span>
+                <span className="subtext">Welcome to BremLogic inside the native app shell.</span>
+              </div>
+            </div>
+            <div className="dashboard-panel-content">
+              <div className="subtext" style={{ marginBottom: 12 }}>
+                Use the tabs below to move through Signals, Perps, Simulator, and Wallet without leaving the app.
+              </div>
+              <div className="wallet-controls">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextUrl = new URL(window.location.href);
+                    nextUrl.searchParams.set("tab", "signals");
+                    window.history.pushState({}, "", nextUrl.toString());
+                    window.dispatchEvent(new Event(SIGNALS_BOT_TAB_EVENT));
+                  }}
+                >
+                  Open Signals
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "signals"}>
           {renderStructuredPanel("chart")}
           {renderStructuredPanel("params")}
@@ -3790,9 +3819,13 @@ function DashboardPage() {
           {activeSignalsTab === "simulator" ? <EmbeddedSimulatorPanel /> : null}
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
-          {renderStructuredPanel("wallet")}
-          {renderStructuredPanel("pnl")}
-          {renderStructuredPanel("trades")}
+          {activeSignalsTab === "wallet" ? (
+            <>
+              {renderStructuredPanel("wallet")}
+              {renderStructuredPanel("pnl")}
+              {renderStructuredPanel("trades")}
+            </>
+          ) : null}
         </div>
       </section>
 

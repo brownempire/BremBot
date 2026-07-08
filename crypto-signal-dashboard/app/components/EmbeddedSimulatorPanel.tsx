@@ -1,4 +1,4 @@
-const SIMULATOR_URL = "https://www.bremlogic.com/simulator";
+const SIMULATOR_URL = "/simulator?embedded=1";
 
 export function EmbeddedSimulatorPanel() {
   return (
@@ -13,26 +13,18 @@ export function EmbeddedSimulatorPanel() {
         <a
           className="secondary simulator-link-button"
           href={SIMULATOR_URL}
-          target="_blank"
-          rel="noreferrer"
         >
-          Open in New Tab
+          Open Full Page
         </a>
       </div>
 
       <div className="simulator-frame-shell">
-        <div className="perps-message-card">
-          <strong>Simulator opens separately</strong>
-          <p className="subtext" style={{ marginTop: 8 }}>
-            The previous embedded simulator loaded a second BremLogic app inside this dashboard, which caused script and wallet-flow conflicts.
-            Open the simulator in a separate tab for now so the main app stays stable.
-          </p>
-          <div className="wallet-controls" style={{ marginTop: 12 }}>
-            <a className="secondary simulator-link-button" href={SIMULATOR_URL} target="_blank" rel="noreferrer">
-              Launch Simulator
-            </a>
-          </div>
-        </div>
+        <iframe
+          title="BremLogic Simulator"
+          src={SIMULATOR_URL}
+          className="simulator-frame"
+          allow="clipboard-read; clipboard-write"
+        />
       </div>
     </section>
   );

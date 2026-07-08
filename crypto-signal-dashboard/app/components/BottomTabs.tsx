@@ -112,12 +112,17 @@ function WalletIcon(active: boolean) {
 }
 
 const TAB_ITEMS: TabItem[] = [
-  { href: "https://www.bremlogic.com", label: "Home", icon: ChartIcon, external: true },
   {
-    href: "/signals-bot",
+    href: "/signals-bot?tab=home",
+    label: "Home",
+    icon: ChartIcon,
+    match: (pathname, tab) => pathname === "/signals-bot" && tab === "home",
+  },
+  {
+    href: "/signals-bot?tab=signals",
     label: "Signals",
     icon: SignalIcon,
-    match: (pathname, tab) => pathname === "/signals-bot" && tab !== "perps" && tab !== "wallet",
+    match: (pathname, tab) => pathname === "/signals-bot" && tab === "signals",
   },
   {
     href: "/signals-bot?tab=perps",

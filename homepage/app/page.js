@@ -26,19 +26,8 @@ export default function Page() {
           Track market momentum, monitor live signals, and execute strategy like a true professional
           from the app dashboard.
         </p>
-        <a className="cta" href="https://app.bremlogic.com/signals-bot">
+        <a className="cta" href="https://app.bremlogic.com/signals-bot?tab=home">
           Open App
-        </a>
-      </section>
-
-      <section className="card tool-card" aria-labelledby="tools-heading">
-        <h2 id="tools-heading">Choose a tool to continue</h2>
-        <p className="lead">
-          Test leveraged perps strategies and explore potential outcomes before putting capital at
-          risk.
-        </p>
-        <a className="cta" href="https://app.bremlogic.com/signals-bot?tab=simulator">
-          Simulator
         </a>
       </section>
     </main>
