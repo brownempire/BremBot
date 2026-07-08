@@ -24,7 +24,7 @@
   --border: rgba(126, 148, 189, 0.18);
   --glow: 0 0 30px rgba(101, 217, 255, 0.22);
   --radius: 16px;
-  --bottom-bar-fill: 14px;
+  --bottom-bar-fill: 56px;
 }
 
 * {
