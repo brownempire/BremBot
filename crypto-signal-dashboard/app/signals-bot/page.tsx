@@ -3875,7 +3875,7 @@ function DashboardPage() {
             />
             <div className="header-status-stack">
               <div className="header-status-topline">
-                <div className="badge badge-status badge-status-primary">{autoTradeStatus}</div>
+                <div className="badge badge-status badge-status-primary">{perpsAutoTradeStatus}</div>
                 <div ref={notificationPanelRef} className="notification-bell-wrap">
                   <button
                     type="button"
@@ -3906,11 +3906,7 @@ function DashboardPage() {
                   ) : null}
                 </div>
               </div>
-              <div className="badge badge-status badge-status-wide">{perpsAutoTradeStatus}</div>
-              <div className="badges badges-supporting">
-                <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-                <div className="badge">Wallet: in-app</div>
-              </div>
+              <div className="badge badge-status badge-status-wide">{autoTradeStatus}</div>
             </div>
           </div>
         </div>
