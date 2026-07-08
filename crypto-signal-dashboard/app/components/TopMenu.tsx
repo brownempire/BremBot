@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
 
 const MENU_ITEMS: Array<{ href: string; label: string; external?: boolean }> = [
-  { href: "/signals-bot?tab=home", label: "Home" },
   { href: "/signals-bot?tab=signals", label: "Signals" },
   { href: "/signals-bot?tab=perps", label: "Perps" },
   { href: "/signals-bot?tab=simulator", label: "Simulator" },
@@ -20,9 +19,6 @@ export function TopMenu() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const isActive = (href: string) => {
-    if (href === "/signals-bot?tab=home") {
-      return pathname === "/signals-bot" && currentTab === "home";
-    }
     if (href === "/signals-bot?tab=signals") {
       return pathname === "/signals-bot" && currentTab === "signals";
     }

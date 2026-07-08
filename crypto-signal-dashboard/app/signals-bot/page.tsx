@@ -78,7 +78,7 @@ const DEFAULT_PARAMS: UserParams = {
   cooldownSeconds: 60,
 };
 
-type SignalsAppTab = "home" | "signals" | "perps" | "simulator" | "wallet";
+type SignalsAppTab = "signals" | "perps" | "simulator" | "wallet";
 
 type AutoTradeToken = "SOL" | "ETH" | "BTC" | "USDC" | "JUP" | "BONK";
 
@@ -720,20 +720,20 @@ function DashboardPage() {
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
-  const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("home");
+  const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
 
   useEffect(() => {
     const syncActiveTab = () => {
       if (typeof window === "undefined") return;
       const tab = new URLSearchParams(window.location.search).get("tab");
-      if (tab === "home" || tab === "signals" || tab === "perps" || tab === "simulator" || tab === "wallet") {
+      if (tab === "signals" || tab === "perps" || tab === "simulator" || tab === "wallet") {
         setActiveSignalsTab(tab);
         return;
       }
       const nextUrl = new URL(window.location.href);
-      nextUrl.searchParams.set("tab", "home");
+      nextUrl.searchParams.set("tab", "signals");
       window.history.replaceState({}, "", nextUrl.toString());
-      setActiveSignalsTab("home");
+      setActiveSignalsTab("signals");
     };
 
     syncActiveTab();
@@ -3779,34 +3779,6 @@ function DashboardPage() {
       </header>
 
       <section className="dashboard-layout dashboard-layout-static" style={{ marginBottom: 22 }}>
-        <div className="tab-panel" hidden={activeSignalsTab !== "home"}>
-          <article className="panel dashboard-panel dashboard-panel-static">
-            <div className="dashboard-panel-toolbar">
-              <div className="dashboard-panel-title-group">
-                <span className="dashboard-panel-title">Home</span>
-                <span className="subtext">Welcome to BremLogic inside the native app shell.</span>
-              </div>
-            </div>
-            <div className="dashboard-panel-content">
-              <div className="subtext" style={{ marginBottom: 12 }}>
-                Use the tabs below to move through Signals, Perps, Simulator, and Wallet without leaving the app.
-              </div>
-              <div className="wallet-controls">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextUrl = new URL(window.location.href);
-                    nextUrl.searchParams.set("tab", "signals");
-                    window.history.pushState({}, "", nextUrl.toString());
-                    window.dispatchEvent(new Event(SIGNALS_BOT_TAB_EVENT));
-                  }}
-                >
-                  Open Signals
-                </button>
-              </div>
-            </div>
-          </article>
-        </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "signals"}>
           {renderStructuredPanel("chart")}
           {renderStructuredPanel("params")}

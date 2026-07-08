@@ -11,24 +11,12 @@ export default async function SimulatorPage({ searchParams }: SimulatorPageProps
   const embedded = getParamValue(resolvedSearchParams.embedded) === "1";
 
   return (
-    <main className="simulator-page">
-      {embedded ? null : (
-        <section className="panel simulator-panel" style={{ marginBottom: 18 }}>
-          <div className="simulator-head">
-            <div>
-              <h1 className="title">Simulator</h1>
-              <p className="subtext">
-                Full simulator page embedded within the BremLogic app shell.
-              </p>
-            </div>
-          </div>
-        </section>
-      )}
-      <div className="simulator-frame-shell">
+    <main className={`simulator-page ${embedded ? "simulator-page-embedded" : ""}`}>
+      <div className="simulator-frame-shell simulator-frame-shell-plain">
         <iframe
           title="BremLogic Full Simulator"
           src="https://www.bremlogic.com/simulator"
-          className="simulator-frame"
+          className="simulator-frame simulator-frame-plain"
           allow="clipboard-read; clipboard-write"
         />
       </div>

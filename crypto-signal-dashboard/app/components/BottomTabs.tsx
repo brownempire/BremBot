@@ -113,15 +113,9 @@ function WalletIcon(active: boolean) {
 
 const TAB_ITEMS: TabItem[] = [
   {
-    href: "/signals-bot?tab=home",
-    label: "Home",
-    icon: ChartIcon,
-    match: (pathname, tab) => pathname === "/signals-bot" && tab === "home",
-  },
-  {
     href: "/signals-bot?tab=signals",
     label: "Signals",
-    icon: SignalIcon,
+    icon: ChartIcon,
     match: (pathname, tab) => pathname === "/signals-bot" && tab === "signals",
   },
   {

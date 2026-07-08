@@ -1,31 +1,14 @@
-const SIMULATOR_URL = "/simulator?embedded=1";
+const SIMULATOR_URL = "https://www.bremlogic.com/simulator";
 
 export function EmbeddedSimulatorPanel() {
   return (
-    <section className="panel simulator-panel">
-      <div className="simulator-head">
-        <div>
-          <h1 className="title">Simulator</h1>
-          <p className="subtext">
-            Open the BremLogic simulator inside the same app shell used by Signals and Perps.
-          </p>
-        </div>
-        <a
-          className="secondary simulator-link-button"
-          href={SIMULATOR_URL}
-        >
-          Open Full Page
-        </a>
-      </div>
-
-      <div className="simulator-frame-shell">
+    <div className="simulator-frame-shell simulator-frame-shell-plain">
         <iframe
           title="BremLogic Simulator"
           src={SIMULATOR_URL}
-          className="simulator-frame"
+          className="simulator-frame simulator-frame-plain"
           allow="clipboard-read; clipboard-write"
         />
-      </div>
-    </section>
+    </div>
   );
 }
