@@ -24,7 +24,7 @@
   --border: rgba(126, 148, 189, 0.18);
   --glow: 0 0 30px rgba(101, 217, 255, 0.22);
   --radius: 16px;
-  --bottom-bar-fill: 56px;
+  --bottom-bar-fill: 0px;
 }
 
 * {
@@ -52,6 +52,16 @@ body.chart-scroll-lock {
 
 body.native-ios-shell {
   --native-content-top-buffer: max(var(--safe-top), 42px);
+}
+
+@media (display-mode: standalone) {
+  :root {
+    --bottom-bar-fill: 56px;
+  }
+}
+
+html.native-preload-shell {
+  --bottom-bar-fill: 56px;
 }
 
 .native-splash-overlay {
