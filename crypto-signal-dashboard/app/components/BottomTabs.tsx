@@ -126,10 +126,10 @@ const TAB_ITEMS: TabItem[] = [
     match: (pathname, tab) => pathname === "/signals-bot" && tab === "perps",
   },
   {
-    href: "/simulator",
+    href: "/signals-bot?tab=simulator",
     label: "Simulator",
     icon: SimIcon,
-    match: (pathname) => pathname === "/simulator",
+    match: (pathname, tab) => pathname === "/signals-bot" && tab === "simulator",
   },
   {
     href: "/signals-bot?tab=wallet",

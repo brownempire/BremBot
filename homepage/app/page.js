@@ -37,7 +37,7 @@ export default function Page() {
           Test leveraged perps strategies and explore potential outcomes before putting capital at
           risk.
         </p>
-        <a className="cta" href="/simulator">
+        <a className="cta" href="https://app.bremlogic.com/signals-bot?tab=simulator">
           Simulator
         </a>
       </section>

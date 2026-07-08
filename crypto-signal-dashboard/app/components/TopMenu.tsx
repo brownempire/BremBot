@@ -9,7 +9,7 @@ const MENU_ITEMS = [
   { href: "https://www.bremlogic.com", label: "Home", external: true },
   { href: "/signals-bot", label: "Signals" },
   { href: "/signals-bot?tab=perps", label: "Perps" },
-  { href: "/simulator", label: "Simulator" },
+  { href: "/signals-bot?tab=simulator", label: "Simulator" },
   { href: "/signals-bot?tab=wallet", label: "Wallet" },
 ];
 
@@ -28,6 +28,9 @@ export function TopMenu() {
     }
     if (href === "/signals-bot?tab=wallet") {
       return pathname === "/signals-bot" && currentTab === "wallet";
+    }
+    if (href === "/signals-bot?tab=simulator") {
+      return pathname === "/signals-bot" && currentTab === "simulator";
     }
     return pathname === href;
   };

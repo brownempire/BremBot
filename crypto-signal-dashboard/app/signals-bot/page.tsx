@@ -12,6 +12,7 @@ import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider"
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
+import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
   JupiterPerpsWidgetController,
   JupiterPerpsWidgetSnapshot,
@@ -76,7 +77,7 @@ const DEFAULT_PARAMS: UserParams = {
   cooldownSeconds: 60,
 };
 
-type SignalsAppTab = "signals" | "perps" | "wallet";
+type SignalsAppTab = "signals" | "perps" | "simulator" | "wallet";
 
 type AutoTradeToken = "SOL" | "ETH" | "BTC" | "USDC" | "JUP" | "BONK";
 
@@ -724,7 +725,7 @@ function DashboardPage() {
     const syncActiveTab = () => {
       if (typeof window === "undefined") return;
       const tab = new URLSearchParams(window.location.search).get("tab");
-      if (tab === "perps" || tab === "wallet") {
+      if (tab === "perps" || tab === "simulator" || tab === "wallet") {
         setActiveSignalsTab(tab);
         return;
       }
@@ -3778,6 +3779,9 @@ function DashboardPage() {
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "perps"}>
           {renderStructuredPanel("perps")}
+        </div>
+        <div className="tab-panel" hidden={activeSignalsTab !== "simulator"}>
+          <EmbeddedSimulatorPanel />
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
           {renderStructuredPanel("wallet")}

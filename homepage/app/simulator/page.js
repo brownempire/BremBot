@@ -1,4 +1,4 @@
-import SimulatorClient from "../simulator-client";
+import { redirect } from "next/navigation";
 
 export const metadata = {
   description: "Test leveraged perps compounding, fees, risk, and Monte Carlo outcomes.",
@@ -23,5 +23,5 @@ export const metadata = {
 };
 
 export default function SimulatorPage() {
-  return <SimulatorClient />;
+  redirect("https://app.bremlogic.com/signals-bot?tab=simulator");
 }
