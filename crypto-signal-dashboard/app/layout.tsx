@@ -101,8 +101,10 @@ export default async function RootLayout({
         </div>
         <NativeShellConfigurator />
         <NativeSplashController />
-        <BottomTabs />
-        {children}
+        <div className="app-viewport">
+          <div className="app-scroll-shell">{children}</div>
+          <BottomTabs />
+        </div>
       </body>
     </html>
   );

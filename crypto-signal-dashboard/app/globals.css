@@ -39,7 +39,10 @@ body {
   background: radial-gradient(1200px 600px at 10% -10%, rgba(101, 217, 255, 0.12), transparent 60%),
     radial-gradient(900px 500px at 90% 10%, rgba(255, 164, 92, 0.14), transparent 55%),
     linear-gradient(160deg, var(--bg), var(--bg-2));
-  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body.chart-scroll-lock {
@@ -87,6 +90,28 @@ body.native-ios-shell {
 
 html {
   background-color: #000;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: pan-x pan-y;
+}
+
+.app-viewport {
+  position: fixed;
+  inset: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.app-scroll-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
 }
 
 .bottom-tabs {
