@@ -52,6 +52,13 @@ type ComputedGuide = {
   top: number;
 };
 
+type OverlayScaleSnapshot = {
+  paneTop: number;
+  paneBottom: number;
+  minPrice: number;
+  maxPrice: number;
+};
+
 function getIntervalWindowMs(interval: string) {
   const normalized = interval.trim().toUpperCase();
   if (normalized === "1") return 60 * 60 * 1000;
@@ -124,6 +131,146 @@ function computeGuidePositions(
   });
 }
 
+function parseVisiblePrice(text: string) {
+  const normalized = text.replace(/[,\s\u202f]/g, "");
+  const match = normalized.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+
+  const value = Number(match[0]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
+  if (!frameNode) return null;
+
+  const iframe = frameNode.querySelector("iframe");
+  if (!iframe) return null;
+
+  let iframeDocument: Document | null = null;
+  try {
+    iframeDocument = iframe.contentDocument ?? iframe.contentWindow?.document ?? null;
+  } catch {
+    return null;
+  }
+  if (!iframeDocument) return null;
+
+  const pane = iframeDocument.querySelector(".chart-markup-table.pane");
+  const axis = iframeDocument.querySelector(".price-axis");
+  if (!(pane instanceof HTMLElement) || !(axis instanceof HTMLElement)) return null;
+
+  const paneRect = pane.getBoundingClientRect();
+  const iframeRect = iframe.getBoundingClientRect();
+  if (paneRect.height <= 0 || iframeRect.height <= 0) return null;
+
+  const paneTop = paneRect.top - iframeRect.top;
+  const paneBottom = paneRect.bottom - iframeRect.top;
+  if (!Number.isFinite(paneTop) || !Number.isFinite(paneBottom) || paneBottom <= paneTop) return null;
+
+  const labelNodes = Array.from(axis.querySelectorAll<HTMLElement>("div, span"))
+    .map((node) => {
+      const rect = node.getBoundingClientRect();
+      const price = parseVisiblePrice(node.textContent ?? "");
+      return {
+        price,
+        top: rect.top - iframeRect.top,
+        height: rect.height,
+      };
+    })
+    .filter(
+      (item): item is { price: number; top: number; height: number } =>
+        item.price !== null
+        && Number.isFinite(item.top)
+        && Number.isFinite(item.height)
+        && item.height > 0
+        && item.top + item.height >= paneTop
+        && item.top <= paneBottom
+    )
+    .sort((left, right) => left.top - right.top);
+
+  if (labelNodes.length < 2) return null;
+
+  const topNode = labelNodes[0];
+  const bottomNode = labelNodes[labelNodes.length - 1];
+  if (topNode.price === bottomNode.price) return null;
+
+  return {
+    paneTop,
+    paneBottom,
+    maxPrice: Math.max(topNode.price, bottomNode.price),
+    minPrice: Math.min(topNode.price, bottomNode.price),
+  } satisfies OverlayScaleSnapshot;
+}
+
+function buildFallbackScaleSnapshot(
+  frameNode: HTMLDivElement | null,
+  pricePoints: PricePoint[],
+  guides: TradingViewChartProps["guides"],
+  interval: string
+) {
+  const frameHeight = frameNode?.clientHeight ?? 0;
+  const paneTop = Math.min(90, Math.max(54, frameHeight * 0.105));
+  const paneBottom = Math.max(paneTop + 120, frameHeight - Math.min(42, Math.max(26, frameHeight * 0.055)));
+
+  const validGuides = (guides ?? []).filter(
+    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
+      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
+  );
+  const validPoints = pricePoints.filter(
+    (point): point is PricePoint => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0
+  );
+
+  const guidePrices = validGuides.map((guide) => guide.price);
+  const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
+  const intervalWindowMs = getIntervalWindowMs(interval);
+  const visiblePoints = validPoints.filter((point) => point.t >= latestTimestamp - intervalWindowMs);
+  const effectivePoints = visiblePoints.length >= 8 ? visiblePoints : validPoints.slice(-240);
+  const pointValues = effectivePoints.map((point) => point.v);
+  const scaleValues = [...pointValues, ...guidePrices].filter((value) => Number.isFinite(value) && value > 0);
+
+  if (scaleValues.length === 0) {
+    return null;
+  }
+
+  const minPrice = Math.min(...scaleValues);
+  const maxPrice = Math.max(...scaleValues);
+  const midpoint = (minPrice + maxPrice) / 2;
+  const span = Math.max(maxPrice - minPrice, midpoint * 0.02, 1e-6);
+
+  return {
+    paneTop,
+    paneBottom,
+    minPrice: minPrice - span * 0.15,
+    maxPrice: maxPrice + span * 0.15,
+  } satisfies OverlayScaleSnapshot;
+}
+
+function computeGuidePositionsFromScale(
+  guides: TradingViewChartProps["guides"],
+  scale: OverlayScaleSnapshot,
+  frameHeight: number
+) {
+  if (!Number.isFinite(frameHeight) || frameHeight <= 0) return [];
+
+  const validGuides = (guides ?? []).filter(
+    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
+      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
+  );
+  if (validGuides.length === 0) return [];
+
+  const clampedPaneHeight = Math.max(scale.paneBottom - scale.paneTop, 1);
+  const scaleSpan = Math.max(scale.maxPrice - scale.minPrice, 1e-6);
+
+  return validGuides.map((guide) => {
+    const relative = (guide.price - scale.minPrice) / scaleSpan;
+    const paneOffset = 1 - Math.min(1, Math.max(0, relative));
+    const y = scale.paneTop + paneOffset * clampedPaneHeight;
+    return {
+      ...guide,
+      top: (y / frameHeight) * 100,
+    };
+  });
+}
+
 function loadTradingViewScript() {
   if (window.TradingView?.widget) return Promise.resolve();
   if (scriptLoadingPromise) return scriptLoadingPromise;
@@ -176,7 +323,18 @@ export function TradingViewChart({
   const [isVisible, setIsVisible] = useState(true);
 
   const refreshOverlay = useCallback(() => {
-    setComputedGuides(computeGuidePositions(pricePoints, guides, currentInterval));
+    const frameNode = frameRef.current;
+    const frameHeight = frameNode?.clientHeight ?? 0;
+    const liveScale = readOverlayScaleSnapshot(frameNode);
+    const fallbackScale = buildFallbackScaleSnapshot(frameNode, pricePoints, guides, currentInterval);
+    const resolvedScale = liveScale ?? fallbackScale;
+
+    if (!resolvedScale || frameHeight <= 0) {
+      setComputedGuides(computeGuidePositions(pricePoints, guides, currentInterval));
+      return;
+    }
+
+    setComputedGuides(computeGuidePositionsFromScale(guides, resolvedScale, frameHeight));
   }, [currentInterval, guides, pricePoints]);
 
   useEffect(() => {
