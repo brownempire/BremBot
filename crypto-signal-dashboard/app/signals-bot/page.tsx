@@ -34,6 +34,7 @@ const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
+const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
 const NATIVE_NOTIFICATION_SOUNDS = {
   appOpen: "brem_open.wav",
   signal: "brem_signal.wav",
@@ -732,7 +733,11 @@ function DashboardPage() {
 
     syncActiveTab();
     window.addEventListener("popstate", syncActiveTab);
-    return () => window.removeEventListener("popstate", syncActiveTab);
+    window.addEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
+    return () => {
+      window.removeEventListener("popstate", syncActiveTab);
+      window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
+    };
   }, []);
 
   const clearPerpsAutoTradeTimeout = useCallback(() => {

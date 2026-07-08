@@ -3,6 +3,8 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
+
 const MENU_ITEMS = [
   { href: "https://www.bremlogic.com", label: "Home", external: true },
   { href: "/signals-bot", label: "Signals" },
@@ -46,11 +48,24 @@ export function TopMenu() {
 
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("popstate", syncTab);
+    window.addEventListener(SIGNALS_BOT_TAB_EVENT, syncTab);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("popstate", syncTab);
+      window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncTab);
     };
   }, []);
+
+  const handleSignalsBotTabNavigation = (href: string) => {
+    if (typeof window === "undefined") return;
+    const nextUrl = new URL(href, window.location.origin);
+    if (nextUrl.pathname !== "/signals-bot") {
+      window.location.assign(nextUrl.toString());
+      return;
+    }
+    window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}`);
+    window.dispatchEvent(new Event(SIGNALS_BOT_TAB_EVENT));
+  };
 
   return (
     <div ref={containerRef} className="top-menu">
@@ -73,7 +88,14 @@ export function TopMenu() {
               key={item.href}
               href={item.href}
               className={`top-menu-link ${isActive(item.href) ? "active" : ""}`}
-              onClick={() => setOpen(false)}
+              onClick={(event) => {
+                setOpen(false);
+                if (item.external || pathname !== "/signals-bot" || !item.href.startsWith("/signals-bot")) {
+                  return;
+                }
+                event.preventDefault();
+                handleSignalsBotTabNavigation(item.href);
+              }}
             >
               {item.label}
             </a>
