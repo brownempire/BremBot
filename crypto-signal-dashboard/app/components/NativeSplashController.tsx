@@ -50,26 +50,26 @@ export function NativeSplashController() {
     }
 
     let hideTimer = 0;
+    let removeTimer = 0;
+    let hidden = false;
 
     const hide = () => {
+      if (hidden) return;
+      hidden = true;
       const remaining = Math.max(0, MIN_SPLASH_MS - (Date.now() - startedAt));
       hideTimer = window.setTimeout(() => {
         overlay.classList.add("is-hidden");
-        window.setTimeout(() => {
+        removeTimer = window.setTimeout(() => {
           overlay.remove();
         }, 220);
       }, remaining);
     };
 
-    if (document.readyState === "complete") {
-      hide();
-    } else {
-      window.addEventListener("load", hide, { once: true });
-    }
+    hide();
 
     return () => {
-      window.removeEventListener("load", hide);
       window.clearTimeout(hideTimer);
+      window.clearTimeout(removeTimer);
       removePlaybackListeners?.();
     };
   }, []);
