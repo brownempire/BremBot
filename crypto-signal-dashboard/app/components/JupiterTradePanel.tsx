@@ -67,7 +67,6 @@ export function JupiterTradePanel({
           defaultExplorer: "Solscan",
           formProps: {
             swapMode: "ExactInOrOut",
-            fixedMint: defaultInputMint,
             initialInputMint: defaultInputMint,
             initialOutputMint,
           },
