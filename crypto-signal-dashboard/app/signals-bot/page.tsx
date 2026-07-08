@@ -91,6 +91,7 @@ type AutoTradeTokenOption = {
 type AutoTradeMode = "all" | "buy-only";
 type PerpsExecutionMode = "set-parameters" | "smart-trades";
 type SmartTradeProfile = "conservative" | "balanced" | "aggressive";
+type WalletAllocationMode = "percent" | "usd";
 
 const AUTO_TRADE_TOKEN_OPTIONS: AutoTradeTokenOption[] = [
   { symbol: "SOL", label: "Solana (SOL)", mint: SOL_MINT },
@@ -108,6 +109,7 @@ type AutoTradeSlot = {
 
 type AutoTradeSettings = {
   walletPercent: number;
+  walletAllocationMode: WalletAllocationMode;
   takeProfitPercent: number;
   stopLossPercent: number;
   perpsLeverage: number;
@@ -122,6 +124,7 @@ type AutoTradeSettings = {
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
+  walletAllocationMode: "percent",
   takeProfitPercent: 0,
   stopLossPercent: 0,
   perpsLeverage: 10,
@@ -296,6 +299,43 @@ function StepperNumberInput({
   );
 }
 
+function formatAllocationValue(settings: AutoTradeSettings) {
+  if (settings.walletAllocationMode === "usd") {
+    return `$${settings.walletPercent.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  }
+  return `${Math.round(settings.walletPercent)}%`;
+}
+
+function getAllocationPercentOfBalance(settings: AutoTradeSettings, balanceAmount: number) {
+  if (settings.walletAllocationMode === "usd") {
+    if (!Number.isFinite(balanceAmount) || balanceAmount <= 0) return 0;
+    return clampNumber((settings.walletPercent / balanceAmount) * 100, 0, 100);
+  }
+  return clampNumber(settings.walletPercent, 1, 100);
+}
+
+function getAutoTradeAllocationAmount(options: {
+  settings: AutoTradeSettings;
+  availableInput: number;
+  inputMint: string;
+  assetUsdPrice?: number | null;
+}) {
+  const { settings, availableInput, inputMint, assetUsdPrice } = options;
+  if (!Number.isFinite(availableInput) || availableInput <= 0) return 0;
+  if (settings.walletAllocationMode === "percent") {
+    return Number((availableInput * (settings.walletPercent / 100)).toFixed(6));
+  }
+  if (inputMint === USDC_MINT) {
+    return Number(Math.min(availableInput, settings.walletPercent).toFixed(6));
+  }
+  if (!Number.isFinite(assetUsdPrice) || !assetUsdPrice || assetUsdPrice <= 0) return 0;
+  return Number(Math.min(availableInput, settings.walletPercent / assetUsdPrice).toFixed(6));
+}
+
+function formatAutoTradeAllocationLabel(settings: AutoTradeSettings, kind: "allocation" | "collateral" = "allocation") {
+  return `${formatAllocationValue(settings)} ${kind}`;
+}
+
 type PhantomAuthProvider = {
   isPhantom?: boolean;
   publicKey?: PublicKey | { toBase58: () => string } | null;
@@ -406,6 +446,7 @@ function computeRecentVolatilityPercent(points: PricePoint[]) {
 function deriveSmartPerpsTradePlan(options: {
   points: PricePoint[];
   settings: AutoTradeSettings;
+  collateralPercentBase: number;
   signal: Signal;
 }): SmartPerpsTradePlan {
   const volatilityPercent = computeRecentVolatilityPercent(options.points);
@@ -445,7 +486,7 @@ function deriveSmartPerpsTradePlan(options: {
 
   const profileConfig = profileSettings[profile];
   const collateralPercent = clampNumber(
-    options.settings.walletPercent * (profileConfig.collateralBase + confidenceBias * 0.18 - volatilityFactor * 0.16),
+    options.collateralPercentBase * (profileConfig.collateralBase + confidenceBias * 0.18 - volatilityFactor * 0.16),
     5,
     100
   );
@@ -810,11 +851,11 @@ function DashboardPage() {
     }
 
     if (options?.activePositionLabel) {
-      return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${perpsModeLabel}) · ${options.activePositionLabel}`;
+      return `Perps auto-trade is on (${tokenSymbol}, ${formatAutoTradeAllocationLabel(autoTradeSettings, "collateral")}, ${autoTradeSettings.perpsLeverage}x, ${perpsModeLabel}) · ${options.activePositionLabel}`;
     }
 
-    return `Perps auto-trade is on (${tokenSymbol}, ${autoTradeSettings.walletPercent}% collateral, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"}, ${perpsModeLabel})`;
-  }, [autoTradeSettings.mode, autoTradeSettings.perpsExecutionMode, autoTradeSettings.perpsLeverage, autoTradeSettings.smartTradeProfile, autoTradeSettings.walletPercent]);
+    return `Perps auto-trade is on (${tokenSymbol}, ${formatAutoTradeAllocationLabel(autoTradeSettings, "collateral")}, ${autoTradeSettings.perpsLeverage}x, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"}, ${perpsModeLabel})`;
+  }, [autoTradeSettings]);
 
   const setPerpsAutoTradeFailureCooldown = useCallback((tokenSymbol: string, message: string) => {
     clearPerpsAutoTradeErrorResetTimeout();
@@ -1267,7 +1308,15 @@ function DashboardPage() {
                 const availableInput = inputMint === SOL_MINT
                   ? (solBalance ?? 0)
                   : (walletTokens.find((token) => token.mint === inputMint)?.amount ?? 0);
-                const tradeAmount = Number((availableInput * (autoTradeSettings.walletPercent / 100)).toFixed(6));
+                const assetUsdPrice = inputMint === USDC_MINT
+                  ? 1
+                  : (walletTokens.find((token) => token.mint === inputMint)?.usdPrice ?? points[points.length - 1]?.v ?? null);
+                const tradeAmount = getAutoTradeAllocationAmount({
+                  settings: autoTradeSettings,
+                  availableInput,
+                  inputMint,
+                  assetUsdPrice,
+                });
                 if (!Number.isFinite(tradeAmount) || tradeAmount <= 0) {
                   setAutoTradeStatus(`Signal detected for ${signal.symbol} but no ${isBullSignal ? "USDC" : assetSymbol} balance is available`);
                 } else {
@@ -1363,11 +1412,11 @@ function DashboardPage() {
                   entryPrice: points[points.length - 1]?.v ?? undefined,
                   takeProfitPrice: null,
                   tradeDirection: signal.direction === "bullish" ? "buy" : "sell",
-                  signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${autoTradeSettings.walletPercent}% allocation`,
+                  signalSummary: `${signal.summary} · ${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol} · ${formatAutoTradeAllocationLabel(autoTradeSettings)}`,
                 };
                 persistTradeRecord(autoTradeRecord).catch(() => undefined);
                 setAutoTradeStatus(
-                  `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${autoTradeSettings.walletPercent}% allocation; connect wallet for live)`
+                  `Auto-trade paper execution for ${signal.symbol} (${signal.direction === "bullish" ? "buy" : "sell"} ${assetSymbol}, ${formatAutoTradeAllocationLabel(autoTradeSettings)}; connect wallet for live)`
                 );
               }
             }
@@ -1412,22 +1461,24 @@ function DashboardPage() {
                 return;
               }
 
+              const usdcBalance = walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0;
+              const baseCollateralPercent = getAllocationPercentOfBalance(autoTradeSettings, usdcBalance);
               const perpsTradePlan =
                 autoTradeSettings.perpsExecutionMode === "smart-trades"
                   ? deriveSmartPerpsTradePlan({
                       points,
                       settings: autoTradeSettings,
+                      collateralPercentBase: baseCollateralPercent,
                       signal,
                     })
                   : {
-                      collateralPercent: autoTradeSettings.walletPercent,
+                      collateralPercent: baseCollateralPercent,
                       leverage: autoTradeSettings.perpsLeverage,
                       stopLossPercent: autoTradeSettings.stopLossPercent,
                       takeProfitPercent: autoTradeSettings.takeProfitPercent,
                       volatilityPercent: computeRecentVolatilityPercent(points),
                     };
 
-              const usdcBalance = walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0;
               const collateralAmount = Number((usdcBalance * (perpsTradePlan.collateralPercent / 100)).toFixed(6));
               if (!Number.isFinite(collateralAmount) || collateralAmount <= 0) {
                 setPerpsAutoTradeStatus(`Perps signal detected for ${signal.symbol} but no USDC collateral is available`);
@@ -1836,9 +1887,12 @@ function DashboardPage() {
       const raw = window.localStorage.getItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw) as Partial<AutoTradeSettings & { inputToken?: AutoTradeToken }>;
+      const walletAllocationMode = parsed.walletAllocationMode === "usd" ? "usd" : "percent";
       const nextPercent = Number(parsed.walletPercent);
       const percent = Number.isFinite(nextPercent)
-        ? Math.min(100, Math.max(1, Math.round(nextPercent)))
+        ? walletAllocationMode === "usd"
+          ? Math.max(1, Number(nextPercent.toFixed(2)))
+          : Math.min(100, Math.max(1, Math.round(nextPercent)))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
       const nextTakeProfit = Number(parsed.takeProfitPercent);
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
@@ -1891,6 +1945,7 @@ function DashboardPage() {
 
       setAutoTradeSettings({
         walletPercent: percent,
+        walletAllocationMode,
         takeProfitPercent,
         stopLossPercent,
         perpsLeverage,
@@ -1943,13 +1998,13 @@ function DashboardPage() {
       return;
     }
     setAutoTradeStatus(
-      `Auto-trade is on (${activeAutoTradeToken.symbol}, ${autoTradeSettings.walletPercent}% allocation, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`
+      `Auto-trade is on (${activeAutoTradeToken.symbol}, ${formatAutoTradeAllocationLabel(autoTradeSettings)}, ${autoTradeSettings.mode === "buy-only" ? "Buy Only" : "All"})`
     );
   }, [
     activeAutoTradeToken,
     autoTradeSettings.disableTpLock,
     autoTradeSettings.mode,
-    autoTradeSettings.walletPercent,
+    autoTradeSettings,
     pendingTakeProfit,
   ]);
 
@@ -1989,7 +2044,7 @@ function DashboardPage() {
     activePerpsAutoTradeToken,
     autoTradeSettings.mode,
     autoTradeSettings.perpsLeverage,
-    autoTradeSettings.walletPercent,
+    autoTradeSettings,
     clearPerpsAutoTradeFailureCooldown,
     clearPerpsAutoTradeTimeout,
     getPerpsAutoTradeReadyStatus,
@@ -3135,12 +3190,12 @@ function DashboardPage() {
     persistAutoTradeSettings(next);
     if (next.activeSlotId === slotId) {
       setAutoTradeStatus(
-        `Auto-trade is on (${token}, ${next.walletPercent}% allocation, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+        `Auto-trade is on (${token}, ${formatAutoTradeAllocationLabel(next)}, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
       );
     }
     if (next.perpsActiveSlotId === slotId) {
       setPerpsAutoTradeStatus(
-        `Perps auto-trade is on (${token}, ${next.walletPercent}% collateral, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+        `Perps auto-trade is on (${token}, ${formatAutoTradeAllocationLabel(next, "collateral")}, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
       );
     }
   }
@@ -3161,7 +3216,7 @@ function DashboardPage() {
     persistAutoTradeSettings(next);
     setAutoTradeStatus(
       enabled && token
-        ? `Auto-trade is on (${token.symbol}, ${next.walletPercent}% allocation, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+        ? `Auto-trade is on (${token.symbol}, ${formatAutoTradeAllocationLabel(next)}, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
         : "Auto-trade is off"
     );
   }
@@ -3182,7 +3237,7 @@ function DashboardPage() {
     persistAutoTradeSettings(next);
     setPerpsAutoTradeStatus(
       enabled && token
-        ? `Perps auto-trade is on (${token.symbol}, ${next.walletPercent}% collateral, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
+        ? `Perps auto-trade is on (${token.symbol}, ${formatAutoTradeAllocationLabel(next, "collateral")}, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
         : "Perps auto-trade is off"
     );
   }
@@ -3490,15 +3545,34 @@ function DashboardPage() {
             <label>Breakout %<StepperNumberInput value={params.breakoutPercent} min={0.8} max={8} step={0.2} onChange={(value) => setParams((prev) => ({ ...prev, breakoutPercent: value }))} /></label>
             <label>Cooldown (sec)<StepperNumberInput value={params.cooldownSeconds} min={5} max={900} step={5} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, cooldownSeconds: value }))} /></label>
             <label>
-              Auto-trade wallet allocation (%)
+              <span className="allocation-label-row">
+                <span>Auto-trade wallet allocation</span>
+                <button
+                  type="button"
+                  className="secondary allocation-mode-button"
+                  onClick={() => {
+                    const next: AutoTradeSettings = {
+                      ...autoTradeSettings,
+                      walletAllocationMode: autoTradeSettings.walletAllocationMode === "percent" ? "usd" : "percent",
+                    };
+                    persistAutoTradeSettings(next);
+                  }}
+                >
+                  {autoTradeSettings.walletAllocationMode === "percent" ? "%" : "$"}
+                </button>
+              </span>
               <StepperNumberInput
                 value={autoTradeSettings.walletPercent}
                 min={1}
-                max={100}
-                step={1}
+                max={autoTradeSettings.walletAllocationMode === "percent" ? 100 : 1_000_000}
+                step={autoTradeSettings.walletAllocationMode === "percent" ? 1 : 1}
                 inputMode="numeric"
                 onChange={(value) => {
-                  const walletPercent = Number.isFinite(value) ? Math.min(100, Math.max(1, Math.round(value))) : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
+                  const walletPercent = Number.isFinite(value)
+                    ? autoTradeSettings.walletAllocationMode === "percent"
+                      ? Math.min(100, Math.max(1, Math.round(value)))
+                      : Math.max(1, Number(value.toFixed(2)))
+                    : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
                   const next = { ...autoTradeSettings, walletPercent };
                   persistAutoTradeSettings(next);
                 }}

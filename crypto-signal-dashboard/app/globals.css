@@ -489,6 +489,19 @@ header {
   margin-top: 8px;
 }
 
+.allocation-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.allocation-mode-button {
+  margin: 0;
+  min-width: 48px;
+  padding: 6px 12px;
+}
+
 .stepper-input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 40px;
