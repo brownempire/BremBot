@@ -47,7 +47,7 @@ body.chart-scroll-lock {
 }
 
 body.native-ios-shell {
-  --native-content-top-buffer: max(var(--safe-top), 84px);
+  --native-content-top-buffer: max(var(--safe-top), 42px);
 }
 
 .native-splash-overlay {
@@ -103,14 +103,14 @@ html {
 .bottom-tabs-shell {
   width: 100%;
   margin: 0;
-  min-height: 62px;
+  min-height: 78px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
   padding:
-    6px
+    10px
     calc(var(--safe-right) + 8px)
-    calc(var(--safe-bottom) + 8px)
+    calc(var(--safe-bottom) + 12px)
     calc(var(--safe-left) + 8px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
@@ -127,8 +127,8 @@ html {
   background: transparent;
   color: var(--muted);
   min-width: 0;
-  min-height: 46px;
-  padding: 4px 2px;
+  min-height: 52px;
+  padding: 6px 2px 4px;
   border-radius: 12px;
   display: flex;
   flex-direction: column;
@@ -175,7 +175,7 @@ a {
 }
 
 main {
-  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 122px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-content-top-buffer) + 8px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 138px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -330,9 +330,9 @@ main {
 @media (max-width: 720px) {
   main {
     padding:
-      calc(var(--native-content-top-buffer) + 18px)
+      calc(var(--native-content-top-buffer) + 6px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 116px)
+      calc(var(--safe-bottom) + 132px)
       calc(var(--safe-left) + 16px);
   }
 
@@ -340,9 +340,9 @@ main {
     border-radius: 0;
     gap: 2px;
     padding:
-      6px
+      10px
       calc(var(--safe-right) + 4px)
-      calc(var(--safe-bottom) + 8px)
+      calc(var(--safe-bottom) + 10px)
       calc(var(--safe-left) + 4px);
   }
 
@@ -742,9 +742,9 @@ button:disabled {
 @media (max-width: 720px) {
   main {
     padding:
-      calc(var(--native-content-top-buffer) + 18px)
+      calc(var(--native-content-top-buffer) + 6px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 116px)
+      calc(var(--safe-bottom) + 132px)
       calc(var(--safe-left) + 16px);
   }
 
