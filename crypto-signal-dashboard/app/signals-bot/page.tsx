@@ -3867,52 +3867,51 @@ function DashboardPage() {
           <div className="header-brand-block">
             <Image
               className="brand-logo"
-              src="/header-photo.png"
+              src="/bremlogic-logo.png"
               alt="BremLogic"
               width={1038}
               height={338}
               priority
             />
-            <div className="subtext">
-              Real-time crypto signals with on-app wallet controls and manual trade execution flow.
-            </div>
-          </div>
-          <div className="header-actions">
-            <div ref={notificationPanelRef} className="notification-bell-wrap">
-              <button
-                type="button"
-                className={`notification-bell-button ${notificationPanelOpen ? "open" : ""}`}
-                aria-expanded={notificationPanelOpen}
-                aria-label="Notification settings"
-                onClick={() => setNotificationPanelOpen((open) => !open)}
-              >
-                <span aria-hidden="true">🔔</span>
-              </button>
-              {notificationPanelOpen ? (
-                <div className="notification-popover panel compact-panel">
-                  <strong>Alerts & Push</strong>
-                  <span className="subtext">{pushStatus}</span>
-                  {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
-                  <div className="alerts-actions">
-                    <button
-                      type="button"
-                      onClick={togglePush}
-                      disabled={!pushReady}
-                      className={pushEnabled ? "push-toggle on" : "push-toggle off"}
-                    >
-                      {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
-                    </button>
-                    <button type="button" className="secondary" onClick={sendTestPush}>Send Test Push</button>
-                  </div>
+            <div className="header-status-stack">
+              <div className="header-status-topline">
+                <div className="badge badge-status badge-status-primary">{autoTradeStatus}</div>
+                <div ref={notificationPanelRef} className="notification-bell-wrap">
+                  <button
+                    type="button"
+                    className={`notification-bell-button ${notificationPanelOpen ? "open" : ""}`}
+                    aria-expanded={notificationPanelOpen}
+                    aria-label="Notification settings"
+                    onClick={() => setNotificationPanelOpen((open) => !open)}
+                  >
+                    <span aria-hidden="true">🔔</span>
+                  </button>
+                  {notificationPanelOpen ? (
+                    <div className="notification-popover panel compact-panel">
+                      <strong>Alerts & Push</strong>
+                      <span className="subtext">{pushStatus}</span>
+                      {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
+                      <div className="alerts-actions">
+                        <button
+                          type="button"
+                          onClick={togglePush}
+                          disabled={!pushReady}
+                          className={pushEnabled ? "push-toggle on" : "push-toggle off"}
+                        >
+                          {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
+                        </button>
+                        <button type="button" className="secondary" onClick={sendTestPush}>Send Test Push</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
+              </div>
+              <div className="badge badge-status badge-status-wide">{perpsAutoTradeStatus}</div>
+              <div className="badges badges-supporting">
+                <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
+                <div className="badge">Wallet: in-app</div>
+              </div>
             </div>
-          </div>
-          <div className="badges">
-            <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-            <div className="badge">Wallet: in-app</div>
-            <div className="badge">{autoTradeStatus}</div>
-            <div className="badge">{perpsAutoTradeStatus}</div>
           </div>
         </div>
       </header>

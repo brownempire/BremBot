@@ -389,33 +389,43 @@ main {
   .bottom-tab-label {
     font-size: 10px;
   }
+
+  .header-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .header-status-topline {
+    gap: 8px;
+  }
+
+  .brand-logo {
+    width: min(100%, 540px);
+  }
+
+  .badge-status-primary {
+    min-height: 52px;
+  }
 }
 
 header {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  margin-bottom: 28px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .header-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
+  flex-wrap: nowrap;
+  gap: 10px;
   align-items: flex-start;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .header-brand-block {
-  flex: 1 1 560px;
+  flex: 1 1 auto;
   min-width: min(100%, 320px);
-}
-
-.header-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-  flex: 0 0 auto;
 }
 
 .title {
@@ -428,13 +438,30 @@ header {
   width: min(520px, 100%);
   height: auto;
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
+}
+
+.header-status-stack {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.header-status-topline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
 }
 
 .badges {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.badges-supporting {
+  gap: 10px;
 }
 
 .badge {
@@ -444,6 +471,22 @@ header {
   border: 1px solid rgba(101, 217, 255, 0.22);
   font-size: 12px;
   color: var(--accent);
+}
+
+.badge-status {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.badge-status-primary {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+}
+
+.badge-status-wide {
+  width: 100%;
 }
 
 .grid {
@@ -908,6 +951,7 @@ button:disabled {
 
 .notification-bell-wrap {
   position: relative;
+  align-self: start;
 }
 
 .notification-bell-button {

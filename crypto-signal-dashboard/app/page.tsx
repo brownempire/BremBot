@@ -6,7 +6,7 @@ export default function HomePage() {
       <section className="card hero-card">
         <Image
           className="hero-logo"
-          src="/header-photo.png"
+          src="/bremlogic-logo.png"
           alt="BremLogic"
           width={720}
           height={405}
