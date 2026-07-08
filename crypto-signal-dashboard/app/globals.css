@@ -94,7 +94,7 @@ html {
   right: 0;
   bottom: 0;
   z-index: 2147483645;
-  padding: 0 0 var(--safe-bottom) 0;
+  padding: 0;
   background:
     linear-gradient(180deg, rgba(12, 14, 20, 0.9), rgba(10, 12, 18, 0.98));
   pointer-events: none;
@@ -103,16 +103,21 @@ html {
 .bottom-tabs-shell {
   width: 100%;
   margin: 0;
-  min-height: 64px;
+  min-height: 58px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
-  padding: 6px calc(var(--safe-right) + 8px) 6px calc(var(--safe-left) + 8px);
+  padding:
+    6px
+    calc(var(--safe-right) + 8px)
+    calc(var(--safe-bottom) + 8px)
+    calc(var(--safe-left) + 8px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
-  box-shadow: 0 -10px 24px rgba(1, 3, 8, 0.28);
+  box-shadow: 0 -8px 18px rgba(1, 3, 8, 0.22);
   backdrop-filter: blur(14px);
   border-radius: 0;
+  overflow: hidden;
   pointer-events: auto;
 }
 
@@ -122,8 +127,8 @@ html {
   background: transparent;
   color: var(--muted);
   min-width: 0;
-  min-height: 48px;
-  padding: 4px 2px 2px;
+  min-height: 44px;
+  padding: 4px 2px;
   border-radius: 12px;
   display: flex;
   flex-direction: column;
@@ -170,7 +175,7 @@ a {
 }
 
 main {
-  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 132px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 118px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -327,14 +332,18 @@ main {
     padding:
       calc(var(--native-content-top-buffer) + 18px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 122px)
+      calc(var(--safe-bottom) + 112px)
       calc(var(--safe-left) + 16px);
   }
 
   .bottom-tabs-shell {
     border-radius: 0;
     gap: 2px;
-    padding: 6px 4px;
+    padding:
+      6px
+      calc(var(--safe-right) + 4px)
+      calc(var(--safe-bottom) + 6px)
+      calc(var(--safe-left) + 4px);
   }
 
   .bottom-tab-label {
@@ -735,7 +744,7 @@ button:disabled {
     padding:
       calc(var(--native-content-top-buffer) + 18px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 122px)
+      calc(var(--safe-bottom) + 112px)
       calc(var(--safe-left) + 16px);
   }
 
