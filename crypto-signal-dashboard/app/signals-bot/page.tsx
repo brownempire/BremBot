@@ -231,6 +231,68 @@ type RemoteAuthChallenge = {
   expiresAt: string;
 };
 
+type StepperNumberInputProps = {
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  inputMode?: "decimal" | "numeric";
+  onChange: (value: number) => void;
+};
+
+function countStepDecimals(step: number) {
+  const raw = step.toString();
+  if (!raw.includes(".")) return 0;
+  return raw.split(".")[1]?.length ?? 0;
+}
+
+function clampToRange(value: number, min?: number, max?: number) {
+  if (typeof min === "number") value = Math.max(min, value);
+  if (typeof max === "number") value = Math.min(max, value);
+  return value;
+}
+
+function normalizeStepValue(value: number, step: number, min?: number, max?: number) {
+  const decimals = countStepDecimals(step);
+  return Number(clampToRange(value, min, max).toFixed(decimals));
+}
+
+function StepperNumberInput({
+  value,
+  min,
+  max,
+  step = 1,
+  inputMode = "decimal",
+  onChange,
+}: StepperNumberInputProps) {
+  const applyValue = (next: number) => {
+    if (!Number.isFinite(next)) return;
+    onChange(normalizeStepValue(next, step, min, max));
+  };
+
+  return (
+    <div className="stepper-input">
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        inputMode={inputMode}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (!Number.isFinite(next)) return;
+          applyValue(next);
+        }}
+      />
+      <div className="stepper-input-buttons">
+        <button type="button" aria-label="Increase value" onClick={() => applyValue(value + step)}>▲</button>
+        <button type="button" aria-label="Decrease value" onClick={() => applyValue(value - step)}>▼</button>
+      </div>
+    </div>
+  );
+}
+
 type PhantomAuthProvider = {
   isPhantom?: boolean;
   publicKey?: PublicKey | { toBase58: () => string } | null;
@@ -3411,20 +3473,19 @@ function DashboardPage() {
                 </select>
               ) : null}
             </label>
-            <label>Trend window (min)<input type="number" value={params.trendWindow} min={1} max={180} step={1} onChange={(event) => setParams((prev) => ({ ...prev, trendWindow: Number(event.target.value) }))} /></label>
-            <label>Trend threshold %<input type="number" value={params.trendThreshold} min={0.1} max={10} step={0.1} onChange={(event) => setParams((prev) => ({ ...prev, trendThreshold: Number(event.target.value) }))} /></label>
-            <label>Breakout %<input type="number" value={params.breakoutPercent} min={0.8} max={8} step={0.2} onChange={(event) => setParams((prev) => ({ ...prev, breakoutPercent: Number(event.target.value) }))} /></label>
-            <label>Cooldown (sec)<input type="number" value={params.cooldownSeconds} min={5} max={900} step={5} onChange={(event) => setParams((prev) => ({ ...prev, cooldownSeconds: Number(event.target.value) }))} /></label>
+            <label>Trend window (min)<StepperNumberInput value={params.trendWindow} min={1} max={180} step={1} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, trendWindow: value }))} /></label>
+            <label>Trend threshold %<StepperNumberInput value={params.trendThreshold} min={0.1} max={10} step={0.1} onChange={(value) => setParams((prev) => ({ ...prev, trendThreshold: value }))} /></label>
+            <label>Breakout %<StepperNumberInput value={params.breakoutPercent} min={0.8} max={8} step={0.2} onChange={(value) => setParams((prev) => ({ ...prev, breakoutPercent: value }))} /></label>
+            <label>Cooldown (sec)<StepperNumberInput value={params.cooldownSeconds} min={5} max={900} step={5} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, cooldownSeconds: value }))} /></label>
             <label>
               Auto-trade wallet allocation (%)
-              <input
-                type="number"
+              <StepperNumberInput
                 value={autoTradeSettings.walletPercent}
                 min={1}
                 max={100}
                 step={1}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
+                inputMode="numeric"
+                onChange={(value) => {
                   const walletPercent = Number.isFinite(value) ? Math.min(100, Math.max(1, Math.round(value))) : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
                   const next = { ...autoTradeSettings, walletPercent };
                   persistAutoTradeSettings(next);
@@ -3433,13 +3494,11 @@ function DashboardPage() {
             </label>
             <label>
               Take Profit % (bull buys only)
-              <input
-                type="number"
+              <StepperNumberInput
                 value={autoTradeSettings.takeProfitPercent}
                 min={0}
                 step={0.1}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
+                onChange={(value) => {
                   const takeProfitPercent = Number.isFinite(value) && value >= 0 ? value : 0;
                   const next = { ...autoTradeSettings, takeProfitPercent };
                   persistAutoTradeSettings(next);
@@ -3448,13 +3507,11 @@ function DashboardPage() {
             </label>
             <label>
               Stop Loss % (Perps only)
-              <input
-                type="number"
+              <StepperNumberInput
                 value={autoTradeSettings.stopLossPercent}
                 min={0}
                 step={0.1}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
+                onChange={(value) => {
                   const stopLossPercent = Number.isFinite(value) && value >= 0 ? value : 0;
                   const next = { ...autoTradeSettings, stopLossPercent };
                   persistAutoTradeSettings(next);
@@ -3463,16 +3520,12 @@ function DashboardPage() {
             </label>
             <label>
               Perps leverage
-              <input
-                type="number"
+              <StepperNumberInput
                 value={autoTradeSettings.perpsLeverage}
                 min={1}
                 max={250}
                 step={0.5}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  updatePerpsLeverage(value);
-                }}
+                onChange={updatePerpsLeverage}
               />
             </label>
             <label>
@@ -3713,21 +3766,19 @@ function DashboardPage() {
       </header>
 
       <section className="dashboard-layout dashboard-layout-static" style={{ marginBottom: 22 }}>
-        {activeSignalsTab === "signals" ? (
-          <>
-            {renderStructuredPanel("chart")}
-            {renderStructuredPanel("params")}
-            {renderStructuredPanel("signals")}
-          </>
-        ) : null}
-        {activeSignalsTab === "perps" ? renderStructuredPanel("perps") : null}
-        {activeSignalsTab === "wallet" ? (
-          <>
-            {renderStructuredPanel("wallet")}
-            {renderStructuredPanel("pnl")}
-            {renderStructuredPanel("trades")}
-          </>
-        ) : null}
+        <div className="tab-panel" hidden={activeSignalsTab !== "signals"}>
+          {renderStructuredPanel("chart")}
+          {renderStructuredPanel("params")}
+          {renderStructuredPanel("signals")}
+        </div>
+        <div className="tab-panel" hidden={activeSignalsTab !== "perps"}>
+          {renderStructuredPanel("perps")}
+        </div>
+        <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
+          {renderStructuredPanel("wallet")}
+          {renderStructuredPanel("pnl")}
+          {renderStructuredPanel("trades")}
+        </div>
       </section>
 
       {showDepositModal && wallet.publicKey ? (

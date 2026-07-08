@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import { isNativeShellRuntime } from "@/app/lib/nativeShell";
 
 const MIN_SPLASH_MS = 1600;
 const BOOT_SPLASH_ID = "native-boot-splash";
@@ -10,11 +9,6 @@ export function NativeSplashController() {
   useEffect(() => {
     const overlay = document.getElementById(BOOT_SPLASH_ID);
     if (!overlay) {
-      return;
-    }
-
-    if (!isNativeShellRuntime()) {
-      overlay.remove();
       return;
     }
 
@@ -30,6 +24,7 @@ export function NativeSplashController() {
       video.controls = false;
       video.setAttribute("autoplay", "");
       video.setAttribute("muted", "");
+      video.setAttribute("loop", "");
       video.setAttribute("playsinline", "");
       video.setAttribute("webkit-playsinline", "true");
       video.setAttribute("disableRemotePlayback", "true");
@@ -38,8 +33,8 @@ export function NativeSplashController() {
       const tryPlay = () => {
         void video.play().catch(() => undefined);
       };
-      tryPlay();
       video.load();
+      tryPlay();
 
       const onReady = () => {
         tryPlay();

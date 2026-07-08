@@ -60,13 +60,9 @@ body.native-ios-shell {
 }
 
 .native-splash-overlay-boot {
-  display: none;
+  display: block;
   opacity: 1;
   transition: opacity 180ms ease;
-}
-
-html.native-preload-shell .native-splash-overlay-boot {
-  display: block;
 }
 
 .native-splash-overlay-boot.is-hidden {
@@ -451,6 +447,63 @@ header {
   margin-top: 8px;
 }
 
+.stepper-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  align-items: stretch;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(13, 17, 25, 0.7);
+}
+
+.stepper-input input {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  min-width: 0;
+}
+
+.stepper-input input:focus {
+  outline: none;
+}
+
+.stepper-input-buttons {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-left: 1px solid rgba(126, 148, 189, 0.18);
+}
+
+.stepper-input-buttons button {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.stepper-input-buttons button + button {
+  border-top: 1px solid rgba(126, 148, 189, 0.18);
+}
+
+.stepper-input-buttons button:hover {
+  background: rgba(101, 217, 255, 0.12);
+}
+
+.tab-panel {
+  display: grid;
+  gap: 22px;
+}
+
+.tab-panel[hidden] {
+  display: none;
+}
+
 .params-toolbar {
   grid-template-columns: 1fr auto auto;
   align-items: center;
@@ -551,7 +604,12 @@ select {
   border: 1px solid var(--border);
   background: rgba(13, 17, 25, 0.7);
   color: var(--text);
-  font-size: 14px;
+  font-size: 16px;
+}
+
+input[type="number"] {
+  appearance: auto;
+  -webkit-appearance: auto;
 }
 
 button {
