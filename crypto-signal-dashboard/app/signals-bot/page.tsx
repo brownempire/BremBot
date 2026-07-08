@@ -672,6 +672,8 @@ function DashboardPage() {
   const [nativePushIssue, setNativePushIssue] = useState<string | null>(null);
   const [activeApprovalId, setActiveApprovalId] = useState<string | null>(null);
   const [activeApprovalStatus, setActiveApprovalStatus] = useState<string | null>(null);
+  const [notificationPanelOpen, setNotificationPanelOpen] = useState(false);
+  const notificationPanelRef = useRef<HTMLDivElement | null>(null);
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [walletTokens, setWalletTokens] = useState<WalletTokenHolding[]>([]);
@@ -954,6 +956,19 @@ function DashboardPage() {
     return {
       approval: payload.approval,
       approvalUrl: payload.approvalUrl,
+    };
+  }, []);
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!notificationPanelRef.current) return;
+      if (notificationPanelRef.current.contains(event.target as Node)) return;
+      setNotificationPanelOpen(false);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
     };
   }, []);
 
@@ -1573,18 +1588,55 @@ function DashboardPage() {
                       if (!approvalRequest) {
                         throw new Error("Perps approval request was not prepared for fallback execution.");
                       }
-                      const directResult = await jupiterPerpsController.openMarketPosition({
-                        asset: approvalRequest.asset,
-                        collateralToken: approvalRequest.collateralToken,
-                        leverage: approvalRequest.leverage,
-                        maxSlippageBps: approvalRequest.maxSlippageBps,
-                        side: approvalRequest.side,
-                        stopLossPrice: approvalRequest.stopLossPrice,
-                        takeProfitPrice: approvalRequest.takeProfitPrice,
-                        uiAmount: approvalRequest.uiAmount,
-                      });
+                      let directResult;
+                      let attachWarning: string | null = null;
+                      try {
+                        directResult = await jupiterPerpsController.openMarketPosition({
+                          asset: approvalRequest.asset,
+                          collateralToken: approvalRequest.collateralToken,
+                          leverage: approvalRequest.leverage,
+                          maxSlippageBps: approvalRequest.maxSlippageBps,
+                          side: approvalRequest.side,
+                          stopLossPrice: approvalRequest.stopLossPrice,
+                          takeProfitPrice: approvalRequest.takeProfitPrice,
+                          uiAmount: approvalRequest.uiAmount,
+                        });
+                      } catch (directOpenError) {
+                        const hasTpsl =
+                          typeof approvalRequest.stopLossPrice === "number" ||
+                          typeof approvalRequest.takeProfitPrice === "number";
+                        if (!hasTpsl) {
+                          throw directOpenError;
+                        }
+
+                        directResult = await jupiterPerpsController.openMarketPosition({
+                          asset: approvalRequest.asset,
+                          collateralToken: approvalRequest.collateralToken,
+                          leverage: approvalRequest.leverage,
+                          maxSlippageBps: approvalRequest.maxSlippageBps,
+                          side: approvalRequest.side,
+                          stopLossPrice: null,
+                          takeProfitPrice: null,
+                          uiAmount: approvalRequest.uiAmount,
+                        });
+
+                        if (directResult.positionPubkey) {
+                          try {
+                            await jupiterPerpsController.attachTpsl({
+                              positionPubkey: directResult.positionPubkey,
+                              stopLossPrice: approvalRequest.stopLossPrice ?? null,
+                              takeProfitPrice: approvalRequest.takeProfitPrice ?? null,
+                            });
+                          } catch (attachError: unknown) {
+                            attachWarning =
+                              attachError instanceof Error ? attachError.message : "TP/SL attachment failed after the position opened.";
+                          }
+                        }
+                      }
                       setPerpsAutoTradeStatus(
-                        `Perps auto-trade opened for ${signal.symbol} via direct Jupiter Mobile approval · ${directResult.txid.slice(0, 10)}...`
+                        attachWarning
+                          ? `Perps auto-trade opened for ${signal.symbol}, but TP/SL attachment needs manual review: ${attachWarning}`
+                          : `Perps auto-trade opened for ${signal.symbol} via direct Jupiter Mobile approval · ${directResult.txid.slice(0, 10)}...`
                       );
                       await sendSignalNotification(
                         `Trade Filled: ${signal.symbol}`,
@@ -3812,7 +3864,7 @@ function DashboardPage() {
     <main>
       <header>
         <div className="header-row">
-          <div>
+          <div className="header-brand-block">
             <Image
               className="brand-logo"
               src="/header-photo.png"
@@ -3825,31 +3877,44 @@ function DashboardPage() {
               Real-time crypto signals with on-app wallet controls and manual trade execution flow.
             </div>
           </div>
-          <div className="header-alert-slot">
-            <div className="panel compact-panel alerts-row-panel">
-              <strong>Alerts & Push</strong>
-              <span className="subtext">{pushStatus}</span>
-              {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
-              <div className="alerts-actions">
-                <button
-                  type="button"
-                  onClick={togglePush}
-                  disabled={!pushReady}
-                  className={pushEnabled ? "push-toggle on" : "push-toggle off"}
-                >
-                  {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
-                </button>
-                <button type="button" className="secondary" onClick={sendTestPush}>Send Test Push</button>
-              </div>
+          <div className="header-actions">
+            <div ref={notificationPanelRef} className="notification-bell-wrap">
+              <button
+                type="button"
+                className={`notification-bell-button ${notificationPanelOpen ? "open" : ""}`}
+                aria-expanded={notificationPanelOpen}
+                aria-label="Notification settings"
+                onClick={() => setNotificationPanelOpen((open) => !open)}
+              >
+                <span aria-hidden="true">🔔</span>
+              </button>
+              {notificationPanelOpen ? (
+                <div className="notification-popover panel compact-panel">
+                  <strong>Alerts & Push</strong>
+                  <span className="subtext">{pushStatus}</span>
+                  {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
+                  <div className="alerts-actions">
+                    <button
+                      type="button"
+                      onClick={togglePush}
+                      disabled={!pushReady}
+                      className={pushEnabled ? "push-toggle on" : "push-toggle off"}
+                    >
+                      {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
+                    </button>
+                    <button type="button" className="secondary" onClick={sendTestPush}>Send Test Push</button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
-        <div className="badges">
-          <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
-          <div className="badge">Wallet: in-app</div>
-          <div className="badge">{autoTradeStatus}</div>
-          <div className="badge">{perpsAutoTradeStatus}</div>
+          <div className="badges">
+            <div className="badge">Price Feed: {formatFeedSource(priceFeedStatus)}</div>
+            <div className="badge">Wallet: in-app</div>
+            <div className="badge">{autoTradeStatus}</div>
+            <div className="badge">{perpsAutoTradeStatus}</div>
+          </div>
         </div>
-      </div>
       </header>
 
       <section className="dashboard-layout dashboard-layout-static" style={{ marginBottom: 22 }}>

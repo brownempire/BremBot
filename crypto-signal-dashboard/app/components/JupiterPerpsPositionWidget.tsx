@@ -129,6 +129,14 @@ function isIgnorableTpslCancelError(error: unknown) {
   return /404|not found|missing|already (?:closed|executed|cancelled)|does not exist/i.test(error.message);
 }
 
+function shouldRebuildTpslFromUpdateError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /404|not found|missing|does not exist|unknown request/i.test(error.message);
+}
+
 const PERPS_ASSET_OPTIONS = [
   { value: "SOL", label: "SOL" },
   { value: "ETH", label: "ETH" },
@@ -1186,7 +1194,13 @@ function JupiterPerpsPositionWidgetBody({
         await rebuildTpsl();
       }
     } catch (error) {
-      if (usedRebuildPath || existingRequestPubkeys.length === 0 || desiredTpsl.length === 0) {
+      if (
+        usedRebuildPath ||
+        existingRequestPubkeys.length === 0 ||
+        desiredTpsl.length === 0 ||
+        request.positionRequestPubkey !== null ||
+        !shouldRebuildTpslFromUpdateError(error)
+      ) {
         throw error;
       }
 
