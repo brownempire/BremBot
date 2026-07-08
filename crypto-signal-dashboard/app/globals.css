@@ -24,6 +24,7 @@
   --border: rgba(126, 148, 189, 0.18);
   --glow: 0 0 30px rgba(101, 217, 255, 0.22);
   --radius: 16px;
+  --bottom-bar-fill: 14px;
 }
 
 * {
@@ -103,14 +104,14 @@ html {
 .bottom-tabs-shell {
   width: 100%;
   margin: 0;
-  min-height: 78px;
+  min-height: calc(78px + var(--bottom-bar-fill));
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
   padding:
     10px
     calc(var(--safe-right) + 8px)
-    calc(var(--safe-bottom) + 12px)
+    calc(var(--safe-bottom) + 12px + var(--bottom-bar-fill))
     calc(var(--safe-left) + 8px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
@@ -175,7 +176,7 @@ a {
 }
 
 main {
-  padding: calc(var(--native-content-top-buffer) + 8px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 138px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-content-top-buffer) + 8px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 138px + var(--bottom-bar-fill)) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -332,7 +333,7 @@ main {
     padding:
       calc(var(--native-content-top-buffer) + 6px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 132px)
+      calc(var(--safe-bottom) + 132px + var(--bottom-bar-fill))
       calc(var(--safe-left) + 16px);
   }
 
@@ -342,7 +343,7 @@ main {
     padding:
       10px
       calc(var(--safe-right) + 4px)
-      calc(var(--safe-bottom) + 10px)
+      calc(var(--safe-bottom) + 10px + var(--bottom-bar-fill))
       calc(var(--safe-left) + 4px);
   }
 
@@ -744,7 +745,7 @@ button:disabled {
     padding:
       calc(var(--native-content-top-buffer) + 6px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 132px)
+      calc(var(--safe-bottom) + 132px + var(--bottom-bar-fill))
       calc(var(--safe-left) + 16px);
   }
 
