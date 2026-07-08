@@ -103,14 +103,14 @@ html {
 .bottom-tabs-shell {
   width: 100%;
   margin: 0;
-  min-height: 58px;
+  min-height: 52px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 2px;
   padding:
-    6px
+    4px
     calc(var(--safe-right) + 8px)
-    calc(var(--safe-bottom) + 8px)
+    calc(var(--safe-bottom) + 4px)
     calc(var(--safe-left) + 8px);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: transparent;
@@ -127,9 +127,9 @@ html {
   background: transparent;
   color: var(--muted);
   min-width: 0;
-  min-height: 44px;
-  padding: 4px 2px;
-  border-radius: 12px;
+  min-height: 40px;
+  padding: 3px 2px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -175,7 +175,7 @@ a {
 }
 
 main {
-  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 118px) calc(var(--safe-left) + 32px);
+  padding: calc(var(--native-content-top-buffer) + 24px) calc(var(--safe-right) + 32px) calc(var(--safe-bottom) + 108px) calc(var(--safe-left) + 32px);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -332,7 +332,7 @@ main {
     padding:
       calc(var(--native-content-top-buffer) + 18px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 112px)
+      calc(var(--safe-bottom) + 102px)
       calc(var(--safe-left) + 16px);
   }
 
@@ -340,9 +340,9 @@ main {
     border-radius: 0;
     gap: 2px;
     padding:
-      6px
+      4px
       calc(var(--safe-right) + 4px)
-      calc(var(--safe-bottom) + 6px)
+      calc(var(--safe-bottom) + 4px)
       calc(var(--safe-left) + 4px);
   }
 
@@ -744,7 +744,7 @@ button:disabled {
     padding:
       calc(var(--native-content-top-buffer) + 18px)
       calc(var(--safe-right) + 16px)
-      calc(var(--safe-bottom) + 112px)
+      calc(var(--safe-bottom) + 102px)
       calc(var(--safe-left) + 16px);
   }
 
