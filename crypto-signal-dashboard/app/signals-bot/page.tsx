@@ -12,7 +12,6 @@ import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider"
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
-import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
   JupiterPerpsWidgetController,
   JupiterPerpsWidgetSnapshot,
@@ -769,6 +768,10 @@ function DashboardPage() {
     const syncActiveTab = () => {
       if (typeof window === "undefined") return;
       const tab = new URLSearchParams(window.location.search).get("tab");
+      if (tab === "simulator") {
+        window.location.replace("/simulator");
+        return;
+      }
       if (tab === "signals" || tab === "perps" || tab === "simulator" || tab === "wallet") {
         setActiveSignalsTab(tab);
         return;
@@ -3920,9 +3923,6 @@ function DashboardPage() {
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "perps"}>
           {renderStructuredPanel("perps")}
-        </div>
-        <div className="tab-panel" hidden={activeSignalsTab !== "simulator"}>
-          {activeSignalsTab === "simulator" ? <EmbeddedSimulatorPanel /> : null}
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
           {activeSignalsTab === "wallet" ? (
