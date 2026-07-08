@@ -10,7 +10,7 @@ import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
-import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
+import { ManualSwapWidget, type ManualSwapSuccess } from "@/app/components/ManualSwapWidget";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
@@ -3097,19 +3097,19 @@ function DashboardPage() {
     setLastSignalAt({});
   }
 
-  async function handleManualSwapSuccess(result: JupiterTradeRecord) {
+  async function handleManualSwapSuccess(result: ManualSwapSuccess) {
     const manualTradeRecord: StoredTradeRecord = {
       id: `manual-${result.txid}-${Date.now()}`,
       txid: result.txid,
       timestamp: Date.now(),
-      walletAddress: wallet.publicKey?.toBase58() ?? result.walletAddress,
+      walletAddress: wallet.publicKey?.toBase58() ?? undefined,
       source: "manual",
       inputMint: result.inputMint,
       outputMint: result.outputMint,
       inputAmount: result.inputAmount,
       outputAmount: result.outputAmount,
-      signalSummary: "Jupiter widget manual swap",
-      gasless: false,
+      signalSummary: `${result.inputSymbol} -> ${result.outputSymbol} manual swap`,
+      gasless: result.gasless,
     };
     await persistTradeRecord(manualTradeRecord);
     refreshWalletPortfolio().catch(() => undefined);
@@ -3333,14 +3333,14 @@ function DashboardPage() {
       return (
         <>
           <div className="wallet-controls">
-            {!wallet.hasWallet ? <button onClick={createInAppWallet}>Create Wallet</button> : null}
-            <button className="secondary" onClick={importInAppWallet}>Import Wallet</button>
-            {wallet.hasWallet ? <button className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
-            {wallet.connected ? <button onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
-            {wallet.hasWallet && !wallet.connected ? <button onClick={loginInAppWallet}>Login</button> : null}
-            {wallet.connected ? <button className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
-            {wallet.connected ? <button onClick={disconnectInAppWallet}>Disconnect</button> : null}
-            <button className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
+            {!wallet.hasWallet ? <button type="button" onClick={createInAppWallet}>Create Wallet</button> : null}
+            <button type="button" className="secondary" onClick={importInAppWallet}>Import Wallet</button>
+            {wallet.hasWallet ? <button type="button" className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+            {wallet.connected ? <button type="button" onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
+            {wallet.hasWallet && !wallet.connected ? <button type="button" onClick={loginInAppWallet}>Login</button> : null}
+            {wallet.connected ? <button type="button" className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
+            {wallet.connected ? <button type="button" onClick={disconnectInAppWallet}>Disconnect</button> : null}
+            <button type="button" className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
             Wallet keys are stored in this browser until you disconnect (which removes them from this device).
@@ -3352,11 +3352,13 @@ function DashboardPage() {
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
           <div className="wallet-trading-panel wallet-trading-panel-swap" style={{ marginTop: 10 }}>
-            <JupiterTradePanel
+            <ManualSwapWidget
+              connected={wallet.connected}
+              walletAddress={wallet.publicKey?.toBase58() ?? null}
+              solBalance={solBalance}
+              walletTokens={walletTokens}
+              onExecuteSwap={walletExecuteSwap}
               onTradeSuccess={handleManualSwapSuccess}
-              integratedTargetId="bremlogic-manual-swap-widget"
-              passthroughWalletContextState={wallet.passthroughWalletContextState}
-              onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
             />
           </div>
           <div className="wallet-holdings">
@@ -3653,7 +3655,7 @@ function DashboardPage() {
       return (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <button className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
+            <button type="button" className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
           </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
           <div className="signals-scroll">
@@ -3676,7 +3678,7 @@ function DashboardPage() {
       return (
         <>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-            <div className="wallet-controls"><button className="secondary" onClick={clearRecentTrades}>Clear Trades</button></div>
+            <div className="wallet-controls"><button type="button" className="secondary" onClick={clearRecentTrades}>Clear Trades</button></div>
           </div>
           <div className="subtext">Local device view keeps the most recent {LOCAL_RECENT_TRADES_CAP} trades for quick history. Remote sync stores a longer canonical history for cross-device PnL.</div>
           <div className="subtext">Remote status · auth: {remoteAuthStatus} · sync: {remoteSyncStatus}</div>
@@ -3755,13 +3757,14 @@ function DashboardPage() {
               {activeApprovalStatus ? <span className="subtext">{activeApprovalStatus}</span> : null}
               <div className="alerts-actions">
                 <button
+                  type="button"
                   onClick={togglePush}
                   disabled={!pushReady}
                   className={pushEnabled ? "push-toggle on" : "push-toggle off"}
                 >
                   {pushEnabled ? "Alerts Enabled" : "Alerts Disabled"}
                 </button>
-                <button className="secondary" onClick={sendTestPush}>Send Test Push</button>
+                <button type="button" className="secondary" onClick={sendTestPush}>Send Test Push</button>
               </div>
             </div>
           </div>
@@ -3784,7 +3787,7 @@ function DashboardPage() {
           {renderStructuredPanel("perps")}
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "simulator"}>
-          <EmbeddedSimulatorPanel />
+          {activeSignalsTab === "simulator" ? <EmbeddedSimulatorPanel /> : null}
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
           {renderStructuredPanel("wallet")}
@@ -3808,8 +3811,8 @@ function DashboardPage() {
             />
             <code className="deposit-address">{wallet.publicKey.toBase58()}</code>
             <div className="wallet-controls">
-              <button onClick={copyDepositAddress}>Copy Address</button>
-              <button className="secondary" onClick={() => setShowDepositModal(false)}>Close</button>
+              <button type="button" onClick={copyDepositAddress}>Copy Address</button>
+              <button type="button" className="secondary" onClick={() => setShowDepositModal(false)}>Close</button>
             </div>
           </div>
         </div>
