@@ -60,6 +60,10 @@ body.native-ios-shell {
   }
 }
 
+html.pwa-standalone-shell {
+  --bottom-bar-fill: 56px;
+}
+
 html.native-preload-shell {
   --bottom-bar-fill: 56px;
 }

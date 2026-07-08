@@ -30,3 +30,18 @@ export function isNativeIosRuntime() {
 
   return isNativeShellRuntime() && /iPhone|iPad|iPod/i.test(window.navigator.userAgent || "");
 }
+
+export function isStandalonePwaRuntime() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const navigatorWithStandalone = window.navigator as Navigator & {
+    standalone?: boolean;
+  };
+
+  return Boolean(
+    window.matchMedia?.("(display-mode: standalone)").matches
+      || navigatorWithStandalone.standalone
+  );
+}

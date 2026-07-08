@@ -69,7 +69,7 @@ export default async function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var ua=navigator.userAgent||'';var hasBridge=!!(window.Capacitor||window.webkit&&window.webkit.messageHandlers&&(window.webkit.messageHandlers.bridge||window.webkit.messageHandlers.capacitor));if(hasBridge||/BremLogicNative|Capacitor/i.test(ua)){document.documentElement.classList.add('native-preload-shell');}else{document.documentElement.classList.remove('native-preload-shell');}}catch(e){document.documentElement.classList.remove('native-preload-shell');}})();`,
+            __html: `(function(){try{var ua=navigator.userAgent||'';var hasBridge=!!(window.Capacitor||window.webkit&&window.webkit.messageHandlers&&(window.webkit.messageHandlers.bridge||window.webkit.messageHandlers.capacitor));var isStandalone=!!((window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches)||navigator.standalone);if(hasBridge||/BremLogicNative|Capacitor/i.test(ua)){document.documentElement.classList.add('native-preload-shell');}else{document.documentElement.classList.remove('native-preload-shell');}if(isStandalone){document.documentElement.classList.add('pwa-standalone-shell');}else{document.documentElement.classList.remove('pwa-standalone-shell');}}catch(e){document.documentElement.classList.remove('native-preload-shell');document.documentElement.classList.remove('pwa-standalone-shell');}})();`,
           }}
         />
       </head>

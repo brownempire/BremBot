@@ -1,11 +1,24 @@
 "use client";
 
 import { useEffect } from "react";
-import { isNativeIosRuntime, isNativeShellRuntime } from "@/app/lib/nativeShell";
+import {
+  isNativeIosRuntime,
+  isNativeShellRuntime,
+  isStandalonePwaRuntime,
+} from "@/app/lib/nativeShell";
 
 export function NativeShellConfigurator() {
   useEffect(() => {
-    if (typeof document === "undefined" || !isNativeShellRuntime()) {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    if (isStandalonePwaRuntime()) {
+      document.documentElement.classList.add("pwa-standalone-shell");
+      document.body.classList.add("pwa-standalone-shell");
+    }
+
+    if (!isNativeShellRuntime()) {
       return;
     }
 
