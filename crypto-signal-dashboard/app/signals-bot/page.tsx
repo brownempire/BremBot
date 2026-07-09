@@ -309,6 +309,20 @@ function getMintForToken(token: "SOL" | "ETH" | "BTC") {
   return BTC_MINT;
 }
 
+function getPublicPerpsLiveAllowedWallets() {
+  return (process.env.NEXT_PUBLIC_PERPS_LIVE_ALLOWED_WALLETS ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function isPublicPerpsLiveWalletAllowed(walletAddress: string | null | undefined) {
+  if (!walletAddress) return false;
+  const allowed = getPublicPerpsLiveAllowedWallets();
+  if (allowed.length === 0) return false;
+  return allowed.includes(walletAddress.trim());
+}
+
 function loadLocalPerpsAgentSession() {
   if (typeof window === "undefined") return null;
   try {
@@ -871,6 +885,9 @@ function DashboardPage() {
     perpsAgentSession?.sessionState === "clocked_in" ? "Clocked In" : "Clocked Out";
   const perpsModeLabel: "Paper mode" | "Live mode" =
     (perpsAgentSession?.mode ?? perpsSessionModePreference) === "live" ? "Live mode" : "Paper mode";
+  const perpsLiveEligibleWallet =
+    jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress;
+  const perpsLiveWalletAllowed = isPublicPerpsLiveWalletAllowed(perpsLiveEligibleWallet);
   const perpsPlatformLabel =
     perpsAgentSession?.platform === "native"
       ? "Native app"
@@ -881,7 +898,9 @@ function DashboardPage() {
     perpsAgentSession?.walletProvider
       ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
   const perpsWalletControlNote = perpsModeLabel === "Live mode"
-    ? "Live automation uses your own connected wallet session. BremLogic does not use a shared backend trading wallet."
+    ? perpsLiveWalletAllowed
+      ? "Live automation uses only your own connected wallet session. BremLogic does not use a shared backend trading wallet."
+      : "Live Perps automation is restricted to approved wallets only. This wallet can still use paper mode, spot auto-trade, and manual Perps."
     : "Paper automation simulates Perps decisions for your connected wallet session without moving funds.";
 
   useEffect(() => {
@@ -1107,6 +1126,9 @@ function DashboardPage() {
     collateralUsd: number;
   }) => {
     if (!remoteAuthToken) {
+      if (perpsSessionModePreference === "live" && !perpsLiveWalletAllowed) {
+        throw new Error("Live Perps automation is not enabled for this wallet.");
+      }
       const localExecution: PerpsExecutionSummary = {
         executionId: `local-exec-${input.signal.id}-${Date.now()}`,
         signalId: input.signal.id,
@@ -1179,7 +1201,7 @@ function DashboardPage() {
 
     await refreshPerpsAgentState().catch(() => undefined);
     return payload;
-  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken]);
+  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, perpsLiveWalletAllowed, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken]);
 
   const clockInPerpsAgent = useCallback(async () => {
     setPerpsSessionBusy(true);
@@ -1197,6 +1219,9 @@ function DashboardPage() {
               : "Disconnected";
 
       if (!remoteAuthToken) {
+        if (perpsSessionModePreference === "live" && !perpsLiveWalletAllowed) {
+          throw new Error("Live Perps automation is not enabled for this wallet.");
+        }
         const localSession: PerpsSessionSnapshot = {
           sessionId: `local-${Date.now()}`,
           walletAddress: jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress ?? "local-session",
@@ -1255,7 +1280,7 @@ function DashboardPage() {
     } finally {
       setPerpsSessionBusy(false);
     }
-  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeShell, perpsSessionModePreference, perpsUnlimitedSession, perpsWalletConnected, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.connected, walletAddress]);
+  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeShell, perpsLiveWalletAllowed, perpsSessionModePreference, perpsUnlimitedSession, perpsWalletConnected, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.connected, walletAddress]);
 
   const clockOutPerpsAgent = useCallback(async (reason?: string) => {
     setPerpsSessionBusy(true);
@@ -3954,8 +3979,17 @@ function DashboardPage() {
             walletControlledLabel={perpsWalletControlNote}
             killSwitchOn={perpsAgentSession?.killSwitch ?? false}
             unlimitedSession={perpsAgentSession?.unlimitedSession ?? perpsUnlimitedSession}
-            warning={perpsAgentSession?.warning ?? null}
-            canClockIn={perpsModeLabel === "Paper mode" ? perpsWalletConnected : Boolean(jupiterPerpsController?.connected)}
+            warning={
+              perpsAgentSession?.warning
+              ?? (perpsModeLabel === "Live mode" && !perpsLiveWalletAllowed
+                ? "Live Perps automation is only enabled for approved wallets. Paper mode remains available for this wallet."
+                : null)
+            }
+            canClockIn={
+              perpsModeLabel === "Paper mode"
+                ? perpsWalletConnected
+                : Boolean(jupiterPerpsController?.connected) && perpsLiveWalletAllowed
+            }
             isBusy={perpsSessionBusy}
             onClockIn={() => { void clockInPerpsAgent().catch((error: unknown) => setPerpsAutoTradeStatus(error instanceof Error ? error.message : "Clock In failed")); }}
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}

@@ -11,6 +11,13 @@ function readNumber(value: string | undefined, fallback: number) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function readWalletList(value: string | undefined) {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function getPerpsSessionConfig() {
   return {
     defaultMode: readBoolean(process.env.PERPS_PAPER_TRADING, true) ? "paper" as const : "live" as const,
@@ -23,5 +30,13 @@ export function getPerpsSessionConfig() {
     maxExposurePct: readNumber(process.env.PERPS_MAX_EXPOSURE_PCT, 0.5),
     maxDailyLossPct: readNumber(process.env.PERPS_MAX_DAILY_LOSS_PCT, 0.03),
     delegatedExecutionAvailable: false,
+    liveAllowedWallets: readWalletList(process.env.PERPS_LIVE_ALLOWED_WALLETS),
   };
+}
+
+export function isPerpsLiveWalletAllowed(walletAddress: string | null | undefined) {
+  if (!walletAddress) return false;
+  const allowed = getPerpsSessionConfig().liveAllowedWallets;
+  if (allowed.length === 0) return false;
+  return allowed.includes(walletAddress.trim());
 }

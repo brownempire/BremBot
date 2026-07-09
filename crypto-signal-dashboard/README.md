@@ -78,6 +78,7 @@ For live feed setup:
 - `GET/PATCH /api/perps/kill-switch` reads or overrides the runtime kill switch.
 - Paper mode simulates user-scoped Perps actions without moving funds.
 - Live mode never uses a Bremlogic backend wallet. The current implementation is `approval-assisted`: the connected user's own wallet/session signs the action when required.
+- `PERPS_LIVE_ALLOWED_WALLETS` can restrict live Perps automation to specific wallet addresses only.
 - If the app leaves the foreground, the wallet disconnects, or the session becomes invalid, the Perps agent clocks out and stops.
 - The older backend live-wallet path is intentionally disabled in favor of the non-custodial session model.
 - See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.

@@ -1,3 +1,4 @@
+import { isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
 import { clockInPerpsSession } from "@/lib/perps/tradingAgent";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { perpsClockInSchema } from "@/lib/perps/sessionTypes";
@@ -20,6 +21,12 @@ export async function POST(request: Request) {
     return Response.json({
       error: "Live perps automation currently requires the native Jupiter Mobile wallet session path. Web/PWA remains delegated-ready only for now.",
     }, { status: 409 });
+  }
+
+  if (parsed.data.mode === "live" && !isPerpsLiveWalletAllowed(walletAddress)) {
+    return Response.json({
+      error: "Live Perps automation is not enabled for this wallet. Paper mode, spot auto-trade, and manual Perps remain available.",
+    }, { status: 403 });
   }
 
   const session = await clockInPerpsSession(walletAddress, parsed.data);

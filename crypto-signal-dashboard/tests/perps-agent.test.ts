@@ -14,6 +14,7 @@ process.env.PERPS_PAPER_TRADING = "true";
 let tradingAgent: typeof import("../lib/perps/tradingAgent");
 let sessionStore: typeof import("../lib/perps/sessionStore");
 let auditStore: typeof import("../lib/perps/userExecutionAudit");
+let sessionConfig: typeof import("../lib/perps/sessionConfig");
 
 function cleanupStores() {
   for (const file of [process.env.PERPS_SESSIONS_FILE, process.env.PERPS_USER_EXECUTIONS_FILE]) {
@@ -26,12 +27,14 @@ function cleanupStores() {
 test.beforeEach(() => {
   cleanupStores();
   process.env.PERPS_KILL_SWITCH = "false";
+  process.env.PERPS_LIVE_ALLOWED_WALLETS = "";
 });
 
 test.before(async () => {
   tradingAgent = await import("../lib/perps/tradingAgent");
   sessionStore = await import("../lib/perps/sessionStore");
   auditStore = await import("../lib/perps/userExecutionAudit");
+  sessionConfig = await import("../lib/perps/sessionConfig");
 });
 
 test("clock in and clock out persists a wallet-scoped session", async () => {
@@ -174,4 +177,15 @@ test("live mode remains approval-assisted and fails closed without wallet write 
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "WALLET_WRITE_UNAVAILABLE");
+});
+
+test("live wallet allowlist only enables configured wallets", () => {
+  const approvedWallet = "ApprovedWallet7777777777777777777777777777777";
+  const otherWallet = "OtherWallet888888888888888888888888888888888";
+
+  process.env.PERPS_LIVE_ALLOWED_WALLETS = `${approvedWallet}, AnotherWallet9999999999999999999999999999999`;
+
+  assert.equal(sessionConfig.isPerpsLiveWalletAllowed(approvedWallet), true);
+  assert.equal(sessionConfig.isPerpsLiveWalletAllowed(otherWallet), false);
+  assert.equal(sessionConfig.isPerpsLiveWalletAllowed(null), false);
 });
