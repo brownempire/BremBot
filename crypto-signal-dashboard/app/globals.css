@@ -786,6 +786,18 @@ header {
   align-items: center;
 }
 
+.badge-status-paper {
+  background: rgba(255, 164, 92, 0.14);
+  border: 1px solid rgba(255, 164, 92, 0.3);
+  color: #ffe3c8;
+}
+
+.badge-status-live {
+  background: rgba(101, 217, 255, 0.14);
+  border: 1px solid rgba(101, 217, 255, 0.3);
+  color: #dcf7ff;
+}
+
 .badge-status-wide {
   width: 100%;
 }
@@ -1483,6 +1495,119 @@ button:disabled {
     radial-gradient(circle at top right, rgba(101, 217, 255, 0.12), transparent 42%);
   padding: 14px;
   overflow: hidden;
+}
+
+.perps-runtime-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(13, 17, 25, 0.72);
+  margin-bottom: 12px;
+}
+
+.perps-runtime-row,
+.perps-runtime-log-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.perps-runtime-log {
+  display: grid;
+  gap: 8px;
+}
+
+.perps-account-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.perps-account-pill.paper {
+  color: #ffe3c8;
+  background: rgba(255, 164, 92, 0.12);
+  border: 1px solid rgba(255, 164, 92, 0.28);
+}
+
+.perps-account-pill.live {
+  color: #dcf7ff;
+  background: rgba(101, 217, 255, 0.12);
+  border: 1px solid rgba(101, 217, 255, 0.28);
+}
+
+.perps-agent-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(13, 17, 25, 0.72);
+  margin-bottom: 12px;
+}
+
+.perps-agent-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.perps-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.perps-agent-stat {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.perps-agent-stat span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.perps-agent-pill.neutral {
+  color: var(--accent);
+  background: rgba(101, 217, 255, 0.12);
+  border: 1px solid rgba(101, 217, 255, 0.24);
+}
+
+.perps-agent-warning {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 164, 92, 0.12);
+  border: 1px solid rgba(255, 164, 92, 0.28);
+  color: #ffe3c8;
+}
+
+.perps-agent-feed {
+  display: grid;
+  gap: 10px;
+}
+
+.perps-agent-feed-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .perps-widget-header {

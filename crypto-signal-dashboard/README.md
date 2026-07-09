@@ -26,6 +26,7 @@ npm run dev
 - Push notifications require VAPID keys and a secure origin (localhost is OK).
 - Wallet connect and trading are powered by Solana Wallet Adapter + Jupiter Plugin.
 - The read-only Jupiter Perps widget uses Phantom's official mobile deeplink connect flow on supported mobile devices and returns users to BremLogic after approval.
+- Signal-driven Perps automation now uses a non-custodial `Clock In / Clock Out` agent model with explicit `Disconnected`, `Connected`, `Clocked In`, `Clocked Out`, `Paper mode`, and `Live mode` session labels in the UI.
 
 ## Hidden UI Notes
 - The `Jupiter Perps` panel is intentionally kept visually minimal in-app, but its behavior is:
@@ -67,6 +68,19 @@ For live feed setup:
 - set `NEXT_PUBLIC_SOLANA_RPC_URL` for wallet balance sync / Jupiter connection
 - set `NEXT_PUBLIC_REOWN_PROJECT_ID` to enable Jupiter's official Mobile Adapter flow inside the native iOS shell
 - optionally set `NEXT_PUBLIC_PHANTOM_REDIRECT_URL` if you want a fixed post-approval callback URL instead of the current page
+
+## Perps Automation
+- `POST /api/perps/session/clock-in` starts a user-scoped Perps agent session after wallet-signed auth.
+- `POST /api/perps/session/clock-out` stops the session immediately.
+- `GET/PATCH /api/perps/session/status` reads and heartbeats the active user session.
+- `POST /api/perps/agent/execute` routes a signal only for the authenticated user wallet.
+- `GET/PATCH /api/perps/executions` returns and updates recent execution records for the authenticated user only.
+- `GET/PATCH /api/perps/kill-switch` reads or overrides the runtime kill switch.
+- Paper mode simulates user-scoped Perps actions without moving funds.
+- Live mode never uses a Bremlogic backend wallet. The current implementation is `approval-assisted`: the connected user's own wallet/session signs the action when required.
+- If the app leaves the foreground, the wallet disconnects, or the session becomes invalid, the Perps agent clocks out and stops.
+- The older backend live-wallet path is intentionally disabled in favor of the non-custodial session model.
+- See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.
 
 ## Roadmap
 - Integrate Chaos Edge REST/WebSocket feed

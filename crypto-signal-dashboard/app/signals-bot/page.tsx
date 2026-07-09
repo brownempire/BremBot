@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { PushNotifications } from "@capacitor/push-notifications";
@@ -11,6 +12,9 @@ import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
+import { PerpsClockCard } from "@/app/components/perps-agent/PerpsClockCard";
+import { PerpsExecutionFeed as PerpsAgentExecutionFeed } from "@/app/components/perps-agent/PerpsExecutionFeed";
+import { PerpsSessionStatus } from "@/app/components/perps-agent/PerpsSessionStatus";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import type {
   JupiterPerpsWidgetController,
@@ -220,6 +224,46 @@ type StoredPerpsApproval = {
   failureReason?: string | null;
 };
 
+type PerpsExecutionSummary = {
+  executionId: string;
+  signalId: string;
+  symbol: string;
+  summary: string;
+  market: string;
+  side: "long" | "short";
+  action: "open" | "close";
+  sizeUsd: number;
+  leverage: number;
+  status: string;
+  mode: "paper" | "live";
+  executionModel: "approval-assisted" | "delegated-ready";
+  reasonCode: string;
+  reasonMessage: string;
+  errorMessage?: string | null;
+  createdAt: string;
+  txid?: string | null;
+};
+
+type PerpsSessionSnapshot = {
+  sessionId: string;
+  walletAddress: string;
+  sessionState: "clocked_in" | "clocked_out";
+  startedAt: string | null;
+  lastHeartbeatAt: string | null;
+  endedAt: string | null;
+  mode: "paper" | "live";
+  executionModel: "approval-assisted" | "delegated-ready";
+  appOpen: boolean;
+  appForeground: boolean;
+  walletConnected: boolean;
+  walletWriteEnabled: boolean;
+  killSwitch: boolean;
+  unlimitedSession: boolean;
+  platform: "native" | "web" | "pwa" | null;
+  walletProvider: string | null;
+  warning: string | null;
+};
+
 type SmartPerpsTradePlan = {
   collateralPercent: number;
   leverage: number;
@@ -255,6 +299,12 @@ function clampToRange(value: number, min?: number, max?: number) {
   if (typeof min === "number") value = Math.max(min, value);
   if (typeof max === "number") value = Math.min(max, value);
   return value;
+}
+
+function getMintForToken(token: "SOL" | "ETH" | "BTC") {
+  if (token === "SOL") return SOL_MINT;
+  if (token === "ETH") return ETH_MINT;
+  return BTC_MINT;
 }
 
 function normalizeStepValue(value: number, step: number, min?: number, max?: number) {
@@ -682,6 +732,11 @@ function DashboardPage() {
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [perpsAutoTradeStatus, setPerpsAutoTradeStatus] = useState("Perps auto-trade is off");
+  const [perpsAgentSession, setPerpsAgentSession] = useState<PerpsSessionSnapshot | null>(null);
+  const [perpsAgentExecutions, setPerpsAgentExecutions] = useState<PerpsExecutionSummary[]>([]);
+  const [perpsSessionBusy, setPerpsSessionBusy] = useState(false);
+  const [perpsSessionModePreference, setPerpsSessionModePreference] = useState<"paper" | "live">("paper");
+  const [perpsUnlimitedSession, setPerpsUnlimitedSession] = useState(false);
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
@@ -763,6 +818,24 @@ function DashboardPage() {
       : walletAddress ?? "paper-auto";
   const nativeShell = isNativeShellApp();
   const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
+  const perpsWalletConnected = Boolean(jupiterPerpsController?.connected || wallet.connected);
+  const perpsConnectionLabel: "Disconnected" | "Connected" = perpsWalletConnected ? "Connected" : "Disconnected";
+  const perpsSessionStateLabel: "Clocked In" | "Clocked Out" =
+    perpsAgentSession?.sessionState === "clocked_in" ? "Clocked In" : "Clocked Out";
+  const perpsModeLabel: "Paper mode" | "Live mode" =
+    (perpsAgentSession?.mode ?? perpsSessionModePreference) === "live" ? "Live mode" : "Paper mode";
+  const perpsPlatformLabel =
+    perpsAgentSession?.platform === "native"
+      ? "Native app"
+      : perpsAgentSession?.platform === "pwa"
+        ? "PWA"
+        : "Web";
+  const perpsProviderLabel =
+    perpsAgentSession?.walletProvider
+      ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
+  const perpsWalletControlNote = perpsModeLabel === "Live mode"
+    ? "Live automation uses your own connected wallet session. BremLogic does not use a shared backend trading wallet."
+    : "Paper automation simulates Perps decisions for your connected wallet session without moving funds.";
 
   useEffect(() => {
     const syncActiveTab = () => {
@@ -929,38 +1002,187 @@ function DashboardPage() {
     }).catch(() => undefined);
   }, [nativePushToken, pushEnabled, subscription]);
 
-  const createPerpsApproval = useCallback(async (input: {
+  const refreshPerpsAgentState = useCallback(async () => {
+    if (!remoteAuthToken) {
+      setPerpsAgentSession(null);
+      setPerpsAgentExecutions([]);
+      return null;
+    }
+
+    const [sessionResponse, executionsResponse] = await Promise.all([
+      fetch("/api/perps/session/status", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      }),
+      fetch("/api/perps/executions?limit=20", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      }),
+    ]);
+
+    const sessionPayload = await sessionResponse.json().catch(() => null) as
+      | { session?: PerpsSessionSnapshot | null; error?: string }
+      | null;
+    const executionPayload = await executionsResponse.json().catch(() => null) as
+      | { executions?: PerpsExecutionSummary[]; error?: string }
+      | null;
+
+    if (sessionResponse.ok && sessionPayload && "session" in sessionPayload) {
+      setPerpsAgentSession(sessionPayload.session ?? null);
+      if (sessionPayload.session?.mode) {
+        setPerpsSessionModePreference(sessionPayload.session.mode);
+        setPerpsUnlimitedSession(sessionPayload.session.unlimitedSession);
+      }
+    }
+
+    if (executionsResponse.ok && executionPayload && Array.isArray(executionPayload.executions)) {
+      setPerpsAgentExecutions(executionPayload.executions);
+    }
+
+    return {
+      session: sessionResponse.ok ? sessionPayload?.session ?? null : null,
+      executions: executionsResponse.ok ? executionPayload?.executions ?? [] : [],
+    };
+  }, [remoteAuthToken]);
+
+  const submitPerpsAgentSignal = useCallback(async (input: {
     signal: Signal;
     request: PendingPerpsApprovalRequest;
-    walletAddress: string;
+    collateralUsd: number;
   }) => {
-    const response = await fetch("/api/perps/approvals", {
+    if (!remoteAuthToken) {
+      throw new Error("Remote auth is required before the per-user Perps agent can run.");
+    }
+
+    const response = await fetch("/api/perps/agent/execute", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${remoteAuthToken}`,
+      },
       body: JSON.stringify({
-        walletAddress: input.walletAddress,
         signalId: input.signal.id,
-        signalSummary: input.signal.summary,
         symbol: input.signal.symbol,
-        request: input.request,
+        summary: input.signal.summary,
+        direction: input.signal.direction,
+        asset: input.request.asset,
+        collateralUsd: input.collateralUsd,
+        leverage: Number(input.request.leverage),
+        maxSlippageBps: Number(input.request.maxSlippageBps ?? "100"),
+        takeProfitPrice: input.request.takeProfitPrice ?? null,
+        stopLossPrice: input.request.stopLossPrice ?? null,
+        smartTradeProfile: autoTradeSettings.smartTradeProfile,
+        executionStyle: autoTradeSettings.perpsExecutionMode,
       }),
     });
 
     const payload = await response.json().catch(() => null) as
-      | { approval?: StoredPerpsApproval; approvalUrl?: string; error?: string }
+      | {
+          ok: boolean;
+          message?: string;
+          preparedAction?: PendingPerpsApprovalRequest;
+          execution?: PerpsExecutionSummary & { mode: "paper" | "live" };
+        }
+      | { error?: string; message?: string; code?: string; execution?: PerpsExecutionSummary }
       | null;
 
-    if (!response.ok || !payload?.approval || !payload.approvalUrl) {
-      const detail = payload?.error?.trim();
+    if (!response.ok || !payload || ("error" in payload && payload.error)) {
+      const detail = (payload && "message" in payload ? payload.message : null) || (payload && "error" in payload ? payload.error : null);
       const statusLabel = response.status ? `HTTP ${response.status}` : "request failed";
-      throw new Error(detail ? `Unable to create the Perps approval request. ${statusLabel}: ${detail}` : `Unable to create the Perps approval request. ${statusLabel}.`);
+      throw new Error(detail ? `${statusLabel}: ${detail}` : `Unable to execute the perps signal. ${statusLabel}.`);
     }
 
-    return {
-      approval: payload.approval,
-      approvalUrl: payload.approvalUrl,
-    };
-  }, []);
+    await refreshPerpsAgentState().catch(() => undefined);
+    return payload;
+  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, refreshPerpsAgentState, remoteAuthToken]);
+
+  const clockInPerpsAgent = useCallback(async () => {
+    if (!remoteAuthToken) {
+      throw new Error("Remote auth is required before Clock In.");
+    }
+
+    setPerpsSessionBusy(true);
+    try {
+      const platform = nativeShell
+        ? "native"
+        : (typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)").matches ? "pwa" : "web");
+      const walletProvider =
+        jupiterPerpsController?.connected
+          ? "Jupiter Mobile"
+          : remoteAuthSource === "phantom"
+            ? "Phantom"
+            : wallet.connected
+              ? "In-app wallet"
+              : "Disconnected";
+
+      const response = await fetch("/api/perps/session/clock-in", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${remoteAuthToken}`,
+        },
+        body: JSON.stringify({
+          mode: perpsSessionModePreference,
+          unlimitedSession: perpsUnlimitedSession,
+          appOpen: true,
+          platform,
+          walletProvider,
+        }),
+      });
+      const payload = await response.json().catch(() => null) as { session?: PerpsSessionSnapshot; error?: string } | null;
+      if (!response.ok || !payload?.session) {
+        throw new Error(payload?.error ?? "Unable to clock in the Perps agent.");
+      }
+      setPerpsAgentSession(payload.session);
+      setPerpsAutoTradeStatus(
+        `${payload.session.mode === "paper" ? "Paper mode" : "Live mode"} · Clocked In · ${payload.session.executionModel}`
+      );
+      await refreshPerpsAgentState().catch(() => undefined);
+    } finally {
+      setPerpsSessionBusy(false);
+    }
+  }, [jupiterPerpsController?.connected, nativeShell, perpsSessionModePreference, perpsUnlimitedSession, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, wallet.connected]);
+
+  const clockOutPerpsAgent = useCallback(async (reason?: string) => {
+    if (!remoteAuthToken) return;
+    setPerpsSessionBusy(true);
+    try {
+      await fetch("/api/perps/session/clock-out", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${remoteAuthToken}`,
+        },
+        body: JSON.stringify({ reason }),
+      }).catch(() => undefined);
+      setPerpsAgentSession((current) => current ? { ...current, sessionState: "clocked_out", endedAt: new Date().toISOString() } : current);
+      setPerpsAutoTradeStatus("Perps auto-trade is off");
+      await refreshPerpsAgentState().catch(() => undefined);
+    } finally {
+      setPerpsSessionBusy(false);
+    }
+  }, [refreshPerpsAgentState, remoteAuthToken]);
+
+  const sendPerpsSessionHeartbeat = useCallback(async (input: {
+    appOpen: boolean;
+    appForeground: boolean;
+    walletConnected: boolean;
+    walletWriteEnabled: boolean;
+    reason?: string;
+  }) => {
+    if (!remoteAuthToken || !perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") {
+      return;
+    }
+
+    await fetch("/api/perps/session/status", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${remoteAuthToken}`,
+      },
+      body: JSON.stringify(input),
+    }).catch(() => undefined);
+  }, [perpsAgentSession, remoteAuthToken]);
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -974,6 +1196,59 @@ function DashboardPage() {
       window.removeEventListener("pointerdown", onPointerDown);
     };
   }, []);
+
+  useEffect(() => {
+    void refreshPerpsAgentState().catch(() => undefined);
+  }, [refreshPerpsAgentState]);
+
+  useEffect(() => {
+    if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
+
+    const handleVisibility = () => {
+      const isVisible = document.visibilityState === "visible";
+      if (!isVisible) {
+        void clockOutPerpsAgent("Trading session ended because the app left the foreground.");
+        return;
+      }
+
+      void sendPerpsSessionHeartbeat({
+        appOpen: true,
+        appForeground: true,
+        walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
+        walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [clockOutPerpsAgent, jupiterPerpsController, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
+
+  useEffect(() => {
+    if (!nativeShell || !perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
+
+    let handle: { remove: () => Promise<void> } | null = null;
+    void App.addListener("appStateChange", ({ isActive }) => {
+      if (!isActive) {
+        void clockOutPerpsAgent("Trading session ended because the app was backgrounded.");
+        return;
+      }
+
+      void sendPerpsSessionHeartbeat({
+        appOpen: true,
+        appForeground: true,
+        walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
+        walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+      });
+    }).then((listener) => {
+      handle = listener;
+    }).catch(() => undefined);
+
+    return () => {
+      void handle?.remove().catch(() => undefined);
+    };
+  }, [clockOutPerpsAgent, jupiterPerpsController, nativeShell, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
 
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
@@ -1104,6 +1379,15 @@ function DashboardPage() {
       setRemoteAuthAddress(null);
     }
   }, [remoteAuthSource, wallet.connected, walletAddress]);
+
+  useEffect(() => {
+    if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
+
+    const hasUserWallet = wallet.connected || Boolean(jupiterPerpsController?.connected);
+    if (!hasUserWallet || !remoteAuthToken) {
+      void clockOutPerpsAgent("Trading session ended because the wallet session is no longer valid.");
+    }
+  }, [clockOutPerpsAgent, jupiterPerpsController?.connected, perpsAgentSession, remoteAuthToken, wallet.connected]);
 
   useEffect(() => {
     const provider = getPhantomAuthProvider();
@@ -1453,13 +1737,15 @@ function DashboardPage() {
                 return;
               }
 
-              if (!jupiterPerpsController?.walletAddress) {
-                setPerpsAutoTradeStatus(
-                  `Perps signal detected for ${signal.symbol}, but Jupiter Mobile needs to be connected once before approvals can be queued`
-                );
+              if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") {
+                setPerpsAutoTradeStatus(`Perps agent is clocked out for ${signal.symbol}. Clock In before live or paper automation can run.`);
                 return;
               }
-              const perpsWalletAddress = jupiterPerpsController.walletAddress;
+
+              if (!jupiterPerpsController) {
+                setPerpsAutoTradeStatus(`Open the Perps panel once so BremLogic can load Jupiter Perps pricing for ${signal.symbol}`);
+                return;
+              }
 
               const findActivePerpsPosition = () =>
                 readOnlyPerpsSnapshotRef.current.positions.find((position) => position.source !== "mock");
@@ -1505,7 +1791,6 @@ function DashboardPage() {
 
               void (async () => {
                 perpsAutoTradeBusyRef.current = true;
-                let approvalRequest: PendingPerpsApprovalRequest | null = null;
 
                 try {
                   let takeProfitPrice: number | null = null;
@@ -1544,7 +1829,7 @@ function DashboardPage() {
                     }
                   }
 
-                  approvalRequest = {
+                  const executionRequest: PendingPerpsApprovalRequest = {
                     asset: perpsAssetSymbol,
                     collateralToken: "USDC",
                     leverage: String(perpsTradePlan.leverage),
@@ -1555,114 +1840,106 @@ function DashboardPage() {
                     uiAmount: collateralAmount,
                   };
 
-                  const { approval, approvalUrl } = await createPerpsApproval({
+                  const result = await submitPerpsAgentSignal({
                     signal,
-                    request: approvalRequest,
-                    walletAddress: perpsWalletAddress,
+                    request: executionRequest,
+                    collateralUsd: collateralAmount,
                   });
 
-                  setPerpsAutoTradeStatus(
-                    `Perps approval queued for ${signal.symbol}: ${approvalRequest.side === "long" ? "long" : "short"} ${perpsAssetSymbol} (${collateralAmount} USDC at ${perpsTradePlan.leverage}x)`
-                  );
-
-                  await sendSignalNotification(
-                    `Approve Trade: ${signal.symbol}`,
-                    `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
-                    approvalUrl,
-                    NATIVE_NOTIFICATION_SOUNDS.approval,
-                  );
-                  await sendRemotePushNotification({
-                    title: `Approve Trade: ${signal.symbol}`,
-                    body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} pending approval in Jupiter Mobile.`,
-                    url: approvalUrl,
-                    walletAddress: approval.walletAddress,
-                    sound: NATIVE_NOTIFICATION_SOUNDS.approval,
-                  });
-                } catch (error: unknown) {
-                  const message = error instanceof Error ? error.message : "Unable to queue Perps approval.";
-                  const shouldFallbackToDirectOpen =
-                    Boolean(jupiterPerpsController.connected && jupiterPerpsController.canWrite);
-
-                  if (shouldFallbackToDirectOpen) {
-                    try {
-                      setPerpsAutoTradeStatus(
-                        `Perps approval queue unavailable for ${signal.symbol}. Falling back to direct Jupiter Mobile approval...`
-                      );
-                      if (!approvalRequest) {
-                        throw new Error("Perps approval request was not prepared for fallback execution.");
-                      }
-                      let directResult;
-                      let attachWarning: string | null = null;
-                      try {
-                        directResult = await jupiterPerpsController.openMarketPosition({
-                          asset: approvalRequest.asset,
-                          collateralToken: approvalRequest.collateralToken,
-                          leverage: approvalRequest.leverage,
-                          maxSlippageBps: approvalRequest.maxSlippageBps,
-                          side: approvalRequest.side,
-                          stopLossPrice: approvalRequest.stopLossPrice,
-                          takeProfitPrice: approvalRequest.takeProfitPrice,
-                          uiAmount: approvalRequest.uiAmount,
-                        });
-                      } catch (directOpenError) {
-                        const hasTpsl =
-                          typeof approvalRequest.stopLossPrice === "number" ||
-                          typeof approvalRequest.takeProfitPrice === "number";
-                        if (!hasTpsl) {
-                          throw directOpenError;
-                        }
-
-                        directResult = await jupiterPerpsController.openMarketPosition({
-                          asset: approvalRequest.asset,
-                          collateralToken: approvalRequest.collateralToken,
-                          leverage: approvalRequest.leverage,
-                          maxSlippageBps: approvalRequest.maxSlippageBps,
-                          side: approvalRequest.side,
-                          stopLossPrice: null,
-                          takeProfitPrice: null,
-                          uiAmount: approvalRequest.uiAmount,
-                        });
-
-                        if (directResult.positionPubkey) {
-                          try {
-                            await jupiterPerpsController.attachTpsl({
-                              positionPubkey: directResult.positionPubkey,
-                              stopLossPrice: approvalRequest.stopLossPrice ?? null,
-                              takeProfitPrice: approvalRequest.takeProfitPrice ?? null,
-                            });
-                          } catch (attachError: unknown) {
-                            attachWarning =
-                              attachError instanceof Error ? attachError.message : "TP/SL attachment failed after the position opened.";
-                          }
-                        }
-                      }
-                      setPerpsAutoTradeStatus(
-                        attachWarning
-                          ? `Perps auto-trade opened for ${signal.symbol}, but TP/SL attachment needs manual review: ${attachWarning}`
-                          : `Perps auto-trade opened for ${signal.symbol} via direct Jupiter Mobile approval · ${directResult.txid.slice(0, 10)}...`
-                      );
-                      await sendSignalNotification(
-                        `Trade Filled: ${signal.symbol}`,
-                        `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
-                        "/signals-bot?tab=perps",
-                        NATIVE_NOTIFICATION_SOUNDS.approval,
-                      );
-                      await sendRemotePushNotification({
-                        title: `Trade Filled: ${signal.symbol}`,
-                        body: `${approvalRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol} executed via direct approval.`,
-                        url: "/signals-bot?tab=perps",
-                        walletAddress: perpsWalletAddress,
-                        sound: NATIVE_NOTIFICATION_SOUNDS.approval,
-                      });
-                      return;
-                    } catch (fallbackError: unknown) {
-                      const fallbackMessage =
-                        fallbackError instanceof Error ? fallbackError.message : "Direct Jupiter Mobile approval failed.";
-                      setPerpsAutoTradeFailureCooldown(signal.symbol, `${message} Fallback failed: ${fallbackMessage}`);
-                      return;
-                    }
+                  const preparedResult = result as {
+                    ok: boolean;
+                    message?: string;
+                    preparedAction?: PendingPerpsApprovalRequest;
+                    execution?: PerpsExecutionSummary & { mode: "paper" | "live" };
+                  };
+                  const execution = preparedResult.execution;
+                  if (!execution) {
+                    throw new Error("Perps agent did not return an execution record.");
                   }
 
+                  const tradeLabel = `${executionRequest.side === "long" ? "Long" : "Short"} ${perpsAssetSymbol}`;
+                  if (execution.mode === "paper") {
+                    setPerpsAutoTradeStatus(
+                      `Paper mode · Clocked In · ${tradeLabel} logged for ${signal.symbol} (${collateralAmount} USDC at ${perpsTradePlan.leverage}x)`
+                    );
+                    await sendSignalNotification(
+                      `Paper Trade Logged: ${signal.symbol}`,
+                      `${tradeLabel} · ${execution.reasonMessage}`,
+                      "/signals-bot?tab=perps",
+                      NATIVE_NOTIFICATION_SOUNDS.approval,
+                    );
+                    await sendRemotePushNotification({
+                      title: `Paper Trade Logged: ${signal.symbol}`,
+                      body: `${tradeLabel} · ${execution.reasonMessage}`,
+                      url: "/signals-bot?tab=perps",
+                      walletAddress: walletAddress ?? undefined,
+                      sound: NATIVE_NOTIFICATION_SOUNDS.approval,
+                    });
+                    return;
+                  }
+
+                  if (!preparedResult.preparedAction || !jupiterPerpsController.connected || !jupiterPerpsController.canWrite) {
+                    throw new Error("Live Perps automation is approval-assisted and requires an active writable Jupiter Mobile session.");
+                  }
+
+                  setPerpsAutoTradeStatus(
+                    `Live mode · Clocked In · ${tradeLabel} awaiting your wallet session approval for ${signal.symbol}`
+                  );
+
+                  try {
+                    const directResult = await jupiterPerpsController.openMarketPosition(preparedResult.preparedAction);
+                    if (remoteAuthToken) {
+                      await fetch("/api/perps/executions", {
+                        method: "PATCH",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${remoteAuthToken}`,
+                        },
+                        body: JSON.stringify({
+                          executionId: execution.executionId,
+                          status: "submitted",
+                          txid: directResult.txid,
+                          positionPubkey: directResult.positionPubkey ?? null,
+                        }),
+                      }).catch(() => undefined);
+                    }
+                    await refreshPerpsAgentState().catch(() => undefined);
+                    setPerpsAutoTradeStatus(
+                      `Live mode · Clocked In · ${tradeLabel} submitted through your wallet session · ${directResult.txid.slice(0, 10)}...`
+                    );
+                    await sendSignalNotification(
+                      `Live Trade Submitted: ${signal.symbol}`,
+                      `${tradeLabel} executed with your wallet session.`,
+                      "/signals-bot?tab=perps",
+                      NATIVE_NOTIFICATION_SOUNDS.approval,
+                    );
+                    await sendRemotePushNotification({
+                      title: `Live Trade Submitted: ${signal.symbol}`,
+                      body: `${tradeLabel} executed with your wallet session.`,
+                      url: "/signals-bot?tab=perps",
+                      walletAddress: walletAddress ?? undefined,
+                      sound: NATIVE_NOTIFICATION_SOUNDS.approval,
+                    });
+                  } catch (liveError) {
+                    if (remoteAuthToken) {
+                      await fetch("/api/perps/executions", {
+                        method: "PATCH",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${remoteAuthToken}`,
+                        },
+                        body: JSON.stringify({
+                          executionId: execution.executionId,
+                          status: "failed",
+                          errorMessage: liveError instanceof Error ? liveError.message : "Wallet approval failed.",
+                        }),
+                      }).catch(() => undefined);
+                    }
+                    await refreshPerpsAgentState().catch(() => undefined);
+                    throw liveError;
+                  }
+                } catch (error: unknown) {
+                  const message = error instanceof Error ? error.message : "Unable to queue Perps approval.";
                   setPerpsAutoTradeFailureCooldown(signal.symbol, message);
                 } finally {
                   perpsAutoTradeBusyRef.current = false;
@@ -1701,11 +1978,14 @@ function DashboardPage() {
     sendRemotePushNotification,
     sendSignalNotification,
     setPerpsAutoTradeFailureCooldown,
+    submitPerpsAgentSignal,
     trackedMarkets,
-    createPerpsApproval,
     persistTradeRecord,
+    perpsAgentSession,
     perpsAutoTradeEnabled,
     readOnlyPerpsSnapshot.positions,
+    refreshPerpsAgentState,
+    remoteAuthToken,
     wallet,
     wallet.executeSwap,
     walletAddress,
@@ -3527,7 +3807,39 @@ function DashboardPage() {
     }
 
     if (id === "perps") {
-      return <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} onControllerChange={setJupiterPerpsController} />;
+      return (
+        <>
+          <PerpsClockCard
+            connectionLabel={perpsConnectionLabel}
+            sessionStateLabel={perpsSessionStateLabel}
+            modeLabel={perpsModeLabel}
+            executionModelLabel={perpsAgentSession?.executionModel ?? "approval-assisted"}
+            walletControlledLabel={perpsWalletControlNote}
+            killSwitchOn={perpsAgentSession?.killSwitch ?? false}
+            unlimitedSession={perpsAgentSession?.unlimitedSession ?? perpsUnlimitedSession}
+            warning={perpsAgentSession?.warning ?? null}
+            canClockIn={Boolean(remoteAuthToken) && (perpsModeLabel === "Paper mode" || Boolean(jupiterPerpsController?.connected))}
+            isBusy={perpsSessionBusy}
+            onClockIn={() => { void clockInPerpsAgent().catch((error: unknown) => setPerpsAutoTradeStatus(error instanceof Error ? error.message : "Clock In failed")); }}
+            onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
+            onToggleMode={() => setPerpsSessionModePreference((current) => current === "paper" ? "live" : "paper")}
+            onToggleUnlimited={setPerpsUnlimitedSession}
+          />
+          <PerpsSessionStatus
+            walletAddress={perpsAgentSession?.walletAddress ?? remoteSyncWalletAddress}
+            platformLabel={perpsPlatformLabel}
+            providerLabel={perpsProviderLabel}
+            appOpen={perpsAgentSession?.appOpen ?? false}
+            appForeground={perpsAgentSession?.appForeground ?? false}
+            walletWriteEnabled={perpsAgentSession?.walletWriteEnabled ?? false}
+            note={perpsAgentSession?.executionModel === "approval-assisted"
+              ? "Approval-assisted mode keeps every automated Perps action inside the user's own wallet/session flow."
+              : "Delegated-ready mode is reserved for future non-custodial session authorization support."}
+          />
+          <PerpsAgentExecutionFeed executions={perpsAgentExecutions} />
+          <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} onControllerChange={setJupiterPerpsController} />
+        </>
+      );
     }
 
     if (id === "pnl") {
@@ -3879,6 +4191,9 @@ function DashboardPage() {
             <div className="header-status-stack">
               <div className="header-status-topline">
                 <div className="badge badge-status badge-status-primary">{perpsAutoTradeStatus}</div>
+                <div className={`badge badge-status ${perpsModeLabel === "Paper mode" ? "badge-status-paper" : "badge-status-live"}`}>
+                  Perps Agent: {perpsConnectionLabel} · {perpsSessionStateLabel} · {perpsModeLabel}
+                </div>
                 <div ref={notificationPanelRef} className="notification-bell-wrap">
                   <button
                     type="button"
