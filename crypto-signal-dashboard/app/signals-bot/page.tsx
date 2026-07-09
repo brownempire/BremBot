@@ -35,6 +35,8 @@ const BTC_MINT = "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E";
 const PARAMS_STORAGE_KEY = "brembot.signal-params.v1";
 const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
+const PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY = "brembot.perps-agent.local-session.v1";
+const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-executions.v1";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
@@ -305,6 +307,51 @@ function getMintForToken(token: "SOL" | "ETH" | "BTC") {
   if (token === "SOL") return SOL_MINT;
   if (token === "ETH") return ETH_MINT;
   return BTC_MINT;
+}
+
+function loadLocalPerpsAgentSession() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as PerpsSessionSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalPerpsAgentSession(session: PerpsSessionSnapshot | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (!session) {
+      window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadLocalPerpsAgentExecutions() {
+  if (typeof window === "undefined") return [] as PerpsExecutionSummary[];
+  try {
+    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PerpsExecutionSummary[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalPerpsAgentExecutions(executions: PerpsExecutionSummary[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY, JSON.stringify(executions));
+  } catch {
+    // ignore storage failures
+  }
 }
 
 function normalizeStepValue(value: number, step: number, min?: number, max?: number) {
@@ -1004,9 +1051,18 @@ function DashboardPage() {
 
   const refreshPerpsAgentState = useCallback(async () => {
     if (!remoteAuthToken) {
-      setPerpsAgentSession(null);
-      setPerpsAgentExecutions([]);
-      return null;
+      const localSession = loadLocalPerpsAgentSession();
+      const localExecutions = loadLocalPerpsAgentExecutions();
+      setPerpsAgentSession(localSession);
+      setPerpsAgentExecutions(localExecutions);
+      if (localSession?.mode) {
+        setPerpsSessionModePreference(localSession.mode);
+        setPerpsUnlimitedSession(localSession.unlimitedSession);
+      }
+      return {
+        session: localSession,
+        executions: localExecutions,
+      };
     }
 
     const [sessionResponse, executionsResponse] = await Promise.all([
@@ -1051,7 +1107,36 @@ function DashboardPage() {
     collateralUsd: number;
   }) => {
     if (!remoteAuthToken) {
-      throw new Error("Remote auth is required before the per-user Perps agent can run.");
+      const localExecution: PerpsExecutionSummary = {
+        executionId: `local-exec-${input.signal.id}-${Date.now()}`,
+        signalId: input.signal.id,
+        symbol: input.signal.symbol,
+        summary: input.signal.summary,
+        market: `${input.request.asset}-PERP`,
+        side: input.request.side,
+        action: "open",
+        sizeUsd: Number((input.collateralUsd * Number(input.request.leverage)).toFixed(2)),
+        leverage: Number(input.request.leverage),
+        status: perpsSessionModePreference === "paper" ? "paper_executed" : "approval_required",
+        mode: perpsSessionModePreference,
+        executionModel: "approval-assisted",
+        reasonCode: "LOCAL_SESSION",
+        reasonMessage:
+          perpsSessionModePreference === "paper"
+            ? "Paper execution recorded for the active local wallet session."
+            : "Approval-assisted live execution prepared for the active local wallet session.",
+        createdAt: new Date().toISOString(),
+        txid: null,
+      };
+      const nextExecutions = [localExecution, ...loadLocalPerpsAgentExecutions()].slice(0, 20);
+      saveLocalPerpsAgentExecutions(nextExecutions);
+      setPerpsAgentExecutions(nextExecutions);
+      return {
+        ok: true,
+        message: localExecution.reasonMessage,
+        preparedAction: input.request,
+        execution: localExecution,
+      };
     }
 
     const response = await fetch("/api/perps/agent/execute", {
@@ -1094,13 +1179,9 @@ function DashboardPage() {
 
     await refreshPerpsAgentState().catch(() => undefined);
     return payload;
-  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, refreshPerpsAgentState, remoteAuthToken]);
+  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken]);
 
   const clockInPerpsAgent = useCallback(async () => {
-    if (!remoteAuthToken) {
-      throw new Error("Remote auth is required before Clock In.");
-    }
-
     setPerpsSessionBusy(true);
     try {
       const platform = nativeShell
@@ -1114,6 +1195,39 @@ function DashboardPage() {
             : wallet.connected
               ? "In-app wallet"
               : "Disconnected";
+
+      if (!remoteAuthToken) {
+        const localSession: PerpsSessionSnapshot = {
+          sessionId: `local-${Date.now()}`,
+          walletAddress: jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress ?? "local-session",
+          sessionState: "clocked_in",
+          startedAt: new Date().toISOString(),
+          lastHeartbeatAt: new Date().toISOString(),
+          endedAt: null,
+          mode: perpsSessionModePreference,
+          executionModel: perpsSessionModePreference === "live" ? "approval-assisted" : "approval-assisted",
+          appOpen: true,
+          appForeground: true,
+          walletConnected: perpsWalletConnected,
+          walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+          killSwitch: false,
+          unlimitedSession: perpsUnlimitedSession,
+          platform,
+          walletProvider,
+          warning: perpsUnlimitedSession
+            ? "Unlimited session is enabled for this device session. Guardrails still remain active."
+            : (perpsSessionModePreference === "live" && !jupiterPerpsController?.canWrite
+                ? "Live mode needs an active writable Jupiter wallet session. Paper mode can still clock in."
+                : "Running in local session mode because remote auth is not available for this wallet path."),
+        };
+        saveLocalPerpsAgentSession(localSession);
+        setPerpsAgentSession(localSession);
+        setPerpsAutoTradeStatus(
+          `${localSession.mode === "paper" ? "Paper mode" : "Live mode"} · Clocked In · ${localSession.executionModel}`
+        );
+        await refreshPerpsAgentState().catch(() => undefined);
+        return;
+      }
 
       const response = await fetch("/api/perps/session/clock-in", {
         method: "POST",
@@ -1141,12 +1255,19 @@ function DashboardPage() {
     } finally {
       setPerpsSessionBusy(false);
     }
-  }, [jupiterPerpsController?.connected, nativeShell, perpsSessionModePreference, perpsUnlimitedSession, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, wallet.connected]);
+  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeShell, perpsSessionModePreference, perpsUnlimitedSession, perpsWalletConnected, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.connected, walletAddress]);
 
   const clockOutPerpsAgent = useCallback(async (reason?: string) => {
-    if (!remoteAuthToken) return;
     setPerpsSessionBusy(true);
     try {
+      if (!remoteAuthToken) {
+        saveLocalPerpsAgentSession(null);
+        setPerpsAgentSession((current) => current ? { ...current, sessionState: "clocked_out", endedAt: new Date().toISOString() } : null);
+        setPerpsAutoTradeStatus("Perps auto-trade is off");
+        await refreshPerpsAgentState().catch(() => undefined);
+        return;
+      }
+
       await fetch("/api/perps/session/clock-out", {
         method: "POST",
         headers: {
@@ -1171,6 +1292,22 @@ function DashboardPage() {
     reason?: string;
   }) => {
     if (!remoteAuthToken || !perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") {
+      if (!remoteAuthToken && perpsAgentSession?.sessionState === "clocked_in") {
+        const nextSession: PerpsSessionSnapshot = {
+          ...perpsAgentSession,
+          appOpen: input.appOpen,
+          appForeground: input.appForeground,
+          walletConnected: input.walletConnected,
+          walletWriteEnabled: input.walletWriteEnabled,
+          lastHeartbeatAt: new Date().toISOString(),
+        };
+        if (!input.appOpen || !input.appForeground || !input.walletConnected) {
+          nextSession.sessionState = "clocked_out";
+          nextSession.endedAt = new Date().toISOString();
+        }
+        saveLocalPerpsAgentSession(nextSession.sessionState === "clocked_out" ? null : nextSession);
+        setPerpsAgentSession(nextSession.sessionState === "clocked_out" ? null : nextSession);
+      }
       return;
     }
 
@@ -3818,7 +3955,7 @@ function DashboardPage() {
             killSwitchOn={perpsAgentSession?.killSwitch ?? false}
             unlimitedSession={perpsAgentSession?.unlimitedSession ?? perpsUnlimitedSession}
             warning={perpsAgentSession?.warning ?? null}
-            canClockIn={Boolean(remoteAuthToken) && (perpsModeLabel === "Paper mode" || Boolean(jupiterPerpsController?.connected))}
+            canClockIn={perpsModeLabel === "Paper mode" ? perpsWalletConnected : Boolean(jupiterPerpsController?.connected)}
             isBusy={perpsSessionBusy}
             onClockIn={() => { void clockInPerpsAgent().catch((error: unknown) => setPerpsAutoTradeStatus(error instanceof Error ? error.message : "Clock In failed")); }}
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
