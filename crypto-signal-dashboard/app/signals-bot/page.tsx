@@ -262,8 +262,8 @@ function normalizeStepValue(value: number, step: number, min?: number, max?: num
   return Number(clampToRange(value, min, max).toFixed(decimals));
 }
 
-function roundToTenths(value: number) {
-  return Number(value.toFixed(1));
+function roundToHundredths(value: number) {
+  return Number(value.toFixed(2));
 }
 
 function StepperNumberInput({
@@ -306,7 +306,7 @@ function formatAllocationValue(settings: AutoTradeSettings) {
   if (settings.walletAllocationMode === "usd") {
     return `$${settings.walletPercent.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
   }
-  return `${settings.walletPercent.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 1 })}%`;
+  return `${settings.walletPercent.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%`;
 }
 
 function getAllocationPercentOfBalance(settings: AutoTradeSettings, balanceAmount: number) {
@@ -1950,8 +1950,8 @@ function DashboardPage() {
       const nextPercent = Number(parsed.walletPercent);
       const percent = Number.isFinite(nextPercent)
         ? walletAllocationMode === "usd"
-          ? Math.max(0.1, roundToTenths(nextPercent))
-          : Math.min(100, Math.max(0.1, roundToTenths(nextPercent)))
+          ? Math.max(0.01, roundToHundredths(nextPercent))
+          : Math.min(100, Math.max(0.01, roundToHundredths(nextPercent)))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
       const nextTakeProfit = Number(parsed.takeProfitPercent);
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
@@ -1963,7 +1963,7 @@ function DashboardPage() {
         : DEFAULT_AUTO_TRADE_SETTINGS.stopLossPercent;
       const nextPerpsLeverage = Number(parsed.perpsLeverage);
       const perpsLeverage = Number.isFinite(nextPerpsLeverage) && nextPerpsLeverage >= 1
-        ? Math.min(250, Math.max(1, roundToTenths(nextPerpsLeverage)))
+        ? Math.min(250, Math.max(1, roundToHundredths(nextPerpsLeverage)))
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
@@ -3322,7 +3322,7 @@ function DashboardPage() {
   }
 
   function updatePerpsLeverage(value: number) {
-    const perpsLeverage = Number.isFinite(value) ? Math.min(250, Math.max(1, roundToTenths(value))) : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
+    const perpsLeverage = Number.isFinite(value) ? Math.min(250, Math.max(1, roundToHundredths(value))) : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
     const next: AutoTradeSettings = {
       ...autoTradeSettings,
       perpsLeverage,
@@ -3600,8 +3600,8 @@ function DashboardPage() {
               ) : null}
             </label>
             <label>Trend window (min)<StepperNumberInput value={params.trendWindow} min={1} max={180} step={1} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, trendWindow: value }))} /></label>
-            <label>Trend threshold %<StepperNumberInput value={params.trendThreshold} min={0.1} max={10} step={0.1} onChange={(value) => setParams((prev) => ({ ...prev, trendThreshold: value }))} /></label>
-            <label>Breakout %<StepperNumberInput value={params.breakoutPercent} min={0.1} max={8} step={0.1} onChange={(value) => setParams((prev) => ({ ...prev, breakoutPercent: value }))} /></label>
+            <label>Trend threshold %<StepperNumberInput value={params.trendThreshold} min={0.01} max={10} step={0.01} onChange={(value) => setParams((prev) => ({ ...prev, trendThreshold: value }))} /></label>
+            <label>Breakout %<StepperNumberInput value={params.breakoutPercent} min={0.01} max={8} step={0.01} onChange={(value) => setParams((prev) => ({ ...prev, breakoutPercent: value }))} /></label>
             <label>Cooldown (sec)<StepperNumberInput value={params.cooldownSeconds} min={5} max={900} step={5} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, cooldownSeconds: value }))} /></label>
             <label>
               <span className="allocation-label-row">
@@ -3622,15 +3622,15 @@ function DashboardPage() {
               </span>
               <StepperNumberInput
                 value={autoTradeSettings.walletPercent}
-                min={0.1}
+                min={0.01}
                 max={autoTradeSettings.walletAllocationMode === "percent" ? 100 : 1_000_000}
-                step={0.1}
+                step={0.01}
                 inputMode="decimal"
                 onChange={(value) => {
                   const walletPercent = Number.isFinite(value)
                     ? autoTradeSettings.walletAllocationMode === "percent"
-                      ? Math.min(100, Math.max(0.1, roundToTenths(value)))
-                      : Math.max(0.1, roundToTenths(value))
+                      ? Math.min(100, Math.max(0.01, roundToHundredths(value)))
+                      : Math.max(0.01, roundToHundredths(value))
                     : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
                   const next = { ...autoTradeSettings, walletPercent };
                   persistAutoTradeSettings(next);
@@ -3642,7 +3642,7 @@ function DashboardPage() {
               <StepperNumberInput
                 value={autoTradeSettings.takeProfitPercent}
                 min={0}
-                step={0.1}
+                step={0.01}
                 onChange={(value) => {
                   const takeProfitPercent = Number.isFinite(value) && value >= 0 ? value : 0;
                   const next = { ...autoTradeSettings, takeProfitPercent };
@@ -3655,7 +3655,7 @@ function DashboardPage() {
               <StepperNumberInput
                 value={autoTradeSettings.stopLossPercent}
                 min={0}
-                step={0.1}
+                step={0.01}
                 onChange={(value) => {
                   const stopLossPercent = Number.isFinite(value) && value >= 0 ? value : 0;
                   const next = { ...autoTradeSettings, stopLossPercent };
@@ -3669,7 +3669,7 @@ function DashboardPage() {
                 value={autoTradeSettings.perpsLeverage}
                 min={1}
                 max={250}
-                step={0.1}
+                step={0.01}
                 onChange={updatePerpsLeverage}
               />
             </label>
