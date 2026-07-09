@@ -262,10 +262,6 @@ function normalizeStepValue(value: number, step: number, min?: number, max?: num
   return Number(clampToRange(value, min, max).toFixed(decimals));
 }
 
-function roundToHundredths(value: number) {
-  return Number(value.toFixed(2));
-}
-
 function StepperNumberInput({
   value,
   min,
@@ -274,9 +270,9 @@ function StepperNumberInput({
   inputMode = "decimal",
   onChange,
 }: StepperNumberInputProps) {
-  const applyValue = (next: number) => {
+  const applyValue = (next: number, snapToStep = false) => {
     if (!Number.isFinite(next)) return;
-    onChange(normalizeStepValue(next, step, min, max));
+    onChange(snapToStep ? normalizeStepValue(next, step, min, max) : clampToRange(next, min, max));
   };
 
   return (
@@ -295,8 +291,8 @@ function StepperNumberInput({
         }}
       />
       <div className="stepper-input-buttons">
-        <button type="button" aria-label="Increase value" onClick={() => applyValue(value + step)}>▲</button>
-        <button type="button" aria-label="Decrease value" onClick={() => applyValue(value - step)}>▼</button>
+        <button type="button" aria-label="Increase value" onClick={() => applyValue(value + step, true)}>▲</button>
+        <button type="button" aria-label="Decrease value" onClick={() => applyValue(value - step, true)}>▼</button>
       </div>
     </div>
   );
@@ -1950,8 +1946,8 @@ function DashboardPage() {
       const nextPercent = Number(parsed.walletPercent);
       const percent = Number.isFinite(nextPercent)
         ? walletAllocationMode === "usd"
-          ? Math.max(0.01, roundToHundredths(nextPercent))
-          : Math.min(100, Math.max(0.01, roundToHundredths(nextPercent)))
+          ? Math.max(0.01, nextPercent)
+          : Math.min(100, Math.max(0.01, nextPercent))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
       const nextTakeProfit = Number(parsed.takeProfitPercent);
       const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
@@ -1963,7 +1959,7 @@ function DashboardPage() {
         : DEFAULT_AUTO_TRADE_SETTINGS.stopLossPercent;
       const nextPerpsLeverage = Number(parsed.perpsLeverage);
       const perpsLeverage = Number.isFinite(nextPerpsLeverage) && nextPerpsLeverage >= 1
-        ? Math.min(250, Math.max(1, roundToHundredths(nextPerpsLeverage)))
+        ? Math.min(250, Math.max(1, nextPerpsLeverage))
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
@@ -3322,7 +3318,7 @@ function DashboardPage() {
   }
 
   function updatePerpsLeverage(value: number) {
-    const perpsLeverage = Number.isFinite(value) ? Math.min(250, Math.max(1, roundToHundredths(value))) : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
+    const perpsLeverage = Number.isFinite(value) ? Math.min(250, Math.max(1, value)) : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
     const next: AutoTradeSettings = {
       ...autoTradeSettings,
       perpsLeverage,
@@ -3629,8 +3625,8 @@ function DashboardPage() {
                 onChange={(value) => {
                   const walletPercent = Number.isFinite(value)
                     ? autoTradeSettings.walletAllocationMode === "percent"
-                      ? Math.min(100, Math.max(0.01, roundToHundredths(value)))
-                      : Math.max(0.01, roundToHundredths(value))
+                      ? Math.min(100, Math.max(0.01, value))
+                      : Math.max(0.01, value)
                     : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
                   const next = { ...autoTradeSettings, walletPercent };
                   persistAutoTradeSettings(next);
