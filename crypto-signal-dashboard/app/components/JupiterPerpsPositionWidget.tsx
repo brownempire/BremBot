@@ -13,6 +13,7 @@ import {
 } from "@/hooks/useJupiterPerpsOpenPosition";
 import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
+import { isNativeShellRuntime } from "@/app/lib/nativeShell";
 import { formatUsd } from "@/lib/utils";
 import {
   shortenWalletAddress,
@@ -824,7 +825,7 @@ function JupiterPerpsPositionWidgetBody({
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
   const [pendingTpslMutationKey, setPendingTpslMutationKey] = useState<string | null>(null);
-  const nativeShell = typeof window !== "undefined" && Capacitor.isNativePlatform();
+  const nativeShell = isNativeShellRuntime();
   const reownProjectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID?.trim() ?? "";
   const mobileUserAgent = typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   const shouldRecommendJupiterMobile = nativeShell || mobileUserAgent;

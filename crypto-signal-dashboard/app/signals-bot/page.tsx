@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
+import { isNativeShellRuntime } from "@/app/lib/nativeShell";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { PerpsClockCard } from "@/app/components/perps-agent/PerpsClockCard";
@@ -648,7 +649,7 @@ function remoteTradesAuthStorageKey(walletAddress: string) {
 }
 
 function isNativeShellApp() {
-  return typeof window !== "undefined" && Capacitor.isNativePlatform();
+  return isNativeShellRuntime();
 }
 
 function readNativeAlertsEnabled() {
