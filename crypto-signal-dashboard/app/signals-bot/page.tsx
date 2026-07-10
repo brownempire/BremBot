@@ -10,7 +10,7 @@ import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
-import { isNativeShellRuntime } from "@/app/lib/nativeShell";
+import { isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { PerpsClockCard } from "@/app/components/perps-agent/PerpsClockCard";
@@ -889,12 +889,24 @@ function DashboardPage() {
   const perpsLiveEligibleWallet =
     jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress;
   const perpsLiveWalletAllowed = isPublicPerpsLiveWalletAllowed(perpsLiveEligibleWallet);
+  const perpsRuntimePlatform =
+    nativeShell
+      ? "native"
+      : isStandalonePwaRuntime()
+        ? "pwa"
+        : "web";
   const perpsPlatformLabel =
     perpsAgentSession?.platform === "native"
       ? "Native app"
       : perpsAgentSession?.platform === "pwa"
         ? "PWA"
-        : "Web";
+        : perpsAgentSession?.platform === "web"
+          ? "Web"
+          : perpsRuntimePlatform === "native"
+            ? "Native app"
+            : perpsRuntimePlatform === "pwa"
+              ? "PWA"
+              : "Web";
   const perpsProviderLabel =
     perpsAgentSession?.walletProvider
       ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
@@ -4001,9 +4013,9 @@ function DashboardPage() {
             walletAddress={perpsAgentSession?.walletAddress ?? remoteSyncWalletAddress}
             platformLabel={perpsPlatformLabel}
             providerLabel={perpsProviderLabel}
-            appOpen={perpsAgentSession?.appOpen ?? false}
-            appForeground={perpsAgentSession?.appForeground ?? false}
-            walletWriteEnabled={perpsAgentSession?.walletWriteEnabled ?? false}
+            appOpen={perpsAgentSession?.appOpen ?? true}
+            appForeground={perpsAgentSession?.appForeground ?? (typeof document !== "undefined" ? document.visibilityState === "visible" : true)}
+            walletWriteEnabled={perpsAgentSession?.walletWriteEnabled ?? Boolean(jupiterPerpsController?.canWrite)}
             note={perpsAgentSession?.executionModel === "approval-assisted"
               ? "Approval-assisted mode keeps every automated Perps action inside the user's own wallet/session flow."
               : "Delegated-ready mode is reserved for future non-custodial session authorization support."}
