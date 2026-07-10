@@ -1559,7 +1559,8 @@ function DashboardPage() {
     if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
 
     const hasUserWallet = wallet.connected || Boolean(jupiterPerpsController?.connected);
-    if (!hasUserWallet || !remoteAuthToken) {
+    const requiresRemoteAuth = !perpsAgentSession.sessionId.startsWith("local-");
+    if (!hasUserWallet || (requiresRemoteAuth && !remoteAuthToken)) {
       void clockOutPerpsAgent("Trading session ended because the wallet session is no longer valid.");
     }
   }, [clockOutPerpsAgent, jupiterPerpsController?.connected, perpsAgentSession, remoteAuthToken, wallet.connected]);
