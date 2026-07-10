@@ -1,5 +1,7 @@
 "use client";
 
+import { shortenWalletAddress } from "@/lib/jupiterPerps";
+
 type PerpsSessionStatusProps = {
   walletAddress: string | null;
   platformLabel: string;
@@ -20,7 +22,7 @@ export function PerpsSessionStatus(props: PerpsSessionStatusProps) {
       <div className="perps-agent-grid">
         <div className="perps-agent-stat">
           <span>Wallet</span>
-          <strong>{props.walletAddress ?? "Not signed in"}</strong>
+          <strong>{props.walletAddress ? shortenWalletAddress(props.walletAddress) : "Not signed in"}</strong>
         </div>
         <div className="perps-agent-stat">
           <span>Provider</span>
