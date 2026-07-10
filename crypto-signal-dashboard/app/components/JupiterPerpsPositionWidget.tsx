@@ -4,6 +4,7 @@ import { Browser } from "@capacitor/browser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Capacitor } from "@capacitor/core";
 import { WalletReadyState } from "@jup-ag/wallet-adapter";
+import { VersionedTransaction } from "@solana/web3.js";
 
 import { useJupiterPerpsClosePosition } from "@/hooks/useJupiterPerpsClosePosition";
 import {
@@ -53,6 +54,7 @@ export type JupiterPerpsWidgetController = {
   canWrite: boolean;
   connect: () => Promise<void>;
   connected: boolean;
+  signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
   openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ positionPubkey: string | null; txid: string }>;
   previewMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<PerpsOrderPreview>;
   refresh: () => Promise<void>;
@@ -929,6 +931,7 @@ function JupiterPerpsPositionWidgetBody({
       canWrite: writeEnabled,
       connect: handleNativeJupiterConnect,
       connected: isConnected,
+      signTransaction: nativeJupiterWallet.signTransaction,
       refresh: refetch,
       walletAddress,
       previewMarketPosition: async ({
@@ -1004,7 +1007,7 @@ function JupiterPerpsPositionWidgetBody({
         };
       },
     };
-  }, [attachTpsl, buildPreview, handleNativeJupiterConnect, isConnected, nativeJupiterAdapterEnabled, openPosition, refetch, walletAddress, writeEnabled]);
+  }, [attachTpsl, buildPreview, handleNativeJupiterConnect, isConnected, nativeJupiterAdapterEnabled, nativeJupiterWallet.signTransaction, openPosition, refetch, walletAddress, writeEnabled]);
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);

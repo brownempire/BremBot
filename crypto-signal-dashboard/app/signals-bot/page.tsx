@@ -8,7 +8,7 @@ import { PushNotifications } from "@capacitor/push-notifications";
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import bs58 from "bs58";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 import { isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
 
@@ -910,11 +910,87 @@ function DashboardPage() {
   const perpsProviderLabel =
     perpsAgentSession?.walletProvider
       ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
+  const activeWalletProviderLabel =
+    jupiterPerpsController?.connected
+      ? "Jupiter Mobile"
+      : wallet.connected
+        ? "In-app wallet"
+        : "Disconnected";
+  const activeWalletAddress =
+    jupiterPerpsController?.walletAddress ?? wallet.publicKey?.toBase58() ?? null;
   const perpsWalletControlNote = perpsModeLabel === "Live mode"
     ? perpsLiveWalletAllowed
       ? "Live automation uses only your own connected wallet session. BremLogic does not use a shared backend trading wallet."
       : "Live Perps automation is restricted to approved wallets only. This wallet can still use paper mode, spot auto-trade, and manual Perps."
     : "Paper automation simulates Perps decisions for your connected wallet session without moving funds.";
+  const manualSwapPassthroughWalletContextState = useMemo<Record<string, unknown>>(() => {
+    if (nativeShell && jupiterPerpsController?.connected && jupiterPerpsController.walletAddress) {
+      const publicKey = new PublicKey(jupiterPerpsController.walletAddress);
+      const adapter = {
+        name: "Jupiter Mobile",
+        url: "https://jup.ag",
+        icon: "",
+        publicKey,
+        connecting: false,
+        connected: true,
+        disconnect: async () => undefined,
+        connect: async () => {
+          await jupiterPerpsController.connect();
+        },
+        sendTransaction: async (transaction: unknown, conn: typeof connection, options?: { skipPreflight?: boolean; maxRetries?: number }) => {
+          if (!(transaction instanceof VersionedTransaction)) {
+            throw new Error("Unsupported transaction format");
+          }
+          const signed = await jupiterPerpsController.signTransaction(transaction);
+          return conn.sendRawTransaction(signed.serialize(), {
+            skipPreflight: options?.skipPreflight ?? false,
+            maxRetries: options?.maxRetries ?? 3,
+          });
+        },
+        signTransaction: async (transaction: unknown) => {
+          if (!(transaction instanceof VersionedTransaction)) {
+            throw new Error("Unsupported transaction format");
+          }
+          return jupiterPerpsController.signTransaction(transaction);
+        },
+        signAllTransactions: async (transactions: unknown[]) => {
+          const signed: VersionedTransaction[] = [];
+          for (const transaction of transactions) {
+            if (!(transaction instanceof VersionedTransaction)) {
+              throw new Error("Unsupported transaction format");
+            }
+            signed.push(await jupiterPerpsController.signTransaction(transaction));
+          }
+          return signed;
+        },
+        signMessage: undefined,
+      };
+
+      const walletContext = {
+        publicKey,
+        wallets: [{ adapter, readyState: "Installed" }],
+        wallet: { adapter, readyState: "Installed" },
+        connect: async () => {
+          await jupiterPerpsController.connect();
+        },
+        select: () => undefined,
+        connecting: false,
+        connected: true,
+        disconnect: async () => undefined,
+        autoConnect: false,
+        disconnecting: false,
+        sendTransaction: adapter.sendTransaction,
+        signTransaction: adapter.signTransaction,
+        signAllTransactions: adapter.signAllTransactions,
+        signMessage: undefined,
+        signIn: undefined,
+      };
+
+      return walletContext;
+    }
+
+    return wallet.passthroughWalletContextState;
+  }, [jupiterPerpsController, nativeShell, wallet.passthroughWalletContextState]);
 
   useEffect(() => {
     const syncActiveTab = () => {
@@ -3915,8 +3991,8 @@ function DashboardPage() {
             Wallet keys are stored in this browser until you disconnect (which removes them from this device).
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
-            {wallet.publicKey
-              ? `Address: ${shortAddress(wallet.publicKey.toBase58())}`
+            {activeWalletAddress
+              ? `Address: ${shortAddress(activeWalletAddress)} · ${activeWalletProviderLabel}`
               : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
           <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
@@ -3924,8 +4000,14 @@ function DashboardPage() {
             <JupiterTradePanel
               onTradeSuccess={handleManualSwapSuccess}
               integratedTargetId="bremlogic-manual-swap-widget"
-              passthroughWalletContextState={wallet.passthroughWalletContextState}
-              onRequestConnectWallet={wallet.hasWallet && !wallet.connected ? loginInAppWallet : undefined}
+              passthroughWalletContextState={manualSwapPassthroughWalletContextState}
+              onRequestConnectWallet={
+                nativeShell
+                  ? jupiterPerpsController?.connect
+                  : wallet.hasWallet && !wallet.connected
+                    ? loginInAppWallet
+                    : undefined
+              }
             />
           </div>
           <div className="wallet-holdings">
