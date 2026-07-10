@@ -48,6 +48,16 @@ function normalizePositiveNumberString(value: string | null | undefined) {
   return trimmed;
 }
 
+function uiUsdToRawUsdString(value: string | null | undefined) {
+  const normalized = normalizePositiveNumberString(value);
+  if (!normalized) return null;
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+  return String(Math.max(1, Math.round(parsed * 1_000_000)));
+}
+
 function normalizeRawAmount(value: string | undefined) {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return null;
@@ -125,8 +135,8 @@ export async function POST(request: NextRequest) {
   const orderType = payload?.orderType === "limit" ? "limit" : "market";
   const walletAddress = payload?.walletAddress?.trim();
   const triggerPrice = normalizePositiveNumberString(payload?.triggerPrice);
-  const takeProfitPrice = normalizePositiveNumberString(payload?.takeProfitPrice);
-  const stopLossPrice = normalizePositiveNumberString(payload?.stopLossPrice);
+  const takeProfitPrice = uiUsdToRawUsdString(payload?.takeProfitPrice);
+  const stopLossPrice = uiUsdToRawUsdString(payload?.stopLossPrice);
 
   if (!walletAddress) {
     return Response.json({ error: "Connect Jupiter Mobile before opening a Perps order." }, { status: 400 });

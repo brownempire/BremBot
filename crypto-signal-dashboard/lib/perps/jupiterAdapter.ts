@@ -21,6 +21,10 @@ function usdToAtomicUsdcString(value: number) {
   return String(Math.max(1, Math.floor(value * 1_000_000)));
 }
 
+function uiUsdPriceToRawUsdString(value: number) {
+  return String(Math.max(1, Math.round(value * 1_000_000)));
+}
+
 function getAssetForMarket(market: string): Asset {
   const asset = MARKET_TO_ASSET[market.toUpperCase()];
   if (!asset) {
@@ -49,10 +53,10 @@ export async function buildPerpsTransactionForSignal(signal: PerpsSignalPayload,
     maxSlippageBps: String(signal.maxSlippageBps),
     tpsl: [
       ...(signal.takeProfit?.enabled && signal.takeProfit.priceUsd
-        ? [{ receiveToken: inputToken, requestType: "tp" as const, triggerPrice: String(signal.takeProfit.priceUsd) }]
+        ? [{ receiveToken: inputToken, requestType: "tp" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.takeProfit.priceUsd) }]
         : []),
       ...(signal.stopLoss?.enabled && signal.stopLoss.priceUsd
-        ? [{ receiveToken: inputToken, requestType: "sl" as const, triggerPrice: String(signal.stopLoss.priceUsd) }]
+        ? [{ receiveToken: inputToken, requestType: "sl" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.stopLoss.priceUsd) }]
         : []),
     ],
   });

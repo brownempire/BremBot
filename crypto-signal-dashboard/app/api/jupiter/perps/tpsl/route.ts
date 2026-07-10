@@ -34,6 +34,16 @@ function normalizePositiveNumberString(value: string | null | undefined) {
   return trimmed;
 }
 
+function uiUsdToRawUsdString(value: string | null | undefined) {
+  const normalized = normalizePositiveNumberString(value);
+  if (!normalized) return null;
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+
+  return String(Math.max(1, Math.round(parsed * 1_000_000)));
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -71,7 +81,7 @@ export async function POST(request: NextRequest) {
   const tpsl = (payload?.tpsl ?? [])
     .map((item) => {
       const receiveToken = item?.receiveToken?.trim();
-      const triggerPrice = normalizePositiveNumberString(item?.triggerPrice);
+      const triggerPrice = uiUsdToRawUsdString(item?.triggerPrice);
       const sizeUsdDelta = normalizePositiveNumberString(item?.sizeUsdDelta);
       const requestType = item?.requestType;
       const entirePosition = item?.entirePosition !== false;
@@ -123,7 +133,7 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const payload = await request.json().catch(() => null) as CreateTpslRequest | null;
   const positionRequestPubkey = payload?.positionRequestPubkey?.trim();
-  const triggerPrice = normalizePositiveNumberString(payload?.triggerPrice);
+  const triggerPrice = uiUsdToRawUsdString(payload?.triggerPrice);
 
   if (!positionRequestPubkey || !triggerPrice) {
     return Response.json({ error: "Incomplete TP/SL update request." }, { status: 400 });
