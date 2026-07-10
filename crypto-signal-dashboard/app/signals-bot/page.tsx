@@ -4361,11 +4361,13 @@ function DashboardPage() {
               priority
             />
             <div className="header-status-stack">
-              <div className="header-status-topline">
+              <div className="header-status-summary">
                 <div className="badge badge-status badge-status-primary">{perpsAutoTradeStatus}</div>
                 <div className={`badge badge-status ${perpsModeLabel === "Paper mode" ? "badge-status-paper" : "badge-status-live"}`}>
                   Perps Agent: {perpsConnectionLabel} · {perpsSessionStateLabel} · {perpsModeLabel}
                 </div>
+              </div>
+              <div className="header-status-actions">
                 <div ref={notificationPanelRef} className="notification-bell-wrap">
                   <button
                     type="button"
@@ -4395,8 +4397,8 @@ function DashboardPage() {
                     </div>
                   ) : null}
                 </div>
+                <div className="badge badge-status badge-status-wide">{autoTradeStatus}</div>
               </div>
-              <div className="badge badge-status badge-status-wide">{autoTradeStatus}</div>
             </div>
           </div>
         </div>

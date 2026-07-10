@@ -662,7 +662,13 @@ main {
     gap: 8px;
   }
 
-  .header-status-topline {
+  .header-status-summary {
+    grid-template-columns: minmax(116px, 0.42fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .header-status-actions {
+    grid-template-columns: 54px minmax(0, 1fr);
     gap: 8px;
   }
 
@@ -744,15 +750,22 @@ header {
 
 .header-status-stack {
   display: grid;
-  gap: 6px;
+  gap: 8px;
   margin-top: 2px;
 }
 
-.header-status-topline {
+.header-status-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(132px, 0.38fr) minmax(0, 1fr);
   gap: 10px;
-  align-items: start;
+  align-items: stretch;
+}
+
+.header-status-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
 }
 
 .badges {
@@ -800,6 +813,9 @@ header {
 
 .badge-status-wide {
   width: 100%;
+  min-height: 54px;
+  display: flex;
+  align-items: center;
 }
 
 .grid {
@@ -1264,7 +1280,7 @@ button:disabled {
 
 .notification-bell-wrap {
   position: relative;
-  align-self: start;
+  align-self: stretch;
 }
 
 .notification-bell-button {
