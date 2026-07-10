@@ -911,13 +911,14 @@ function DashboardPage() {
     perpsAgentSession?.walletProvider
       ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
   const activeWalletProviderLabel =
-    jupiterPerpsController?.connected
+    nativeShell && jupiterPerpsController?.connected
       ? "Jupiter Mobile"
       : wallet.connected
         ? "In-app wallet"
         : "Disconnected";
   const activeWalletAddress =
-    jupiterPerpsController?.walletAddress ?? wallet.publicKey?.toBase58() ?? null;
+    (nativeShell ? jupiterPerpsController?.walletAddress : null) ?? wallet.publicKey?.toBase58() ?? null;
+  const portfolioWalletAddress = activeWalletAddress;
   const perpsWalletControlNote = perpsModeLabel === "Live mode"
     ? perpsLiveWalletAllowed
       ? "Live automation uses only your own connected wallet session. BremLogic does not use a shared backend trading wallet."
@@ -3022,7 +3023,8 @@ function DashboardPage() {
   }, [remoteAuthToken, remoteSyncWalletAddress, tradeStorageAddress]);
 
   const refreshWalletPortfolio = useCallback(async () => {
-    if (!wallet.connected || !wallet.publicKey) {
+    const portfolioPublicKey = portfolioWalletAddress ? new PublicKey(portfolioWalletAddress) : null;
+    if (!portfolioPublicKey) {
       setSolBalance(null);
       setWalletTokens([]);
       setTotalBalanceUsd(null);
@@ -3034,7 +3036,7 @@ function DashboardPage() {
     setPortfolioStatus("Syncing wallet balances...");
 
     try {
-      const response = await fetch(`/api/wallet/balances?address=${wallet.publicKey.toBase58()}`, {
+      const response = await fetch(`/api/wallet/balances?address=${portfolioPublicKey.toBase58()}`, {
         cache: "no-store",
       });
       const payload = await response.json().catch(() => null);
@@ -3051,11 +3053,11 @@ function DashboardPage() {
     }
 
     const [balanceResult, splTokenAccountsResult, token2022AccountsResult] = await Promise.allSettled([
-      connection.getBalance(wallet.publicKey, "processed"),
-      connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+      connection.getBalance(portfolioPublicKey, "processed"),
+      connection.getParsedTokenAccountsByOwner(portfolioPublicKey, {
         programId: TOKEN_PROGRAM_ID,
       }),
-      connection.getParsedTokenAccountsByOwner(wallet.publicKey, {
+      connection.getParsedTokenAccountsByOwner(portfolioPublicKey, {
         programId: TOKEN_2022_PROGRAM_ID,
       }),
     ]);
@@ -3068,7 +3070,7 @@ function DashboardPage() {
       solLoaded = true;
     } else {
       try {
-        const accountInfo = await connection.getAccountInfo(wallet.publicKey, "finalized");
+        const accountInfo = await connection.getAccountInfo(portfolioPublicKey, "finalized");
         if (accountInfo) {
           setSolBalance(accountInfo.lamports / 1_000_000_000);
           solLoaded = true;
@@ -3126,7 +3128,7 @@ function DashboardPage() {
       return;
     }
     setPortfolioStatus("Failed to sync wallet balances");
-  }, [connection, wallet.connected, wallet.publicKey]);
+  }, [connection, portfolioWalletAddress]);
 
   useEffect(() => {
     refreshWalletPortfolio().catch(() => undefined);

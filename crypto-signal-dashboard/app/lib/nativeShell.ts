@@ -9,16 +9,18 @@ function readNativeShellHint() {
     const url = new URL(window.location.href);
     const nativeShellParam = url.searchParams.get("nativeShell");
     if (nativeShellParam === "ios" || nativeShellParam === "true" || nativeShellParam === "1") {
-      window.localStorage.setItem(NATIVE_SHELL_STORAGE_KEY, "true");
+      window.sessionStorage.setItem(NATIVE_SHELL_STORAGE_KEY, "true");
+      window.localStorage.removeItem(NATIVE_SHELL_STORAGE_KEY);
       return true;
     }
 
     if (nativeShellParam === "false" || nativeShellParam === "0") {
+      window.sessionStorage.removeItem(NATIVE_SHELL_STORAGE_KEY);
       window.localStorage.removeItem(NATIVE_SHELL_STORAGE_KEY);
       return false;
     }
 
-    return window.localStorage.getItem(NATIVE_SHELL_STORAGE_KEY) === "true";
+    return window.sessionStorage.getItem(NATIVE_SHELL_STORAGE_KEY) === "true";
   } catch {
     return false;
   }
