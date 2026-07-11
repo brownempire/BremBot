@@ -8,8 +8,11 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "brembot-perps-agent-"));
 process.env.REDIS_URL = "";
 process.env.PERPS_SESSIONS_FILE = path.join(tempRoot, "sessions.json");
 process.env.PERPS_USER_EXECUTIONS_FILE = path.join(tempRoot, "executions.json");
+process.env.PERPS_DECISION_JOURNAL_FILE = path.join(tempRoot, "trade-decision-journal.md");
+process.env.PERPS_DECISION_EVENTS_FILE = path.join(tempRoot, "trade-decision-events.ndjson");
 process.env.PERPS_KILL_SWITCH = "false";
 process.env.PERPS_PAPER_TRADING = "true";
+process.env.PERPS_DECISION_SHADOW_MODE = "true";
 
 let tradingAgent: typeof import("../lib/perps/tradingAgent");
 let sessionStore: typeof import("../lib/perps/sessionStore");
@@ -17,7 +20,12 @@ let auditStore: typeof import("../lib/perps/userExecutionAudit");
 let sessionConfig: typeof import("../lib/perps/sessionConfig");
 
 function cleanupStores() {
-  for (const file of [process.env.PERPS_SESSIONS_FILE, process.env.PERPS_USER_EXECUTIONS_FILE]) {
+  for (const file of [
+    process.env.PERPS_SESSIONS_FILE,
+    process.env.PERPS_USER_EXECUTIONS_FILE,
+    process.env.PERPS_DECISION_JOURNAL_FILE,
+    process.env.PERPS_DECISION_EVENTS_FILE,
+  ]) {
     if (file && fs.existsSync(file)) {
       fs.rmSync(file);
     }
@@ -91,18 +99,37 @@ test("paper mode routes a signal only to the clocked-in user session", async () 
     symbol: "SOL/USD",
     summary: "Bullish breakout",
     direction: "bullish",
+    signalConfidence: 0.74,
     asset: "SOL",
     collateralUsd: 25,
     leverage: 2,
     maxSlippageBps: 100,
+    marketContext: {
+      spotPrice: 82.25,
+      volatilityPercent: 2.1,
+      trendBias: "bullish",
+      availableUsdc: 300,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 1.8,
+    },
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.execution.status, "paper_executed");
+  assert.equal(result.decision?.shadowMode, true);
+  assert.equal(typeof result.decision?.confidenceScore, "number");
 
   const executions = await auditStore.listUserPerpsExecutions(wallet);
   assert.equal(executions.length, 1);
   assert.equal(executions[0]?.signalId, "sig-1");
+  assert.equal(executions[0]?.decisionShadowMode, true);
+
+  const journalPath = process.env.PERPS_DECISION_JOURNAL_FILE!;
+  assert.equal(fs.existsSync(journalPath), true);
+  const journal = fs.readFileSync(journalPath, "utf8");
+  assert.match(journal, /BremLogic Trade Decision Journal/);
+  assert.match(journal, /SOL\/USD/);
+  assert.match(journal, /shadow mode on/);
 });
 
 test("duplicate signals are blocked within the same user scope", async () => {

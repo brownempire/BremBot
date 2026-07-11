@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 
+import { getTradeDecisionConfig } from "@/lib/decision/config";
+import { createTradeDecisionRecord } from "@/lib/decision/engine";
+import { appendTradeDecisionRecord } from "@/lib/decision/logStore";
 import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
 import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
 import { resolvePerpsExecutionModel } from "@/lib/perps/executionModel";
@@ -97,18 +100,79 @@ export async function heartbeatPerpsSession(walletAddress: string, input: PerpsS
 
 export async function routePerpsSignalForUser(walletAddress: string, signal: PerpsAgentSignal) {
   const config = getPerpsSessionConfig();
+  const decisionConfig = getTradeDecisionConfig();
   const session = await getPerpsSession(walletAddress);
   if (!session) {
     return { ok: false, code: "NO_SESSION", message: "Clock In before routing automated perps signals." } as const;
   }
 
   const existingExecutions = await listUserPerpsExecutions(walletAddress);
+  const decision = createTradeDecisionRecord({
+    walletAddress,
+    session,
+    signal,
+    existingExecutions,
+  });
+  await appendTradeDecisionRecord(decision);
+
+  const resolvedSignal =
+    !decisionConfig.shadowMode && decisionConfig.allowExecutionOverrides
+      ? {
+          ...signal,
+          collateralUsd: decision.recommendation.recommendedCollateralUsd,
+          leverage: decision.recommendation.recommendedLeverage,
+          takeProfitPrice: decision.recommendation.recommendedTakeProfitPrice,
+          stopLossPrice: decision.recommendation.recommendedStopLossPrice,
+        }
+      : signal;
+
+  if (!decisionConfig.shadowMode && !decision.recommendation.shouldTrade) {
+    const blockedExecution: PerpsUserExecution = {
+      executionId: `pexec_${crypto.randomUUID()}`,
+      sessionId: session.sessionId,
+      walletAddress,
+      signalId: signal.signalId,
+      symbol: signal.symbol,
+      summary: signal.summary,
+      side: signal.direction === "bullish" ? "long" : "short",
+      asset: signal.asset,
+      mode: session.mode,
+      executionModel: session.executionModel,
+      status: "blocked",
+      reasonCode: "DECISION_LAYER_SKIP",
+      reasonMessage: decision.recommendation.explanationSummary,
+      collateralUsd: signal.collateralUsd,
+      sizeUsd: Number((signal.collateralUsd * signal.leverage).toFixed(2)),
+      leverage: signal.leverage,
+      takeProfitPrice: signal.takeProfitPrice ?? null,
+      stopLossPrice: signal.stopLossPrice ?? null,
+      txid: null,
+      positionPubkey: null,
+      decisionConfidence: decision.recommendation.confidenceScore,
+      decisionShouldTrade: decision.recommendation.shouldTrade,
+      decisionSummary: decision.recommendation.explanationSummary,
+      decisionTags: decision.recommendation.explanationTags,
+      decisionShadowMode: decision.recommendation.shadowMode,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    await createUserPerpsExecution(blockedExecution);
+    return {
+      ok: false,
+      execution: blockedExecution,
+      decision: decision.recommendation,
+      code: "DECISION_LAYER_SKIP",
+      message: decision.recommendation.explanationSummary,
+    } as const;
+  }
+
   const side = signal.direction === "bullish" ? "long" : "short";
   const risk = evaluateUserScopedPerpsRisk({
     session,
     signal: {
-      ...signal,
-      sizeUsd: Number((signal.collateralUsd * signal.leverage).toFixed(2)),
+      ...resolvedSignal,
+      sizeUsd: Number((resolvedSignal.collateralUsd * resolvedSignal.leverage).toFixed(2)),
     } as PerpsAgentSignal & { sizeUsd: number },
     existingExecutions,
     maxLeverage: config.maxUserLeverage,
@@ -132,13 +196,18 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       : "blocked",
     reasonCode: risk.code,
     reasonMessage: risk.message,
-    collateralUsd: signal.collateralUsd,
-    sizeUsd: Number((signal.collateralUsd * signal.leverage).toFixed(2)),
-    leverage: signal.leverage,
-    takeProfitPrice: signal.takeProfitPrice ?? null,
-    stopLossPrice: signal.stopLossPrice ?? null,
+    collateralUsd: resolvedSignal.collateralUsd,
+    sizeUsd: Number((resolvedSignal.collateralUsd * resolvedSignal.leverage).toFixed(2)),
+    leverage: resolvedSignal.leverage,
+    takeProfitPrice: resolvedSignal.takeProfitPrice ?? null,
+    stopLossPrice: resolvedSignal.stopLossPrice ?? null,
     txid: null,
     positionPubkey: null,
+    decisionConfidence: decision.recommendation.confidenceScore,
+    decisionShouldTrade: decision.recommendation.shouldTrade,
+    decisionSummary: decision.recommendation.explanationSummary,
+    decisionTags: decision.recommendation.explanationTags,
+    decisionShadowMode: decision.recommendation.shadowMode,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -149,6 +218,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     return {
       ok: false,
       execution,
+      decision: decision.recommendation,
       code: risk.code,
       message: risk.message,
     } as const;
@@ -160,13 +230,14 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     preparedAction: {
       asset: signal.asset,
       collateralToken: "USDC" as const,
-      leverage: String(signal.leverage),
-      maxSlippageBps: String(signal.maxSlippageBps),
+      leverage: String(resolvedSignal.leverage),
+      maxSlippageBps: String(resolvedSignal.maxSlippageBps),
       side,
-      stopLossPrice: signal.stopLossPrice ?? null,
-      takeProfitPrice: signal.takeProfitPrice ?? null,
-      uiAmount: signal.collateralUsd,
+      stopLossPrice: resolvedSignal.stopLossPrice ?? null,
+      takeProfitPrice: resolvedSignal.takeProfitPrice ?? null,
+      uiAmount: resolvedSignal.collateralUsd,
     },
+    decision: decision.recommendation,
     message:
       session.mode === "paper"
         ? "Paper execution recorded for the active user session."

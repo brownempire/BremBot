@@ -25,6 +25,7 @@ export const perpsAgentSignalSchema = z.object({
   symbol: z.string().trim().min(1),
   summary: z.string().trim().min(1),
   direction: z.enum(["bullish", "bearish"]),
+  signalConfidence: z.number().finite().min(0).max(1).optional(),
   asset: z.enum(["SOL", "ETH", "BTC"]),
   collateralUsd: z.number().finite().positive(),
   leverage: z.number().finite().positive(),
@@ -33,6 +34,14 @@ export const perpsAgentSignalSchema = z.object({
   maxSlippageBps: z.number().int().positive().max(10_000),
   smartTradeProfile: z.enum(["conservative", "balanced", "aggressive"]).optional(),
   executionStyle: z.enum(["set-parameters", "smart-trades"]).optional(),
+  marketContext: z.object({
+    spotPrice: z.number().finite().positive().nullable().optional(),
+    volatilityPercent: z.number().finite().min(0).nullable().optional(),
+    trendBias: z.enum(["bullish", "bearish", "sideways"]).nullable().optional(),
+    availableUsdc: z.number().finite().min(0).nullable().optional(),
+    hasOpenPosition: z.boolean().optional(),
+    recentPriceChangePercent: z.number().finite().nullable().optional(),
+  }).optional(),
 });
 
 export const perpsExecutionAckSchema = z.object({
@@ -85,6 +94,11 @@ export const perpsUserExecutionSchema = z.object({
   txid: z.string().nullable(),
   errorMessage: z.string().nullable().optional(),
   positionPubkey: z.string().nullable(),
+  decisionConfidence: z.number().finite().min(0).max(1).nullable().optional(),
+  decisionShouldTrade: z.boolean().optional(),
+  decisionSummary: z.string().trim().nullable().optional(),
+  decisionTags: z.array(z.string().trim().min(1)).optional(),
+  decisionShadowMode: z.boolean().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

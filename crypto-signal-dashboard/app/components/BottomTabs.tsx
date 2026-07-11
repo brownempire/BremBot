@@ -159,6 +159,9 @@ export function BottomTabs() {
 
   const handleSignalsBotTabNavigation = (href: string) => {
     if (typeof window === "undefined") return;
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     const nextUrl = new URL(href, window.location.origin);
     if (nextUrl.pathname !== "/signals-bot") {
       window.location.assign(nextUrl.toString());
@@ -179,12 +182,18 @@ export function BottomTabs() {
               href={item.href}
               className={`bottom-tab-button ${active ? "active" : ""}`}
               aria-current={active ? "page" : undefined}
-              onClick={(event) => {
+              onPointerDown={(event) => {
                 if (item.external || pathname !== "/signals-bot" || !item.href.startsWith("/signals-bot")) {
                   return;
                 }
                 event.preventDefault();
                 handleSignalsBotTabNavigation(item.href);
+              }}
+              onClick={(event) => {
+                if (item.external || pathname !== "/signals-bot" || !item.href.startsWith("/signals-bot")) {
+                  return;
+                }
+                event.preventDefault();
               }}
             >
               <span className="bottom-tab-icon">{item.icon(active)}</span>

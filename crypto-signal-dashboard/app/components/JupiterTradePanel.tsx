@@ -38,6 +38,8 @@ export function JupiterTradePanel({
 }: JupiterTradePanelProps) {
   const onTradeSuccessRef = useRef(onTradeSuccess);
   const onRequestConnectWalletRef = useRef(onRequestConnectWallet);
+  const integratedTargetIdRef = useRef(integratedTargetId);
+  const passthroughWalletContextStateRef = useRef(passthroughWalletContextState);
   const initialOutputMint = useMemo(() => getInitialOutputMint(defaultInputMint), [defaultInputMint]);
 
   useEffect(() => {
@@ -49,18 +51,30 @@ export function JupiterTradePanel({
   }, [onRequestConnectWallet]);
 
   useEffect(() => {
+    integratedTargetIdRef.current = integratedTargetId;
+  }, [integratedTargetId]);
+
+  useEffect(() => {
+    passthroughWalletContextStateRef.current = passthroughWalletContextState;
+  }, [passthroughWalletContextState]);
+
+  useEffect(() => {
     let cancelled = false;
     if (typeof window === "undefined") return;
 
     import("@jup-ag/plugin")
       .then((mod) => {
         if (cancelled) return;
+        const target = document.getElementById(integratedTargetIdRef.current);
+        if (target) {
+          target.replaceChildren();
+        }
         mod.close();
         mod.init({
           displayMode: "integrated",
           integratedTargetId,
           enableWalletPassthrough: true,
-          passthroughWalletContextState: passthroughWalletContextState as never,
+          passthroughWalletContextState: passthroughWalletContextStateRef.current as never,
           onRequestConnectWallet: async () => {
             await onRequestConnectWalletRef.current?.();
           },
@@ -98,7 +112,7 @@ export function JupiterTradePanel({
         })
         .catch(() => undefined);
     };
-  }, [defaultInputMint, initialOutputMint, integratedTargetId, passthroughWalletContextState]);
+  }, [defaultInputMint, initialOutputMint, integratedTargetId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

@@ -554,6 +554,21 @@ function computeRecentVolatilityPercent(points: PricePoint[]) {
   return ((high - low) / last) * 100;
 }
 
+function computeRecentTrendBias(points: PricePoint[]): "bullish" | "bearish" | "sideways" {
+  const valid = points.filter((point) => Number.isFinite(point.v) && point.v > 0);
+  if (valid.length < 2) return "sideways";
+  const recent = valid.slice(-Math.min(20, valid.length));
+  const first = recent[0]?.v ?? 0;
+  const last = recent[recent.length - 1]?.v ?? 0;
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first <= 0 || last <= 0) {
+    return "sideways";
+  }
+  const changePercent = ((last - first) / first) * 100;
+  if (changePercent >= 1) return "bullish";
+  if (changePercent <= -1) return "bearish";
+  return "sideways";
+}
+
 function deriveSmartPerpsTradePlan(options: {
   points: PricePoint[];
   settings: AutoTradeSettings;
@@ -1214,6 +1229,14 @@ function DashboardPage() {
     signal: Signal;
     request: PendingPerpsApprovalRequest;
     collateralUsd: number;
+    marketContext?: {
+      spotPrice?: number | null;
+      volatilityPercent?: number | null;
+      trendBias?: "bullish" | "bearish" | "sideways" | null;
+      availableUsdc?: number | null;
+      hasOpenPosition?: boolean;
+      recentPriceChangePercent?: number | null;
+    };
   }) => {
     if (!remoteAuthToken) {
       if (perpsSessionModePreference === "live" && !perpsLiveWalletAllowed) {
@@ -1262,6 +1285,7 @@ function DashboardPage() {
         symbol: input.signal.symbol,
         summary: input.signal.summary,
         direction: input.signal.direction,
+        signalConfidence: input.signal.confidence,
         asset: input.request.asset,
         collateralUsd: input.collateralUsd,
         leverage: Number(input.request.leverage),
@@ -1270,6 +1294,7 @@ function DashboardPage() {
         stopLossPrice: input.request.stopLossPrice ?? null,
         smartTradeProfile: autoTradeSettings.smartTradeProfile,
         executionStyle: autoTradeSettings.perpsExecutionMode,
+        marketContext: input.marketContext ?? undefined,
       }),
     });
 
@@ -2097,6 +2122,17 @@ function DashboardPage() {
                     signal,
                     request: executionRequest,
                     collateralUsd: collateralAmount,
+                    marketContext: {
+                      spotPrice: marketEntryPrice > 0 ? marketEntryPrice : null,
+                      volatilityPercent: Number(perpsTradePlan.volatilityPercent.toFixed(4)),
+                      trendBias: computeRecentTrendBias(points),
+                      availableUsdc: usdcBalance,
+                      hasOpenPosition: Boolean(findActivePerpsPosition()),
+                      recentPriceChangePercent:
+                        points.length >= 2 && Number.isFinite(points[0]?.v) && (points[0]?.v ?? 0) > 0
+                          ? Number((((points[points.length - 1]?.v ?? 0) - (points[0]?.v ?? 0)) / (points[0]?.v ?? 1) * 100).toFixed(4))
+                          : null,
+                    },
                   });
 
                   const preparedResult = result as {
