@@ -5215,17 +5215,15 @@ function DashboardPage() {
       {aiPanelOpen ? (
         <div style={{
           position: "fixed",
-          right: "calc(var(--safe-right) + 10px)",
-          bottom: "calc(var(--safe-bottom) + 84px + var(--bottom-bar-fill))",
-          width: "min(88vw, 360px)",
-          maxWidth: "calc(100vw - var(--safe-left) - var(--safe-right) - 20px)",
-          height: "min(42dvh, 370px)",
-          minHeight: 290,
+          top: "calc(var(--native-content-top-buffer) + 12px)",
+          left: "calc(var(--safe-left) + 12px)",
+          right: "calc(var(--safe-right) + 12px)",
+          bottom: "calc(var(--safe-bottom) + 82px + var(--bottom-bar-fill))",
           zIndex: 70,
-          borderRadius: 16,
+          borderRadius: 20,
           border: "1px solid rgba(94, 234, 212, 0.2)",
           background: "linear-gradient(180deg, rgba(9, 14, 23, 0.98), rgba(7, 11, 18, 0.985))",
-          boxShadow: "0 18px 42px rgba(2, 6, 23, 0.42)",
+          boxShadow: "0 22px 56px rgba(2, 6, 23, 0.5)",
           backdropFilter: "blur(16px)",
           display: "grid",
           gridTemplateRows: "auto auto 1fr auto",
@@ -5265,11 +5263,11 @@ function DashboardPage() {
                 onClick={() => { void runAiAnalysis(prompt); }}
                 disabled={aiBusy}
                 style={{
-                  fontSize: 11,
-                  padding: "7px 9px",
+                  fontSize: 12,
+                  padding: "8px 10px",
                   borderRadius: 11,
                   lineHeight: 1.25,
-                  flex: "1 1 96px",
+                  flex: "1 1 160px",
                 }}
               >
                 {prompt}
@@ -5302,7 +5300,7 @@ function DashboardPage() {
                 key={`${message.role}-${index}`}
                 style={{
                   justifySelf: message.role === "user" ? "end" : "stretch",
-                  maxWidth: message.role === "user" ? "88%" : "100%",
+                  maxWidth: message.role === "user" ? "72%" : "100%",
                   padding: "9px 11px",
                   borderRadius: 12,
                   background: message.role === "user" ? "rgba(34, 197, 94, 0.14)" : "rgba(15, 23, 42, 0.82)",
@@ -5341,7 +5339,7 @@ function DashboardPage() {
                   background: "rgba(15, 23, 42, 0.78)",
                   color: "var(--text)",
                   padding: "9px 11px",
-                  fontSize: 12,
+                  fontSize: 16,
                   lineHeight: 1.5,
                 }}
                 onKeyDown={(event) => {
