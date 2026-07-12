@@ -145,7 +145,7 @@ function buildFallbackAnswer(context: AnalyticContext) {
 
 export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const model = process.env.OPENAI_MARKET_ANALYST_MODEL?.trim() || "gpt-4.1-mini";
+  const model = process.env.OPENAI_MARKET_ANALYST_MODEL?.trim() || "gpt-5.6-luna";
   const payload = await request.json().catch(() => null) as MarketExplainerPayload | null;
   const prompt = payload?.prompt?.trim();
 
