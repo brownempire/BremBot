@@ -39,6 +39,7 @@ const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY = "brembot.perps-agent.local-session.v1";
 const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-executions.v1";
 const PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY = "brembot.perps-agent.local-decision-log.v1";
+const PERPS_AGENT_LOCAL_LEARNING_PROFILE_STORAGE_KEY = "brembot.perps-agent.local-learning-profile.v1";
 const PERPS_SESSION_TIMEOUT_MS = 60_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
@@ -311,6 +312,17 @@ type DecisionLogEntry = {
   };
 };
 
+type DecisionLearningProfile = {
+  walletAddress: string;
+  learnedAt: string;
+  minimumConfidence: number;
+  leverageCap: number;
+  preferredDirection: "bullish" | "bearish" | "balanced";
+  sizeMultiplier: number;
+  summary: string;
+  learnedFromEntries: number;
+};
+
 type AiChatMessage = {
   role: "user" | "assistant";
   content: string;
@@ -461,22 +473,80 @@ function saveLocalPerpsAgentExecutions(executions: PerpsExecutionSummary[]) {
   }
 }
 
-function loadLocalDecisionLogEntries() {
+function getWalletScopedStorageKey(walletAddress: string | null | undefined) {
+  return walletAddress?.trim() || "paper-auto";
+}
+
+function loadLocalDecisionLogStore() {
+  if (typeof window === "undefined") return {} as Record<string, DecisionLogEntry[]>;
+  try {
+    const raw = window.localStorage.getItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, DecisionLogEntry[]>;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {} as Record<string, DecisionLogEntry[]>;
+  }
+}
+
+function saveLocalDecisionLogStore(store: Record<string, DecisionLogEntry[]>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadLocalDecisionLogEntries(walletAddress: string | null | undefined) {
   if (typeof window === "undefined") return [] as DecisionLogEntry[];
   try {
-    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY);
+    const raw = window.localStorage.getItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as DecisionLogEntry[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(raw) as Record<string, DecisionLogEntry[]>;
+    const walletKey = getWalletScopedStorageKey(walletAddress);
+    const entries = parsed?.[walletKey];
+    return Array.isArray(entries) ? entries : [];
   } catch {
     return [] as DecisionLogEntry[];
   }
 }
 
-function saveLocalDecisionLogEntries(entries: DecisionLogEntry[]) {
+function saveLocalDecisionLogEntries(walletAddress: string | null | undefined, entries: DecisionLogEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY, JSON.stringify(entries));
+    const walletKey = getWalletScopedStorageKey(walletAddress);
+    const store = loadLocalDecisionLogStore();
+    store[walletKey] = entries;
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadLocalLearningProfileStore() {
+  if (typeof window === "undefined") return {} as Record<string, DecisionLearningProfile>;
+  try {
+    const raw = window.localStorage.getItem(PERPS_AGENT_LOCAL_LEARNING_PROFILE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, DecisionLearningProfile>;
+    return parsed && typeof parsed === "object" ? parsed as Record<string, DecisionLearningProfile> : {};
+  } catch {
+    return {} as Record<string, DecisionLearningProfile>;
+  }
+}
+
+function loadLocalLearningProfile(walletAddress: string | null | undefined) {
+  const store = loadLocalLearningProfileStore();
+  return store[getWalletScopedStorageKey(walletAddress)] ?? null;
+}
+
+function saveLocalLearningProfile(profile: DecisionLearningProfile) {
+  if (typeof window === "undefined") return;
+  try {
+    const store = loadLocalLearningProfileStore();
+    store[getWalletScopedStorageKey(profile.walletAddress)] = profile;
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_LEARNING_PROFILE_STORAGE_KEY, JSON.stringify(store));
   } catch {
     // ignore storage failures
   }
@@ -978,6 +1048,8 @@ function DashboardPage() {
   const [decisionLogContent, setDecisionLogContent] = useState("Loading decision log...");
   const [decisionLogBusy, setDecisionLogBusy] = useState(false);
   const [decisionLogEntries, setDecisionLogEntries] = useState<DecisionLogEntry[]>([]);
+  const [decisionLearningBusy, setDecisionLearningBusy] = useState(false);
+  const [decisionLearningStatus, setDecisionLearningStatus] = useState("Train the wallet-specific agent profile from saved decision history.");
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiChatMessages, setAiChatMessages] = useState<AiChatMessage[]>([]);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -1102,6 +1174,12 @@ function DashboardPage() {
         : "Disconnected";
   const activeWalletAddress =
     (nativeShell ? jupiterPerpsController?.walletAddress : null) ?? wallet.publicKey?.toBase58() ?? null;
+  const perpsLogWalletAddress =
+    jupiterPerpsController?.walletAddress
+    ?? wallet.publicKey?.toBase58()
+    ?? remoteSyncWalletAddress
+    ?? perpsAgentSession?.walletAddress
+    ?? null;
   const portfolioWalletAddress = activeWalletAddress;
   const perpsWalletControlNote = perpsModeLabel === "Live mode"
     ? perpsLiveWalletAllowed
@@ -1382,7 +1460,13 @@ function DashboardPage() {
       const localExecutions = loadLocalPerpsAgentExecutions();
       setPerpsAgentSession(localSession);
       setPerpsAgentExecutions(localExecutions);
-      setDecisionLogEntries(loadLocalDecisionLogEntries());
+      setDecisionLogEntries(loadLocalDecisionLogEntries(
+        localSession?.walletAddress
+        ?? jupiterPerpsController?.walletAddress
+        ?? walletAddress
+        ?? remoteSyncWalletAddress
+        ?? null
+      ));
       if (localSession?.mode) {
         setPerpsSessionModePreference(localSession.mode);
         setPerpsUnlimitedSession(localSession.unlimitedSession);
@@ -1427,7 +1511,7 @@ function DashboardPage() {
       session: sessionResponse.ok ? sessionPayload?.session ?? null : null,
       executions: executionsResponse.ok ? executionPayload?.executions ?? [] : [],
     };
-  }, [remoteAuthToken]);
+  }, [jupiterPerpsController?.walletAddress, remoteAuthToken, remoteSyncWalletAddress, walletAddress]);
 
   const submitPerpsAgentSignal = useCallback(async (input: {
     signal: Signal;
@@ -1444,9 +1528,37 @@ function DashboardPage() {
   }) => {
     if (!remoteAuthToken) {
       const localSession = loadLocalPerpsAgentSession();
+      const localLearningProfile = loadLocalLearningProfile(
+        localSession?.walletAddress
+        ?? jupiterPerpsController?.walletAddress
+        ?? walletAddress
+        ?? remoteSyncWalletAddress
+        ?? null
+      );
       if (perpsSessionModePreference === "live" && !perpsLiveWalletAllowed) {
         throw new Error("Live Perps automation is not enabled for this wallet.");
       }
+      const requestedLeverage = Number(input.request.leverage);
+      const signalConfidence = clampNumber(input.signal.confidence ?? 0.72, 0, 1);
+      const directionBonus =
+        !localLearningProfile || localLearningProfile.preferredDirection === "balanced"
+          ? 0
+          : localLearningProfile.preferredDirection === input.signal.direction
+            ? 0.05
+            : -0.08;
+      const leveragePenalty =
+        localLearningProfile && requestedLeverage > localLearningProfile.leverageCap
+          ? -0.12
+          : 0;
+      const learnedConfidence = clampNumber(signalConfidence + directionBonus + leveragePenalty, 0, 1);
+      const confidenceFloor = localLearningProfile?.minimumConfidence ?? 0.58;
+      const shouldTrade = learnedConfidence >= confidenceFloor;
+      const adjustedLeverage = localLearningProfile
+        ? Math.min(requestedLeverage, localLearningProfile.leverageCap)
+        : requestedLeverage;
+      const adjustedCollateralUsd = localLearningProfile
+        ? Number((input.collateralUsd * localLearningProfile.sizeMultiplier).toFixed(2))
+        : input.collateralUsd;
       const localExecution: PerpsExecutionSummary = {
         executionId: `local-exec-${input.signal.id}-${Date.now()}`,
         signalId: input.signal.id,
@@ -1455,16 +1567,34 @@ function DashboardPage() {
         market: `${input.request.asset}-PERP`,
         side: input.request.side,
         action: "open",
-        sizeUsd: Number((input.collateralUsd * Number(input.request.leverage)).toFixed(2)),
-        leverage: Number(input.request.leverage),
-        status: perpsSessionModePreference === "paper" ? "paper_executed" : "approval_required",
+        sizeUsd: Number((adjustedCollateralUsd * adjustedLeverage).toFixed(2)),
+        leverage: adjustedLeverage,
+        status: shouldTrade ? (perpsSessionModePreference === "paper" ? "paper_executed" : "approval_required") : "blocked",
         mode: perpsSessionModePreference,
         executionModel: "approval-assisted",
-        reasonCode: "LOCAL_SESSION",
-        reasonMessage:
-          perpsSessionModePreference === "paper"
-            ? "Paper execution recorded for the active local wallet session."
-            : "Approval-assisted live execution prepared for the active local wallet session.",
+        reasonCode: shouldTrade ? "LOCAL_SESSION" : "LOCAL_TRAINING_SKIP",
+        reasonMessage: shouldTrade
+          ? (
+              perpsSessionModePreference === "paper"
+                ? "Paper execution recorded for the active local wallet session."
+                : "Approval-assisted live execution prepared for the active local wallet session."
+            )
+          : `Local training profile skipped this setup because the learned confidence floor is ${Math.round(confidenceFloor * 100)}% and the adjusted score was ${Math.round(learnedConfidence * 100)}%.`,
+        decisionConfidence: learnedConfidence,
+        decisionShouldTrade: shouldTrade,
+        decisionSummary: shouldTrade
+          ? (
+              localLearningProfile
+                ? `Local learning profile accepted this trade with a ${Math.round(learnedConfidence * 100)}% adjusted confidence score.`
+                : "Local fallback routing accepted this trade."
+            )
+          : `Local learning profile rejected this trade after applying wallet-specific confidence and leverage constraints.`,
+        decisionTags: [
+          "local-decision-log",
+          localLearningProfile ? "wallet-trained-profile" : "default-local-profile",
+          input.signal.direction === "bullish" ? "long-bias" : "short-bias",
+        ],
+        decisionShadowMode: false,
         createdAt: new Date().toISOString(),
         txid: null,
       };
@@ -1483,8 +1613,8 @@ function DashboardPage() {
           signalConfidence: input.signal.confidence,
           asset: input.request.asset,
           requestedTrade: {
-            collateralUsd: input.collateralUsd,
-            leverage: Number(input.request.leverage),
+            collateralUsd: adjustedCollateralUsd,
+            leverage: adjustedLeverage,
             takeProfitPrice: input.request.takeProfitPrice ?? null,
             stopLossPrice: input.request.stopLossPrice ?? null,
             maxSlippageBps: Number(input.request.maxSlippageBps ?? "100"),
@@ -1501,18 +1631,18 @@ function DashboardPage() {
           },
         },
         recommendation: {
-          shouldTrade: true,
-          confidenceScore: clampNumber(input.signal.confidence ?? 0.72, 0, 1),
+          shouldTrade,
+          confidenceScore: learnedConfidence,
           riskGrade:
-            Number(input.request.leverage) >= 6
+            adjustedLeverage >= 6
               ? "high"
-              : Number(input.request.leverage) >= 3
+              : adjustedLeverage >= 3
                 ? "medium"
                 : "low",
-          sizeMultiplier: 1,
-          leverageMultiplier: 1,
-          recommendedCollateralUsd: input.collateralUsd,
-          recommendedLeverage: Number(input.request.leverage),
+          sizeMultiplier: localLearningProfile?.sizeMultiplier ?? 1,
+          leverageMultiplier: requestedLeverage > 0 ? adjustedLeverage / requestedLeverage : 1,
+          recommendedCollateralUsd: adjustedCollateralUsd,
+          recommendedLeverage: adjustedLeverage,
           recommendedTakeProfitPrice: input.request.takeProfitPrice ?? null,
           recommendedStopLossPrice: input.request.stopLossPrice ?? null,
           explanationTags: [
@@ -1520,22 +1650,33 @@ function DashboardPage() {
             input.signal.direction === "bullish" ? "long-bias" : "short-bias",
             autoTradeSettings.perpsExecutionMode,
             autoTradeSettings.smartTradeProfile,
+            localLearningProfile ? "trained-agent" : "untrained-agent",
           ],
-          explanationSummary:
-            perpsSessionModePreference === "paper"
-              ? `Local paper session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup and recorded a simulated Perps execution using the current preset profile.`
-              : `Local live session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup and prepared it for approval-assisted Perps execution.`,
+          explanationSummary: shouldTrade
+            ? (
+                perpsSessionModePreference === "paper"
+                  ? `Local paper session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup${localLearningProfile ? " after applying the trained wallet profile" : ""} and recorded a simulated Perps execution.`
+                  : `Local live session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup${localLearningProfile ? " after applying the trained wallet profile" : ""} and prepared it for approval-assisted execution.`
+              )
+            : `The trained local agent profile skipped this setup because the adjusted score stayed below the wallet-specific confidence floor.`,
           shadowMode: false,
         },
       };
       const nextExecutions = [localExecution, ...loadLocalPerpsAgentExecutions()].slice(0, 20);
-      const nextDecisionEntries = [localDecisionEntry, ...loadLocalDecisionLogEntries()].slice(0, 40);
+      const walletLogAddress =
+        localDecisionEntry.payload.walletAddress
+        ?? localSession?.walletAddress
+        ?? jupiterPerpsController?.walletAddress
+        ?? walletAddress
+        ?? remoteSyncWalletAddress
+        ?? null;
+      const nextDecisionEntries = [localDecisionEntry, ...loadLocalDecisionLogEntries(walletLogAddress)].slice(0, 40);
       saveLocalPerpsAgentExecutions(nextExecutions);
-      saveLocalDecisionLogEntries(nextDecisionEntries);
+      saveLocalDecisionLogEntries(walletLogAddress, nextDecisionEntries);
       setPerpsAgentExecutions(nextExecutions);
       setDecisionLogEntries(nextDecisionEntries);
       return {
-        ok: true,
+        ok: shouldTrade,
         message: localExecution.reasonMessage,
         preparedAction: input.request,
         execution: localExecution,
@@ -1593,7 +1734,7 @@ function DashboardPage() {
 
     try {
       if (!remoteAuthToken) {
-        const localEntries = loadLocalDecisionLogEntries();
+        const localEntries = loadLocalDecisionLogEntries(perpsLogWalletAddress);
         setDecisionLogEntries(localEntries);
         setDecisionLogContent(localEntries.length > 0 ? "Local Perps agent decision log loaded." : "No decision log entries yet.");
         return;
@@ -1612,7 +1753,55 @@ function DashboardPage() {
     } finally {
       setDecisionLogBusy(false);
     }
-  }, [remoteAuthToken]);
+  }, [perpsLogWalletAddress, remoteAuthToken]);
+
+  const trainDecisionAgent = useCallback(async () => {
+    if (!perpsLogWalletAddress) {
+      setDecisionLearningStatus("Connect a wallet first so the training profile can be saved to that wallet.");
+      return;
+    }
+
+    const entries = remoteAuthToken
+      ? decisionLogEntries
+      : loadLocalDecisionLogEntries(perpsLogWalletAddress);
+
+    if (entries.length === 0) {
+      setDecisionLearningStatus("No decision log entries are available yet for this wallet.");
+      return;
+    }
+
+    setDecisionLearningBusy(true);
+    try {
+      const confidenceAverage = entries.reduce((sum, entry) => sum + entry.recommendation.confidenceScore, 0) / entries.length;
+      const averageLeverage = entries.reduce((sum, entry) => sum + entry.payload.requestedTrade.leverage, 0) / entries.length;
+      const bullishCount = entries.filter((entry) => entry.payload.direction === "bullish").length;
+      const bearishCount = entries.length - bullishCount;
+      const blockedCount = entries.filter((entry) => !entry.recommendation.shouldTrade).length;
+      const preferredDirection =
+        Math.abs(bullishCount - bearishCount) <= 1
+          ? "balanced"
+          : bullishCount > bearishCount
+            ? "bullish"
+            : "bearish";
+
+      const profile: DecisionLearningProfile = {
+        walletAddress: perpsLogWalletAddress,
+        learnedAt: new Date().toISOString(),
+        minimumConfidence: clampNumber(confidenceAverage + (blockedCount / Math.max(entries.length, 1)) * 0.04, 0.45, 0.82),
+        leverageCap: clampNumber(averageLeverage + 0.25, 1, 8),
+        preferredDirection,
+        sizeMultiplier: clampNumber(blockedCount / Math.max(entries.length, 1) > 0.35 ? 0.88 : 1, 0.7, 1),
+        summary:
+          `Learned from ${entries.length} decision entries. Confidence floor ${Math.round(clampNumber(confidenceAverage + (blockedCount / Math.max(entries.length, 1)) * 0.04, 0.45, 0.82) * 100)}%, leverage cap ${clampNumber(averageLeverage + 0.25, 1, 8).toFixed(2)}x, direction bias ${preferredDirection}.`,
+        learnedFromEntries: entries.length,
+      };
+
+      saveLocalLearningProfile(profile);
+      setDecisionLearningStatus(`Agent training updated for ${shortAddress(perpsLogWalletAddress)}. ${profile.summary}`);
+    } finally {
+      setDecisionLearningBusy(false);
+    }
+  }, [decisionLogEntries, perpsLogWalletAddress, remoteAuthToken]);
 
   const currentAiMarket = useMemo(() => {
     const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0] ?? null;
@@ -2094,6 +2283,15 @@ function DashboardPage() {
       setRemoteAuthAddress(null);
     }
   }, [remoteAuthSource, wallet.connected, walletAddress]);
+
+  useEffect(() => {
+    const profile = loadLocalLearningProfile(perpsLogWalletAddress);
+    if (profile) {
+      setDecisionLearningStatus(`Current trained profile for ${shortAddress(profile.walletAddress)}: ${profile.summary}`);
+      return;
+    }
+    setDecisionLearningStatus("Train the wallet-specific agent profile from saved decision history.");
+  }, [perpsLogWalletAddress]);
 
   useEffect(() => {
     if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
@@ -5133,6 +5331,9 @@ function DashboardPage() {
             <div className="subtext">
               {decisionLogBusy ? "Loading the latest decision-layer journal..." : "Readable audit trail for why the Perps agent scored and accepted or skipped trades."}
             </div>
+            <div className="subtext" style={{ marginTop: 6 }}>
+              {decisionLearningStatus}
+            </div>
             <div style={{
               marginTop: 14,
               minHeight: 0,
@@ -5319,6 +5520,9 @@ function DashboardPage() {
                 {decisionLogBusy ? "Refreshing..." : "Refresh Log"}
               </button>
               <button type="button" onClick={() => setDecisionLogOpen(false)}>Close</button>
+              <button type="button" className="secondary" onClick={() => { void trainDecisionAgent(); }} disabled={decisionLearningBusy}>
+                {decisionLearningBusy ? "Training..." : "Train Agent"}
+              </button>
             </div>
           </div>
         </div>
