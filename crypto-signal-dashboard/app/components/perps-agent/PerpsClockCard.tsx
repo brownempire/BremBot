@@ -13,6 +13,7 @@ type PerpsClockCardProps = {
   isBusy: boolean;
   onClockIn: () => void;
   onClockOut: () => void;
+  onViewLog: () => void;
   onToggleMode: () => void;
   onToggleUnlimited: (enabled: boolean) => void;
 };
@@ -56,6 +57,9 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
             {props.isBusy ? "Starting..." : "Clock In"}
           </button>
         )}
+        <button type="button" className="secondary" onClick={props.onViewLog} disabled={props.isBusy}>
+          Log
+        </button>
       </div>
       <label className="auto-trade-checkbox-row">
         <input

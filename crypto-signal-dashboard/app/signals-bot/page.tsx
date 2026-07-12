@@ -98,6 +98,7 @@ type AutoTradeMode = "all" | "buy-only";
 type PerpsExecutionMode = "set-parameters" | "smart-trades";
 type SmartTradeProfile = "conservative" | "balanced" | "aggressive";
 type WalletAllocationMode = "percent" | "usd";
+type TakeProfitMode = "percent" | "usd";
 
 const AUTO_TRADE_TOKEN_OPTIONS: AutoTradeTokenOption[] = [
   { symbol: "SOL", label: "Solana (SOL)", mint: SOL_MINT },
@@ -116,7 +117,10 @@ type AutoTradeSlot = {
 type AutoTradeSettings = {
   walletPercent: number;
   walletAllocationMode: WalletAllocationMode;
-  takeProfitPercent: number;
+  perpsTakeProfitValue: number;
+  perpsTakeProfitMode: TakeProfitMode;
+  spotTakeProfitValue: number;
+  spotTakeProfitMode: TakeProfitMode;
   stopLossPercent: number;
   perpsLeverage: number;
   perpsExecutionMode: PerpsExecutionMode;
@@ -131,7 +135,10 @@ type AutoTradeSettings = {
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
   walletAllocationMode: "percent",
-  takeProfitPercent: 0,
+  perpsTakeProfitValue: 0,
+  perpsTakeProfitMode: "percent",
+  spotTakeProfitValue: 0,
+  spotTakeProfitMode: "percent",
   stopLossPercent: 0,
   perpsLeverage: 10,
   perpsExecutionMode: "set-parameters",
@@ -447,6 +454,51 @@ function formatAutoTradeAllocationLabel(settings: AutoTradeSettings, kind: "allo
   return `${formatAllocationValue(settings)} ${kind}`;
 }
 
+function computeSpotTakeProfitTargetPrice(options: {
+  entryPrice: number;
+  amount: number;
+  mode: TakeProfitMode;
+  value: number;
+}) {
+  if (!Number.isFinite(options.entryPrice) || options.entryPrice <= 0) return null;
+  if (!Number.isFinite(options.value) || options.value <= 0) return null;
+
+  if (options.mode === "percent") {
+    return options.entryPrice * (1 + (options.value / 100));
+  }
+
+  if (!Number.isFinite(options.amount) || options.amount <= 0) return null;
+  return options.entryPrice + (options.value / options.amount);
+}
+
+function computePerpsTakeProfitTargetPrice(options: {
+  entryPrice: number;
+  side: "long" | "short";
+  positionSizeUsd: number;
+  mode: TakeProfitMode;
+  value: number;
+}) {
+  if (!Number.isFinite(options.entryPrice) || options.entryPrice <= 0) return null;
+  if (!Number.isFinite(options.value) || options.value <= 0) return null;
+
+  if (options.mode === "percent") {
+    return options.side === "long"
+      ? options.entryPrice * (1 + (options.value / 100))
+      : options.entryPrice * (1 - (options.value / 100));
+  }
+
+  if (!Number.isFinite(options.positionSizeUsd) || options.positionSizeUsd <= 0) return null;
+  const moveFraction = options.value / options.positionSizeUsd;
+  return options.side === "long"
+    ? options.entryPrice * (1 + moveFraction)
+    : options.entryPrice * (1 - moveFraction);
+}
+
+function formatTakeProfitSetting(mode: TakeProfitMode, value: number) {
+  if (!Number.isFinite(value) || value <= 0) return "off";
+  return mode === "percent" ? `+${value}%` : `+${formatUsd(value)}`;
+}
+
 type PhantomAuthProvider = {
   isPhantom?: boolean;
   publicKey?: PublicKey | { toBase58: () => string } | null;
@@ -621,7 +673,9 @@ function deriveSmartPerpsTradePlan(options: {
     1,
     Math.min(250, Math.max(1, options.settings.perpsLeverage * profileConfig.leverageCapMultiplier))
   );
-  const baseTp = options.settings.takeProfitPercent > 0 ? options.settings.takeProfitPercent : profileConfig.defaultTp;
+  const baseTp = options.settings.perpsTakeProfitMode === "percent" && options.settings.perpsTakeProfitValue > 0
+    ? options.settings.perpsTakeProfitValue
+    : profileConfig.defaultTp;
   const baseSl = options.settings.stopLossPercent > 0 ? options.settings.stopLossPercent : profileConfig.defaultSl;
   const takeProfitPercent = clampNumber(
     baseTp * (1 + volatilityFactor * 0.28 + confidenceBias * 0.08),
@@ -814,6 +868,9 @@ function DashboardPage() {
   const [perpsSessionBusy, setPerpsSessionBusy] = useState(false);
   const [perpsSessionModePreference, setPerpsSessionModePreference] = useState<"paper" | "live">("paper");
   const [perpsUnlimitedSession, setPerpsUnlimitedSession] = useState(false);
+  const [decisionLogOpen, setDecisionLogOpen] = useState(false);
+  const [decisionLogContent, setDecisionLogContent] = useState("Loading decision log...");
+  const [decisionLogBusy, setDecisionLogBusy] = useState(false);
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
@@ -1317,6 +1374,25 @@ function DashboardPage() {
     await refreshPerpsAgentState().catch(() => undefined);
     return payload;
   }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, perpsLiveWalletAllowed, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken]);
+
+  const openDecisionLog = useCallback(async () => {
+    setDecisionLogOpen(true);
+    setDecisionLogBusy(true);
+    setDecisionLogContent("Loading decision log...");
+
+    try {
+      const response = await fetch("/api/perps/decision-log", { cache: "no-store" });
+      const payload = await response.json().catch(() => null) as { content?: string } | null;
+      if (!response.ok) {
+        throw new Error("Unable to load the decision log.");
+      }
+      setDecisionLogContent(payload?.content?.trim() || "No decision log entries yet.");
+    } catch (error) {
+      setDecisionLogContent(error instanceof Error ? error.message : "Unable to load the decision log.");
+    } finally {
+      setDecisionLogBusy(false);
+    }
+  }, []);
 
   const clockInPerpsAgent = useCallback(async () => {
     setPerpsSessionBusy(true);
@@ -1911,11 +1987,8 @@ function DashboardPage() {
                   }).then((result) => {
                     const shouldArmTp =
                       isBullSignal &&
-                      autoTradeSettings.takeProfitPercent > 0 &&
+                      autoTradeSettings.spotTakeProfitValue > 0 &&
                       !autoTradeSettings.disableTpLock;
-                    const targetPrice = shouldArmTp && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
-                      ? marketEntryPrice * (1 + (autoTradeSettings.takeProfitPercent / 100))
-                      : null;
                     const autoTradeRecord: StoredTradeRecord = {
                       id: `auto-${signal.id}-${Date.now()}`,
                       txid: result.txid,
@@ -1930,14 +2003,24 @@ function DashboardPage() {
                       signalSummary: `${signal.summary} · ${isBullSignal ? "buy" : "sell"} ${assetSymbol} · executed ${tradeAmount} ${isBullSignal ? "USDC" : assetSymbol}`,
                       symbol: signal.symbol,
                       entryPrice: Number.isFinite(marketEntryPrice) ? marketEntryPrice : undefined,
-                      takeProfitPrice: targetPrice,
+                      takeProfitPrice: null,
                       tradeDirection: isBullSignal ? "buy" : "sell",
                       gasless: result.gasless,
                     };
                     persistTradeRecord(autoTradeRecord).catch(() => undefined);
                     if (shouldArmTp) {
                       const executedOutputAmount = Number(result.outputAmount ?? 0);
-                      if (Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0) {
+                      const targetPrice =
+                        Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && Number.isFinite(marketEntryPrice) && marketEntryPrice > 0
+                          ? computeSpotTakeProfitTargetPrice({
+                              entryPrice: marketEntryPrice,
+                              amount: executedOutputAmount,
+                              mode: autoTradeSettings.spotTakeProfitMode,
+                              value: autoTradeSettings.spotTakeProfitValue,
+                            })
+                          : null;
+                      autoTradeRecord.takeProfitPrice = targetPrice;
+                      if (Number.isFinite(executedOutputAmount) && executedOutputAmount > 0 && typeof targetPrice === "number" && Number.isFinite(targetPrice)) {
                         const nextPendingTp: PendingTakeProfit = {
                           id: `tp-${signal.id}-${Date.now()}`,
                           symbol: signal.symbol,
@@ -1952,7 +2035,7 @@ function DashboardPage() {
                         setPendingTakeProfit(nextPendingTp);
                         pendingTakeProfitRef.current = nextPendingTp;
                         setAutoTradeStatus(
-                          `TP armed for ${assetSymbol}: sell ${executedOutputAmount.toFixed(6)} at ${formatUsd(targetPrice ?? marketEntryPrice)} (+${autoTradeSettings.takeProfitPercent}%)`
+                          `TP armed for ${assetSymbol}: sell ${executedOutputAmount.toFixed(6)} at ${formatUsd(targetPrice)} (${formatTakeProfitSetting(autoTradeSettings.spotTakeProfitMode, autoTradeSettings.spotTakeProfitValue)})`
                         );
                       } else {
                         setAutoTradeStatus(`Auto-trade executed for ${signal.symbol} (TP not armed: output amount unavailable)`);
@@ -1977,7 +2060,7 @@ function DashboardPage() {
                   });
                 }
               } else {
-                if (autoTradeSettings.takeProfitPercent > 0 && isBullSignal) {
+                if (autoTradeSettings.spotTakeProfitValue > 0 && isBullSignal) {
                   setAutoTradeStatus("TP requires a connected wallet for live token settlement");
                   return;
                 }
@@ -2057,7 +2140,7 @@ function DashboardPage() {
                       collateralPercent: baseCollateralPercent,
                       leverage: autoTradeSettings.perpsLeverage,
                       stopLossPercent: autoTradeSettings.stopLossPercent,
-                      takeProfitPercent: autoTradeSettings.takeProfitPercent,
+                      takeProfitPercent: autoTradeSettings.perpsTakeProfitMode === "percent" ? autoTradeSettings.perpsTakeProfitValue : 0,
                       volatilityPercent: computeRecentVolatilityPercent(points),
                     };
 
@@ -2076,7 +2159,7 @@ function DashboardPage() {
                   const marketEntryPrice = points[points.length - 1]?.v ?? 0;
 
                   if (
-                    (autoTradeSettings.takeProfitPercent > 0 || autoTradeSettings.stopLossPercent > 0) &&
+                    (autoTradeSettings.perpsTakeProfitValue > 0 || autoTradeSettings.stopLossPercent > 0) &&
                     Number.isFinite(marketEntryPrice) &&
                     marketEntryPrice > 0
                   ) {
@@ -2090,15 +2173,35 @@ function DashboardPage() {
                         uiAmount: collateralAmount,
                       });
 
-                      const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
-                        desiredStopLossPercent: perpsTradePlan.stopLossPercent,
-                        desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
-                        fallbackEntryPrice: marketEntryPrice,
-                        preview,
-                      });
-
-                      takeProfitPrice = adjustedTriggers.takeProfitPrice;
-                      stopLossPrice = adjustedTriggers.stopLossPrice;
+                      if (autoTradeSettings.perpsTakeProfitMode === "percent") {
+                        const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
+                          desiredStopLossPercent: perpsTradePlan.stopLossPercent,
+                          desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
+                          fallbackEntryPrice: marketEntryPrice,
+                          preview,
+                        });
+                        takeProfitPrice = adjustedTriggers.takeProfitPrice;
+                        stopLossPrice = adjustedTriggers.stopLossPrice;
+                      } else {
+                        const previewEntryPrice = preview.quote.averagePriceUsd ?? marketEntryPrice;
+                        const previewPositionSizeUsd = preview.quote.positionSizeUsd
+                          ?? Number((collateralAmount * perpsTradePlan.leverage).toFixed(2));
+                        takeProfitPrice = computePerpsTakeProfitTargetPrice({
+                          entryPrice: previewEntryPrice,
+                          side: isBullSignal ? "long" : "short",
+                          positionSizeUsd: previewPositionSizeUsd,
+                          mode: autoTradeSettings.perpsTakeProfitMode,
+                          value: autoTradeSettings.perpsTakeProfitValue,
+                        });
+                        stopLossPrice = autoTradeSettings.stopLossPercent > 0
+                          ? deriveFeeAdjustedPerpsTriggers({
+                              desiredStopLossPercent: perpsTradePlan.stopLossPercent,
+                              desiredTakeProfitPercent: 0,
+                              fallbackEntryPrice: marketEntryPrice,
+                              preview,
+                            }).stopLossPrice
+                          : null;
+                      }
                     } catch (previewError) {
                       const previewMessage =
                         previewError instanceof Error ? previewError.message : "Unable to estimate Perps TP/SL with fees.";
@@ -2510,7 +2613,7 @@ function DashboardPage() {
     try {
       const raw = window.localStorage.getItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings & { inputToken?: AutoTradeToken }>;
+      const parsed = JSON.parse(raw) as Partial<AutoTradeSettings & { inputToken?: AutoTradeToken; takeProfitPercent?: number }>;
       const walletAllocationMode = parsed.walletAllocationMode === "usd" ? "usd" : "percent";
       const nextPercent = Number(parsed.walletPercent);
       const percent = Number.isFinite(nextPercent)
@@ -2518,10 +2621,21 @@ function DashboardPage() {
           ? Math.max(0.01, nextPercent)
           : Math.min(100, Math.max(0.01, nextPercent))
         : DEFAULT_AUTO_TRADE_SETTINGS.walletPercent;
-      const nextTakeProfit = Number(parsed.takeProfitPercent);
-      const takeProfitPercent = Number.isFinite(nextTakeProfit) && nextTakeProfit >= 0
-        ? nextTakeProfit
-        : DEFAULT_AUTO_TRADE_SETTINGS.takeProfitPercent;
+      const legacyTakeProfit = Number(parsed.takeProfitPercent);
+      const perpsTakeProfitValueRaw = Number(parsed.perpsTakeProfitValue);
+      const spotTakeProfitValueRaw = Number(parsed.spotTakeProfitValue);
+      const perpsTakeProfitValue = Number.isFinite(perpsTakeProfitValueRaw) && perpsTakeProfitValueRaw >= 0
+        ? perpsTakeProfitValueRaw
+        : Number.isFinite(legacyTakeProfit) && legacyTakeProfit >= 0
+          ? legacyTakeProfit
+          : DEFAULT_AUTO_TRADE_SETTINGS.perpsTakeProfitValue;
+      const spotTakeProfitValue = Number.isFinite(spotTakeProfitValueRaw) && spotTakeProfitValueRaw >= 0
+        ? spotTakeProfitValueRaw
+        : Number.isFinite(legacyTakeProfit) && legacyTakeProfit >= 0
+          ? legacyTakeProfit
+          : DEFAULT_AUTO_TRADE_SETTINGS.spotTakeProfitValue;
+      const perpsTakeProfitMode = parsed.perpsTakeProfitMode === "usd" ? "usd" : "percent";
+      const spotTakeProfitMode = parsed.spotTakeProfitMode === "usd" ? "usd" : "percent";
       const nextStopLoss = Number(parsed.stopLossPercent);
       const stopLossPercent = Number.isFinite(nextStopLoss) && nextStopLoss >= 0
         ? nextStopLoss
@@ -2570,7 +2684,10 @@ function DashboardPage() {
       setAutoTradeSettings({
         walletPercent: percent,
         walletAllocationMode,
-        takeProfitPercent,
+        perpsTakeProfitValue,
+        perpsTakeProfitMode,
+        spotTakeProfitValue,
+        spotTakeProfitMode,
         stopLossPercent,
         perpsLeverage,
         perpsExecutionMode,
@@ -4127,6 +4244,7 @@ function DashboardPage() {
             isBusy={perpsSessionBusy}
             onClockIn={() => { void clockInPerpsAgent().catch((error: unknown) => setPerpsAutoTradeStatus(error instanceof Error ? error.message : "Clock In failed")); }}
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
+            onViewLog={() => { void openDecisionLog(); }}
             onToggleMode={() => setPerpsSessionModePreference((current) => current === "paper" ? "live" : "paper")}
             onToggleUnlimited={setPerpsUnlimitedSession}
           />
@@ -4251,14 +4369,57 @@ function DashboardPage() {
               />
             </label>
             <label>
-              Take Profit % (bull buys only)
+              <span className="allocation-label-row">
+                <span>Take Profit % or $ (Perps)</span>
+                <button
+                  type="button"
+                  className="secondary allocation-mode-button"
+                  onClick={() => {
+                    const next: AutoTradeSettings = {
+                      ...autoTradeSettings,
+                      perpsTakeProfitMode: autoTradeSettings.perpsTakeProfitMode === "percent" ? "usd" : "percent",
+                    };
+                    persistAutoTradeSettings(next);
+                  }}
+                >
+                  {autoTradeSettings.perpsTakeProfitMode === "percent" ? "%" : "$"}
+                </button>
+              </span>
               <StepperNumberInput
-                value={autoTradeSettings.takeProfitPercent}
+                value={autoTradeSettings.perpsTakeProfitValue}
                 min={0}
                 step={0.01}
                 onChange={(value) => {
-                  const takeProfitPercent = Number.isFinite(value) && value >= 0 ? value : 0;
-                  const next = { ...autoTradeSettings, takeProfitPercent };
+                  const perpsTakeProfitValue = Number.isFinite(value) && value >= 0 ? value : 0;
+                  const next = { ...autoTradeSettings, perpsTakeProfitValue };
+                  persistAutoTradeSettings(next);
+                }}
+              />
+            </label>
+            <label>
+              <span className="allocation-label-row">
+                <span>Take Profit % or $ (Spot)</span>
+                <button
+                  type="button"
+                  className="secondary allocation-mode-button"
+                  onClick={() => {
+                    const next: AutoTradeSettings = {
+                      ...autoTradeSettings,
+                      spotTakeProfitMode: autoTradeSettings.spotTakeProfitMode === "percent" ? "usd" : "percent",
+                    };
+                    persistAutoTradeSettings(next);
+                  }}
+                >
+                  {autoTradeSettings.spotTakeProfitMode === "percent" ? "%" : "$"}
+                </button>
+              </span>
+              <StepperNumberInput
+                value={autoTradeSettings.spotTakeProfitValue}
+                min={0}
+                step={0.01}
+                onChange={(value) => {
+                  const spotTakeProfitValue = Number.isFinite(value) && value >= 0 ? value : 0;
+                  const next = { ...autoTradeSettings, spotTakeProfitValue };
                   persistAutoTradeSettings(next);
                 }}
               />
@@ -4574,6 +4735,37 @@ function DashboardPage() {
             <div className="wallet-controls">
               <button type="button" onClick={copyDepositAddress}>Copy Address</button>
               <button type="button" className="secondary" onClick={() => setShowDepositModal(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {decisionLogOpen ? (
+        <div className="modal-backdrop" onClick={() => setDecisionLogOpen(false)}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 860, width: "min(92vw, 860px)" }}>
+            <h3>Perps Decision Log</h3>
+            <div className="subtext">
+              {decisionLogBusy ? "Loading the latest decision-layer journal..." : "Readable audit trail for why the Perps agent scored and accepted or skipped trades."}
+            </div>
+            <pre style={{
+              marginTop: 14,
+              maxHeight: "65vh",
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid var(--border)",
+              background: "rgba(8, 12, 20, 0.92)",
+              color: "var(--text)",
+              fontSize: 12,
+              lineHeight: 1.55,
+            }}>{decisionLogContent}</pre>
+            <div className="wallet-controls">
+              <button type="button" className="secondary" onClick={() => { void openDecisionLog(); }} disabled={decisionLogBusy}>
+                {decisionLogBusy ? "Refreshing..." : "Refresh Log"}
+              </button>
+              <button type="button" onClick={() => setDecisionLogOpen(false)}>Close</button>
             </div>
           </div>
         </div>

@@ -62,3 +62,16 @@ export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
     // Logging should never break trading flow.
   }
 }
+
+export async function readTradeDecisionJournal() {
+  const config = getTradeDecisionConfig();
+
+  try {
+    if (!fs.existsSync(config.journalFilePath)) {
+      return "# BremLogic Trade Decision Journal\n\nNo decision entries have been written yet.\n";
+    }
+    return fs.readFileSync(config.journalFilePath, "utf8");
+  } catch {
+    return "# BremLogic Trade Decision Journal\n\nUnable to read the decision journal right now.\n";
+  }
+}
