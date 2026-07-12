@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { getTradeDecisionConfig } from "@/lib/decision/config";
-import type { TradeDecisionRecord } from "@/lib/decision/types";
+import { tradeDecisionRecordSchema, type TradeDecisionRecord } from "@/lib/decision/types";
 import { shortenWalletAddress } from "@/lib/jupiterPerps";
 import { formatUsd } from "@/lib/utils";
 
@@ -73,5 +73,33 @@ export async function readTradeDecisionJournal() {
     return fs.readFileSync(config.journalFilePath, "utf8");
   } catch {
     return "# BremLogic Trade Decision Journal\n\nUnable to read the decision journal right now.\n";
+  }
+}
+
+export async function listTradeDecisionRecords(limit = 50) {
+  const config = getTradeDecisionConfig();
+
+  try {
+    if (!fs.existsSync(config.eventsFilePath)) {
+      return [] as TradeDecisionRecord[];
+    }
+
+    const raw = fs.readFileSync(config.eventsFilePath, "utf8");
+    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+    const parsed = lines.flatMap((line) => {
+      try {
+        const record = JSON.parse(line);
+        const result = tradeDecisionRecordSchema.safeParse(record);
+        return result.success ? [result.data] : [];
+      } catch {
+        return [];
+      }
+    });
+
+    return parsed
+      .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt))
+      .slice(0, Math.max(1, limit));
+  } catch {
+    return [] as TradeDecisionRecord[];
   }
 }

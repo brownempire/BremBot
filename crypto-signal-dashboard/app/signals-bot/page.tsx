@@ -38,6 +38,8 @@ const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY = "brembot.perps-agent.local-session.v1";
 const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-executions.v1";
+const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
+const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
@@ -249,9 +251,67 @@ type PerpsExecutionSummary = {
   executionModel: "approval-assisted" | "delegated-ready";
   reasonCode: string;
   reasonMessage: string;
+  decisionConfidence?: number | null;
+  decisionShouldTrade?: boolean;
+  decisionSummary?: string | null;
+  decisionTags?: string[];
+  decisionShadowMode?: boolean;
   errorMessage?: string | null;
   createdAt: string;
   txid?: string | null;
+};
+
+type DecisionLogEntry = {
+  payload: {
+    decisionId: string;
+    createdAt: string;
+    walletAddress: string;
+    sessionId: string;
+    sessionMode: "paper" | "live";
+    executionModel: "approval-assisted" | "delegated-ready";
+    signalId: string;
+    symbol: string;
+    summary: string;
+    direction: "bullish" | "bearish";
+    signalConfidence: number | null;
+    asset: "SOL" | "ETH" | "BTC";
+    requestedTrade: {
+      collateralUsd: number;
+      leverage: number;
+      takeProfitPrice: number | null;
+      stopLossPrice: number | null;
+      maxSlippageBps: number;
+      executionStyle: "set-parameters" | "smart-trades" | null;
+      smartTradeProfile: "conservative" | "balanced" | "aggressive" | null;
+    };
+    marketContext: {
+      spotPrice: number | null;
+      volatilityPercent: number | null;
+      trendBias: "bullish" | "bearish" | "sideways" | null;
+      availableUsdc: number | null;
+      hasOpenPosition: boolean;
+      recentPriceChangePercent: number | null;
+    };
+  };
+  recommendation: {
+    shouldTrade: boolean;
+    confidenceScore: number;
+    riskGrade: "low" | "medium" | "high";
+    sizeMultiplier: number;
+    leverageMultiplier: number;
+    recommendedCollateralUsd: number;
+    recommendedLeverage: number;
+    recommendedTakeProfitPrice: number | null;
+    recommendedStopLossPrice: number | null;
+    explanationTags: string[];
+    explanationSummary: string;
+    shadowMode: boolean;
+  };
+};
+
+type AiChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 type PerpsSessionSnapshot = {
@@ -871,6 +931,12 @@ function DashboardPage() {
   const [decisionLogOpen, setDecisionLogOpen] = useState(false);
   const [decisionLogContent, setDecisionLogContent] = useState("Loading decision log...");
   const [decisionLogBusy, setDecisionLogBusy] = useState(false);
+  const [decisionLogEntries, setDecisionLogEntries] = useState<DecisionLogEntry[]>([]);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiChatMessages, setAiChatMessages] = useState<AiChatMessage[]>([]);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState("Ask AI to explain the current move.");
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
@@ -1089,6 +1155,40 @@ function DashboardPage() {
     return () => {
       window.removeEventListener("popstate", syncActiveTab);
       window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const syncAiPanelFromUrl = () => {
+      const url = new URL(window.location.href);
+      const open = url.searchParams.get("ai") === "open";
+      setAiPanelOpen(open);
+      window.dispatchEvent(new CustomEvent(AI_PANEL_STATE_EVENT, { detail: { open } }));
+    };
+
+    const toggleAiPanel = () => {
+      setAiPanelOpen((current) => {
+        const next = !current;
+        const url = new URL(window.location.href);
+        if (next) {
+          url.searchParams.set("ai", "open");
+        } else {
+          url.searchParams.delete("ai");
+        }
+        window.history.replaceState({}, "", url.toString());
+        window.dispatchEvent(new CustomEvent(AI_PANEL_STATE_EVENT, { detail: { open: next } }));
+        return next;
+      });
+    };
+
+    syncAiPanelFromUrl();
+    window.addEventListener("popstate", syncAiPanelFromUrl);
+    window.addEventListener(AI_PANEL_TOGGLE_EVENT, toggleAiPanel);
+    return () => {
+      window.removeEventListener("popstate", syncAiPanelFromUrl);
+      window.removeEventListener(AI_PANEL_TOGGLE_EVENT, toggleAiPanel);
     };
   }, []);
 
@@ -1381,18 +1481,131 @@ function DashboardPage() {
     setDecisionLogContent("Loading decision log...");
 
     try {
-      const response = await fetch("/api/perps/decision-log", { cache: "no-store" });
-      const payload = await response.json().catch(() => null) as { content?: string } | null;
+      const response = await fetch("/api/perps/decision-log?limit=40", { cache: "no-store" });
+      const payload = await response.json().catch(() => null) as { content?: string; entries?: DecisionLogEntry[] } | null;
       if (!response.ok) {
         throw new Error("Unable to load the decision log.");
       }
       setDecisionLogContent(payload?.content?.trim() || "No decision log entries yet.");
+      setDecisionLogEntries(Array.isArray(payload?.entries) ? payload!.entries : []);
     } catch (error) {
       setDecisionLogContent(error instanceof Error ? error.message : "Unable to load the decision log.");
+      setDecisionLogEntries([]);
     } finally {
       setDecisionLogBusy(false);
     }
   }, []);
+
+  const currentAiMarket = useMemo(() => {
+    const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0] ?? null;
+    const points = priceHistory[selectedMarket?.id ?? ""] ?? [];
+    const recentCandles = points.slice(-48).map((point) => ({ t: point.t, v: point.v }));
+    const latestSignal = signals.find((signal) => signal.symbol === selectedMarket?.pair) ?? signals[0] ?? null;
+    const latestPerpsExecution = perpsAgentExecutions[0] ?? null;
+
+    return {
+      symbol: selectedMarket?.pair ?? "Unknown market",
+      timeframe: `${params.trendWindow}m trend / current dashboard`,
+      currentPrice: points[points.length - 1]?.v ?? null,
+      recentCandles,
+      latestSignal: latestSignal
+        ? {
+            direction: latestSignal.direction,
+            confidence: latestSignal.confidence,
+            summary: latestSignal.summary,
+          }
+        : null,
+      activePerpsTrade: latestPerpsExecution
+        ? {
+            side: latestPerpsExecution.side,
+            entryPrice: null,
+            takeProfitPrice: null,
+            stopLossPrice: null,
+          }
+        : null,
+    };
+  }, [params.trendWindow, perpsAgentExecutions, priceHistory, selectedChartSlotId, signals, trackedMarkets]);
+
+  const runAiAnalysis = useCallback(async (prompt: string) => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) return;
+
+    const nextUserMessage: AiChatMessage = {
+      role: "user",
+      content: trimmedPrompt,
+    };
+
+    const nextHistory = [...aiChatMessages, nextUserMessage];
+    setAiChatMessages(nextHistory);
+    setAiPrompt("");
+    setAiBusy(true);
+    setAiStatus("AI is analyzing the current market context...");
+
+    try {
+      const response = await fetch("/api/ai/market-explainer", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt: trimmedPrompt,
+          symbol: currentAiMarket.symbol,
+          timeframe: currentAiMarket.timeframe,
+          currentPrice: currentAiMarket.currentPrice,
+          recentCandles: currentAiMarket.recentCandles,
+          latestSignal: currentAiMarket.latestSignal,
+          activePerpsTrade: currentAiMarket.activePerpsTrade,
+          chatHistory: aiChatMessages.slice(-6),
+        }),
+      });
+      const payload = await response.json().catch(() => null) as { answer?: string; error?: string; detail?: string } | null;
+      if (!response.ok || !payload?.answer) {
+        throw new Error(payload?.error ?? payload?.detail ?? "AI analysis is unavailable right now.");
+      }
+
+      setAiChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: payload.answer!,
+        },
+      ]);
+      setAiStatus("AI analysis ready.");
+    } catch (error) {
+      setAiChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content: error instanceof Error ? error.message : "AI analysis failed.",
+        },
+      ]);
+      setAiStatus("AI analysis failed.");
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiChatMessages, currentAiMarket]);
+
+  const legacyDecisionExecutions = useMemo(() => (
+    perpsAgentExecutions.filter((execution) => !execution.decisionSummary)
+  ), [perpsAgentExecutions]);
+
+  const setAiPanelVisibility = useCallback((open: boolean) => {
+    setAiPanelOpen(open);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (open) {
+      url.searchParams.set("ai", "open");
+    } else {
+      url.searchParams.delete("ai");
+    }
+    window.history.replaceState({}, "", url.toString());
+    window.dispatchEvent(new CustomEvent(AI_PANEL_STATE_EVENT, { detail: { open } }));
+  }, []);
+
+  const submitAiPrompt = useCallback(async () => {
+    if (aiBusy) return;
+    await runAiAnalysis(aiPrompt);
+  }, [aiBusy, aiPrompt, runAiAnalysis]);
 
   const clockInPerpsAgent = useCallback(async () => {
     setPerpsSessionBusy(true);
@@ -4747,25 +4960,333 @@ function DashboardPage() {
             <div className="subtext">
               {decisionLogBusy ? "Loading the latest decision-layer journal..." : "Readable audit trail for why the Perps agent scored and accepted or skipped trades."}
             </div>
-            <pre style={{
+            <div style={{
               marginTop: 14,
               maxHeight: "65vh",
               overflow: "auto",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              padding: 14,
-              borderRadius: 12,
-              border: "1px solid var(--border)",
-              background: "rgba(8, 12, 20, 0.92)",
-              color: "var(--text)",
-              fontSize: 12,
-              lineHeight: 1.55,
-            }}>{decisionLogContent}</pre>
+              display: "grid",
+              gap: 12,
+              paddingRight: 2,
+            }}>
+              {decisionLogEntries.length > 0 ? decisionLogEntries.map((entry) => (
+                <article
+                  key={entry.payload.decisionId}
+                  style={{
+                    borderRadius: 14,
+                    border: "1px solid var(--border)",
+                    background: "rgba(8, 12, 20, 0.92)",
+                    padding: 14,
+                    display: "grid",
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>
+                        {entry.payload.symbol} · {entry.payload.direction === "bullish" ? "Long bias" : "Short bias"}
+                      </div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        {new Date(entry.payload.createdAt).toLocaleString()} · {shortAddress(entry.payload.walletAddress)} · {entry.payload.sessionMode.toUpperCase()}
+                      </div>
+                    </div>
+                    <div style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: `1px solid ${entry.recommendation.shouldTrade ? "rgba(74, 222, 128, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
+                      background: entry.recommendation.shouldTrade ? "rgba(22, 101, 52, 0.2)" : "rgba(127, 29, 29, 0.2)",
+                      color: entry.recommendation.shouldTrade ? "#86efac" : "#fca5a5",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      letterSpacing: 0.3,
+                    }}>
+                      {entry.recommendation.shouldTrade ? "TAKE" : "SKIP"} · {Math.round(entry.recommendation.confidenceScore * 100)}%
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+                    <div style={{ padding: 10, borderRadius: 12, background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                      <div style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>Requested</div>
+                      <div style={{ color: "var(--text)", fontWeight: 700 }}>{formatUsd(entry.payload.requestedTrade.collateralUsd)} · {entry.payload.requestedTrade.leverage.toFixed(2)}x</div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        TP {entry.payload.requestedTrade.takeProfitPrice ? formatUsd(entry.payload.requestedTrade.takeProfitPrice) : "-"} · SL {entry.payload.requestedTrade.stopLossPrice ? formatUsd(entry.payload.requestedTrade.stopLossPrice) : "-"}
+                      </div>
+                    </div>
+                    <div style={{ padding: 10, borderRadius: 12, background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                      <div style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>Recommended</div>
+                      <div style={{ color: "var(--text)", fontWeight: 700 }}>{formatUsd(entry.recommendation.recommendedCollateralUsd)} · {entry.recommendation.recommendedLeverage.toFixed(2)}x</div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        TP {entry.recommendation.recommendedTakeProfitPrice ? formatUsd(entry.recommendation.recommendedTakeProfitPrice) : "-"} · SL {entry.recommendation.recommendedStopLossPrice ? formatUsd(entry.recommendation.recommendedStopLossPrice) : "-"}
+                      </div>
+                    </div>
+                    <div style={{ padding: 10, borderRadius: 12, background: "rgba(15, 23, 42, 0.7)", border: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                      <div style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5 }}>Market</div>
+                      <div style={{ color: "var(--text)", fontWeight: 700 }}>
+                        {entry.payload.marketContext.spotPrice ? formatUsd(entry.payload.marketContext.spotPrice) : "-"} · {entry.payload.marketContext.trendBias ?? "unknown"}
+                      </div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        Vol {entry.payload.marketContext.volatilityPercent?.toFixed(2) ?? "-"}% · Move {entry.payload.marketContext.recentPriceChangePercent?.toFixed(2) ?? "-"}%
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ color: "var(--text)", fontSize: 13, lineHeight: 1.55 }}>
+                    {entry.recommendation.explanationSummary}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{
+                      padding: "5px 9px",
+                      borderRadius: 999,
+                      background: "rgba(56, 189, 248, 0.16)",
+                      color: "#7dd3fc",
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}>
+                      Risk {entry.recommendation.riskGrade}
+                    </span>
+                    <span style={{
+                      padding: "5px 9px",
+                      borderRadius: 999,
+                      background: "rgba(250, 204, 21, 0.14)",
+                      color: "#fde68a",
+                      fontSize: 11,
+                      fontWeight: 700,
+                    }}>
+                      {entry.payload.executionModel}
+                    </span>
+                    {entry.recommendation.shadowMode ? (
+                      <span style={{
+                        padding: "5px 9px",
+                        borderRadius: 999,
+                        background: "rgba(192, 132, 252, 0.14)",
+                        color: "#d8b4fe",
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}>
+                        Shadow mode
+                      </span>
+                    ) : null}
+                    {entry.recommendation.explanationTags.map((tag) => (
+                      <span
+                        key={`${entry.payload.decisionId}-${tag}`}
+                        style={{
+                          padding: "5px 9px",
+                          borderRadius: 999,
+                          background: "rgba(148, 163, 184, 0.12)",
+                          color: "var(--muted)",
+                          fontSize: 11,
+                        }}
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              )) : (
+                <div style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  border: "1px solid var(--border)",
+                  background: "rgba(8, 12, 20, 0.92)",
+                  color: "var(--muted)",
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}>
+                  {decisionLogContent}
+                </div>
+              )}
+
+              {legacyDecisionExecutions.length > 0 ? (
+                <article style={{
+                  borderRadius: 14,
+                  border: "1px solid var(--border)",
+                  background: "rgba(8, 12, 20, 0.92)",
+                  padding: 14,
+                  display: "grid",
+                  gap: 10,
+                }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Earlier executions before detailed logging</div>
+                  <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                    These were captured from the execution feed, so they do not include full decision-layer reasoning.
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {legacyDecisionExecutions.slice(0, 8).map((execution) => (
+                      <div
+                        key={execution.executionId}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 10,
+                          flexWrap: "wrap",
+                          padding: 10,
+                          borderRadius: 12,
+                          background: "rgba(15, 23, 42, 0.7)",
+                          border: "1px solid rgba(148, 163, 184, 0.16)",
+                        }}
+                      >
+                        <div>
+                          <div style={{ color: "var(--text)", fontWeight: 700 }}>
+                            {execution.symbol} · {execution.side.toUpperCase()} · {formatUsd(execution.sizeUsd)}
+                          </div>
+                          <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                            {new Date(execution.createdAt).toLocaleString()} · {execution.mode.toUpperCase()} · {execution.executionModel}
+                          </div>
+                        </div>
+                        <div style={{ color: "var(--muted)", fontSize: 12, maxWidth: 320 }}>
+                          {execution.reasonMessage}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              ) : null}
+            </div>
             <div className="wallet-controls">
               <button type="button" className="secondary" onClick={() => { void openDecisionLog(); }} disabled={decisionLogBusy}>
                 {decisionLogBusy ? "Refreshing..." : "Refresh Log"}
               </button>
               <button type="button" onClick={() => setDecisionLogOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {aiPanelOpen ? (
+        <div style={{
+          position: "fixed",
+          right: 12,
+          bottom: 88,
+          width: "min(46vw, 420px)",
+          maxWidth: "calc(100vw - 24px)",
+          height: "min(48vh, 420px)",
+          minHeight: 320,
+          zIndex: 70,
+          borderRadius: 18,
+          border: "1px solid rgba(94, 234, 212, 0.2)",
+          background: "linear-gradient(180deg, rgba(10, 16, 26, 0.98), rgba(7, 12, 20, 0.98))",
+          boxShadow: "0 24px 60px rgba(2, 6, 23, 0.5)",
+          backdropFilter: "blur(18px)",
+          display: "grid",
+          gridTemplateRows: "auto auto 1fr auto",
+          overflow: "hidden",
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "14px 14px 10px",
+            borderBottom: "1px solid rgba(148, 163, 184, 0.14)",
+          }}>
+            <div>
+              <div style={{ color: "var(--text)", fontSize: 16, fontWeight: 700 }}>BremLogic Ai</div>
+              <div style={{ color: "var(--muted)", fontSize: 12 }}>{currentAiMarket.symbol} · {currentAiMarket.timeframe}</div>
+            </div>
+            <button type="button" className="secondary" onClick={() => setAiPanelVisibility(false)}>Close</button>
+          </div>
+
+          <div style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: "10px 14px",
+            borderBottom: "1px solid rgba(148, 163, 184, 0.1)",
+          }}>
+            {[
+              "Why did price move like this?",
+              "What is the current trend bias?",
+              "What levels matter right now?",
+            ].map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="secondary"
+                onClick={() => { void runAiAnalysis(prompt); }}
+                disabled={aiBusy}
+                style={{ fontSize: 12, padding: "8px 10px" }}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          <div style={{
+            overflow: "auto",
+            padding: 14,
+            display: "grid",
+            gap: 10,
+            alignContent: "start",
+          }}>
+            {aiChatMessages.length === 0 ? (
+              <div style={{
+                padding: 12,
+                borderRadius: 12,
+                background: "rgba(15, 23, 42, 0.7)",
+                border: "1px solid rgba(148, 163, 184, 0.16)",
+                color: "var(--muted)",
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}>
+                Ask for a quick read on the current move, trend bias, nearby levels, or how the latest signal lines up with recent price action.
+              </div>
+            ) : null}
+            {aiChatMessages.map((message, index) => (
+              <div
+                key={`${message.role}-${index}`}
+                style={{
+                  justifySelf: message.role === "user" ? "end" : "stretch",
+                  maxWidth: message.role === "user" ? "88%" : "100%",
+                  padding: "10px 12px",
+                  borderRadius: 14,
+                  background: message.role === "user" ? "rgba(34, 197, 94, 0.14)" : "rgba(15, 23, 42, 0.82)",
+                  border: message.role === "user"
+                    ? "1px solid rgba(74, 222, 128, 0.22)"
+                    : "1px solid rgba(148, 163, 184, 0.14)",
+                  color: "var(--text)",
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {message.content}
+              </div>
+            ))}
+          </div>
+
+          <div style={{
+            padding: 14,
+            borderTop: "1px solid rgba(148, 163, 184, 0.14)",
+            display: "grid",
+            gap: 8,
+          }}>
+            <div style={{ color: "var(--muted)", fontSize: 12 }}>{aiStatus}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+              <textarea
+                value={aiPrompt}
+                onChange={(event) => setAiPrompt(event.target.value)}
+                placeholder="Ask why price moved, what levels matter, or how the latest signal fits."
+                rows={3}
+                style={{
+                  width: "100%",
+                  resize: "none",
+                  borderRadius: 12,
+                  border: "1px solid rgba(148, 163, 184, 0.18)",
+                  background: "rgba(15, 23, 42, 0.78)",
+                  color: "var(--text)",
+                  padding: "10px 12px",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitAiPrompt();
+                  }
+                }}
+              />
+              <button type="button" onClick={() => { void submitAiPrompt(); }} disabled={aiBusy || !aiPrompt.trim()}>
+                {aiBusy ? "Thinking..." : "Send"}
+              </button>
             </div>
           </div>
         </div>
