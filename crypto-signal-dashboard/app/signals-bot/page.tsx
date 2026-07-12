@@ -5154,18 +5154,18 @@ function DashboardPage() {
       {aiPanelOpen ? (
         <div style={{
           position: "fixed",
-          right: 12,
-          bottom: 88,
-          width: "min(46vw, 420px)",
-          maxWidth: "calc(100vw - 24px)",
-          height: "min(48vh, 420px)",
-          minHeight: 320,
+          right: "calc(var(--safe-right) + 10px)",
+          bottom: "calc(var(--safe-bottom) + 84px + var(--bottom-bar-fill))",
+          width: "min(88vw, 360px)",
+          maxWidth: "calc(100vw - var(--safe-left) - var(--safe-right) - 20px)",
+          height: "min(42dvh, 370px)",
+          minHeight: 290,
           zIndex: 70,
-          borderRadius: 18,
+          borderRadius: 16,
           border: "1px solid rgba(94, 234, 212, 0.2)",
-          background: "linear-gradient(180deg, rgba(10, 16, 26, 0.98), rgba(7, 12, 20, 0.98))",
-          boxShadow: "0 24px 60px rgba(2, 6, 23, 0.5)",
-          backdropFilter: "blur(18px)",
+          background: "linear-gradient(180deg, rgba(9, 14, 23, 0.98), rgba(7, 11, 18, 0.985))",
+          boxShadow: "0 18px 42px rgba(2, 6, 23, 0.42)",
+          backdropFilter: "blur(16px)",
           display: "grid",
           gridTemplateRows: "auto auto 1fr auto",
           overflow: "hidden",
@@ -5174,22 +5174,22 @@ function DashboardPage() {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 12,
-            padding: "14px 14px 10px",
+            gap: 10,
+            padding: "12px 12px 9px",
             borderBottom: "1px solid rgba(148, 163, 184, 0.14)",
           }}>
             <div>
-              <div style={{ color: "var(--text)", fontSize: 16, fontWeight: 700 }}>BremLogic Ai</div>
-              <div style={{ color: "var(--muted)", fontSize: 12 }}>{currentAiMarket.symbol} · {currentAiMarket.timeframe}</div>
+              <div style={{ color: "var(--text)", fontSize: 15, fontWeight: 700 }}>BremLogic Ai</div>
+              <div style={{ color: "var(--muted)", fontSize: 11, lineHeight: 1.35 }}>{currentAiMarket.symbol} · {currentAiMarket.timeframe}</div>
             </div>
-            <button type="button" className="secondary" onClick={() => setAiPanelVisibility(false)}>Close</button>
+            <button type="button" className="secondary" onClick={() => setAiPanelVisibility(false)} style={{ padding: "8px 12px", fontSize: 12 }}>Close</button>
           </div>
 
           <div style={{
             display: "flex",
-            gap: 8,
+            gap: 7,
             flexWrap: "wrap",
-            padding: "10px 14px",
+            padding: "9px 12px",
             borderBottom: "1px solid rgba(148, 163, 184, 0.1)",
           }}>
             {[
@@ -5203,7 +5203,13 @@ function DashboardPage() {
                 className="secondary"
                 onClick={() => { void runAiAnalysis(prompt); }}
                 disabled={aiBusy}
-                style={{ fontSize: 12, padding: "8px 10px" }}
+                style={{
+                  fontSize: 11,
+                  padding: "7px 9px",
+                  borderRadius: 11,
+                  lineHeight: 1.25,
+                  flex: "1 1 96px",
+                }}
               >
                 {prompt}
               </button>
@@ -5212,20 +5218,20 @@ function DashboardPage() {
 
           <div style={{
             overflow: "auto",
-            padding: 14,
+            padding: 12,
             display: "grid",
-            gap: 10,
+            gap: 8,
             alignContent: "start",
           }}>
             {aiChatMessages.length === 0 ? (
               <div style={{
-                padding: 12,
+                padding: 10,
                 borderRadius: 12,
                 background: "rgba(15, 23, 42, 0.7)",
                 border: "1px solid rgba(148, 163, 184, 0.16)",
                 color: "var(--muted)",
-                fontSize: 13,
-                lineHeight: 1.6,
+                fontSize: 12,
+                lineHeight: 1.5,
               }}>
                 Ask for a quick read on the current move, trend bias, nearby levels, or how the latest signal lines up with recent price action.
               </div>
@@ -5236,15 +5242,15 @@ function DashboardPage() {
                 style={{
                   justifySelf: message.role === "user" ? "end" : "stretch",
                   maxWidth: message.role === "user" ? "88%" : "100%",
-                  padding: "10px 12px",
-                  borderRadius: 14,
+                  padding: "9px 11px",
+                  borderRadius: 12,
                   background: message.role === "user" ? "rgba(34, 197, 94, 0.14)" : "rgba(15, 23, 42, 0.82)",
                   border: message.role === "user"
                     ? "1px solid rgba(74, 222, 128, 0.22)"
                     : "1px solid rgba(148, 163, 184, 0.14)",
                   color: "var(--text)",
-                  fontSize: 13,
-                  lineHeight: 1.6,
+                  fontSize: 12,
+                  lineHeight: 1.55,
                   whiteSpace: "pre-wrap",
                 }}
               >
@@ -5254,12 +5260,12 @@ function DashboardPage() {
           </div>
 
           <div style={{
-            padding: 14,
+            padding: 12,
             borderTop: "1px solid rgba(148, 163, 184, 0.14)",
             display: "grid",
-            gap: 8,
+            gap: 7,
           }}>
-            <div style={{ color: "var(--muted)", fontSize: 12 }}>{aiStatus}</div>
+            <div style={{ color: "var(--muted)", fontSize: 11 }}>{aiStatus}</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
               <textarea
                 value={aiPrompt}
@@ -5269,12 +5275,12 @@ function DashboardPage() {
                 style={{
                   width: "100%",
                   resize: "none",
-                  borderRadius: 12,
+                  borderRadius: 11,
                   border: "1px solid rgba(148, 163, 184, 0.18)",
                   background: "rgba(15, 23, 42, 0.78)",
                   color: "var(--text)",
-                  padding: "10px 12px",
-                  fontSize: 13,
+                  padding: "9px 11px",
+                  fontSize: 12,
                   lineHeight: 1.5,
                 }}
                 onKeyDown={(event) => {
@@ -5284,7 +5290,7 @@ function DashboardPage() {
                   }
                 }}
               />
-              <button type="button" onClick={() => { void submitAiPrompt(); }} disabled={aiBusy || !aiPrompt.trim()}>
+              <button type="button" onClick={() => { void submitAiPrompt(); }} disabled={aiBusy || !aiPrompt.trim()} style={{ padding: "0 12px", fontSize: 12 }}>
                 {aiBusy ? "Thinking..." : "Send"}
               </button>
             </div>
