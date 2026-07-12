@@ -38,6 +38,7 @@ const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY = "brembot.perps-agent.local-session.v1";
 const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-executions.v1";
+const PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY = "brembot.perps-agent.local-decision-log.v1";
 const PERPS_SESSION_TIMEOUT_MS = 60_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
@@ -455,6 +456,27 @@ function saveLocalPerpsAgentExecutions(executions: PerpsExecutionSummary[]) {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.setItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY, JSON.stringify(executions));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function loadLocalDecisionLogEntries() {
+  if (typeof window === "undefined") return [] as DecisionLogEntry[];
+  try {
+    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as DecisionLogEntry[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [] as DecisionLogEntry[];
+  }
+}
+
+function saveLocalDecisionLogEntries(entries: DecisionLogEntry[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY, JSON.stringify(entries));
   } catch {
     // ignore storage failures
   }
@@ -1360,6 +1382,7 @@ function DashboardPage() {
       const localExecutions = loadLocalPerpsAgentExecutions();
       setPerpsAgentSession(localSession);
       setPerpsAgentExecutions(localExecutions);
+      setDecisionLogEntries(loadLocalDecisionLogEntries());
       if (localSession?.mode) {
         setPerpsSessionModePreference(localSession.mode);
         setPerpsUnlimitedSession(localSession.unlimitedSession);
@@ -1420,6 +1443,7 @@ function DashboardPage() {
     };
   }) => {
     if (!remoteAuthToken) {
+      const localSession = loadLocalPerpsAgentSession();
       if (perpsSessionModePreference === "live" && !perpsLiveWalletAllowed) {
         throw new Error("Live Perps automation is not enabled for this wallet.");
       }
@@ -1444,9 +1468,72 @@ function DashboardPage() {
         createdAt: new Date().toISOString(),
         txid: null,
       };
+      const localDecisionEntry: DecisionLogEntry = {
+        payload: {
+          decisionId: `local-decision-${input.signal.id}-${Date.now()}`,
+          createdAt: localExecution.createdAt,
+          walletAddress: localSession?.walletAddress ?? jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress ?? "local-session",
+          sessionId: localSession?.sessionId ?? "local-session",
+          sessionMode: perpsSessionModePreference,
+          executionModel: "approval-assisted",
+          signalId: input.signal.id,
+          symbol: input.signal.symbol,
+          summary: input.signal.summary,
+          direction: input.signal.direction,
+          signalConfidence: input.signal.confidence,
+          asset: input.request.asset,
+          requestedTrade: {
+            collateralUsd: input.collateralUsd,
+            leverage: Number(input.request.leverage),
+            takeProfitPrice: input.request.takeProfitPrice ?? null,
+            stopLossPrice: input.request.stopLossPrice ?? null,
+            maxSlippageBps: Number(input.request.maxSlippageBps ?? "100"),
+            executionStyle: autoTradeSettings.perpsExecutionMode,
+            smartTradeProfile: autoTradeSettings.smartTradeProfile,
+          },
+          marketContext: {
+            spotPrice: input.marketContext?.spotPrice ?? null,
+            volatilityPercent: input.marketContext?.volatilityPercent ?? null,
+            trendBias: input.marketContext?.trendBias ?? null,
+            availableUsdc: input.marketContext?.availableUsdc ?? null,
+            hasOpenPosition: input.marketContext?.hasOpenPosition ?? false,
+            recentPriceChangePercent: input.marketContext?.recentPriceChangePercent ?? null,
+          },
+        },
+        recommendation: {
+          shouldTrade: true,
+          confidenceScore: clampNumber(input.signal.confidence ?? 0.72, 0, 1),
+          riskGrade:
+            Number(input.request.leverage) >= 6
+              ? "high"
+              : Number(input.request.leverage) >= 3
+                ? "medium"
+                : "low",
+          sizeMultiplier: 1,
+          leverageMultiplier: 1,
+          recommendedCollateralUsd: input.collateralUsd,
+          recommendedLeverage: Number(input.request.leverage),
+          recommendedTakeProfitPrice: input.request.takeProfitPrice ?? null,
+          recommendedStopLossPrice: input.request.stopLossPrice ?? null,
+          explanationTags: [
+            perpsSessionModePreference === "paper" ? "paper-mode" : "live-approval",
+            input.signal.direction === "bullish" ? "long-bias" : "short-bias",
+            autoTradeSettings.perpsExecutionMode,
+            autoTradeSettings.smartTradeProfile,
+          ],
+          explanationSummary:
+            perpsSessionModePreference === "paper"
+              ? `Local paper session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup and recorded a simulated Perps execution using the current preset profile.`
+              : `Local live session accepted this ${input.signal.direction === "bullish" ? "long" : "short"} setup and prepared it for approval-assisted Perps execution.`,
+          shadowMode: false,
+        },
+      };
       const nextExecutions = [localExecution, ...loadLocalPerpsAgentExecutions()].slice(0, 20);
+      const nextDecisionEntries = [localDecisionEntry, ...loadLocalDecisionLogEntries()].slice(0, 40);
       saveLocalPerpsAgentExecutions(nextExecutions);
+      saveLocalDecisionLogEntries(nextDecisionEntries);
       setPerpsAgentExecutions(nextExecutions);
+      setDecisionLogEntries(nextDecisionEntries);
       return {
         ok: true,
         message: localExecution.reasonMessage,
@@ -1497,7 +1584,7 @@ function DashboardPage() {
 
     await refreshPerpsAgentState().catch(() => undefined);
     return payload;
-  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, perpsLiveWalletAllowed, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken]);
+  }, [autoTradeSettings.perpsExecutionMode, autoTradeSettings.smartTradeProfile, jupiterPerpsController?.walletAddress, perpsLiveWalletAllowed, perpsSessionModePreference, refreshPerpsAgentState, remoteAuthToken, remoteSyncWalletAddress, walletAddress]);
 
   const openDecisionLog = useCallback(async () => {
     setDecisionLogOpen(true);
@@ -1505,6 +1592,13 @@ function DashboardPage() {
     setDecisionLogContent("Loading decision log...");
 
     try {
+      if (!remoteAuthToken) {
+        const localEntries = loadLocalDecisionLogEntries();
+        setDecisionLogEntries(localEntries);
+        setDecisionLogContent(localEntries.length > 0 ? "Local Perps agent decision log loaded." : "No decision log entries yet.");
+        return;
+      }
+
       const response = await fetch("/api/perps/decision-log?limit=40", { cache: "no-store" });
       const payload = await response.json().catch(() => null) as { content?: string; entries?: DecisionLogEntry[] } | null;
       if (!response.ok) {
@@ -1518,7 +1612,7 @@ function DashboardPage() {
     } finally {
       setDecisionLogBusy(false);
     }
-  }, []);
+  }, [remoteAuthToken]);
 
   const currentAiMarket = useMemo(() => {
     const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0] ?? null;
@@ -5016,14 +5110,32 @@ function DashboardPage() {
 
       {decisionLogOpen ? (
         <div className="modal-backdrop" onClick={() => setDecisionLogOpen(false)}>
-          <div className="modal-card" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 860, width: "min(92vw, 860px)" }}>
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              position: "fixed",
+              top: "calc(var(--native-content-top-buffer) + 12px)",
+              left: "calc(var(--safe-left) + 12px)",
+              right: "calc(var(--safe-right) + 12px)",
+              bottom: "calc(var(--safe-bottom) + 82px + var(--bottom-bar-fill))",
+              width: "auto",
+              maxWidth: "none",
+              maxHeight: "none",
+              margin: 0,
+              borderRadius: 20,
+              display: "grid",
+              gridTemplateRows: "auto 1fr auto",
+              overflow: "hidden",
+            }}
+          >
             <h3>Perps Decision Log</h3>
             <div className="subtext">
               {decisionLogBusy ? "Loading the latest decision-layer journal..." : "Readable audit trail for why the Perps agent scored and accepted or skipped trades."}
             </div>
             <div style={{
               marginTop: 14,
-              maxHeight: "65vh",
+              minHeight: 0,
               overflow: "auto",
               display: "grid",
               gap: 12,
