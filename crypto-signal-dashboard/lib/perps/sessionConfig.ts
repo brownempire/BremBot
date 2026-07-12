@@ -24,7 +24,7 @@ export function getPerpsSessionConfig() {
     globalKillSwitch: readBoolean(process.env.PERPS_KILL_SWITCH, false),
     allowUnlimitedSession: true,
     defaultUnlimitedSession: false,
-    heartbeatTimeoutMs: readNumber(process.env.PERPS_SESSION_HEARTBEAT_TIMEOUT_MS, 45_000),
+    heartbeatTimeoutMs: readNumber(process.env.PERPS_SESSION_HEARTBEAT_TIMEOUT_MS, 60_000),
     maxUserLeverage: readNumber(process.env.PERPS_MAX_LEVERAGE, 5),
     maxTradePct: readNumber(process.env.PERPS_MAX_TRADE_PCT, 0.1),
     maxExposurePct: readNumber(process.env.PERPS_MAX_EXPOSURE_PCT, 0.5),

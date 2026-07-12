@@ -38,6 +38,7 @@ const AUTO_TRADE_SETTINGS_STORAGE_KEY = "brembot.auto-trade-settings.v1";
 const REMOTE_AUTH_TOKEN_STORAGE_KEY = "brembot.remote-trades-auth.v2";
 const PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY = "brembot.perps-agent.local-session.v1";
 const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-executions.v1";
+const PERPS_SESSION_TIMEOUT_MS = 60_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
@@ -320,6 +321,7 @@ type PerpsSessionSnapshot = {
   sessionState: "clocked_in" | "clocked_out";
   startedAt: string | null;
   lastHeartbeatAt: string | null;
+  inactiveSince?: string | null;
   endedAt: string | null;
   mode: "paper" | "live";
   executionModel: "approval-assisted" | "delegated-ready";
@@ -396,7 +398,29 @@ function loadLocalPerpsAgentSession() {
   try {
     const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw) as PerpsSessionSnapshot;
+    const session = JSON.parse(raw) as PerpsSessionSnapshot;
+    if (session?.sessionState !== "clocked_in") {
+      return session;
+    }
+
+    const now = Date.now();
+    const inactiveSince = session.inactiveSince ? Date.parse(session.inactiveSince) : null;
+    const lastHeartbeatAt = session.lastHeartbeatAt ? Date.parse(session.lastHeartbeatAt) : null;
+    const timedOutWhileInactive =
+      Number.isFinite(inactiveSince)
+        ? now - Number(inactiveSince) >= PERPS_SESSION_TIMEOUT_MS
+        : false;
+    const timedOutHeartbeat =
+      !Number.isFinite(inactiveSince)
+      && Number.isFinite(lastHeartbeatAt)
+      && now - Number(lastHeartbeatAt) >= PERPS_SESSION_TIMEOUT_MS;
+
+    if (timedOutWhileInactive || timedOutHeartbeat) {
+      window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
+      return null;
+    }
+
+    return session;
   } catch {
     return null;
   }
@@ -1731,11 +1755,12 @@ function DashboardPage() {
           lastHeartbeatAt: new Date().toISOString(),
         };
         if (!input.appOpen || !input.appForeground || !input.walletConnected) {
-          nextSession.sessionState = "clocked_out";
-          nextSession.endedAt = new Date().toISOString();
+          nextSession.inactiveSince = nextSession.inactiveSince ?? new Date().toISOString();
+        } else {
+          nextSession.inactiveSince = null;
         }
-        saveLocalPerpsAgentSession(nextSession.sessionState === "clocked_out" ? null : nextSession);
-        setPerpsAgentSession(nextSession.sessionState === "clocked_out" ? null : nextSession);
+        saveLocalPerpsAgentSession(nextSession);
+        setPerpsAgentSession(nextSession);
       }
       return;
     }
@@ -1773,7 +1798,13 @@ function DashboardPage() {
     const handleVisibility = () => {
       const isVisible = document.visibilityState === "visible";
       if (!isVisible) {
-        void clockOutPerpsAgent("Trading session ended because the app left the foreground.");
+        void sendPerpsSessionHeartbeat({
+          appOpen: false,
+          appForeground: false,
+          walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
+          walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+          reason: "Trading session is waiting for the app to return to the foreground.",
+        });
         return;
       }
 
@@ -1789,7 +1820,7 @@ function DashboardPage() {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [clockOutPerpsAgent, jupiterPerpsController, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
+  }, [jupiterPerpsController, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
 
   useEffect(() => {
     if (!nativeShell || !perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
@@ -1797,7 +1828,13 @@ function DashboardPage() {
     let handle: { remove: () => Promise<void> } | null = null;
     void App.addListener("appStateChange", ({ isActive }) => {
       if (!isActive) {
-        void clockOutPerpsAgent("Trading session ended because the app was backgrounded.");
+        void sendPerpsSessionHeartbeat({
+          appOpen: false,
+          appForeground: false,
+          walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
+          walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+          reason: "Trading session is waiting for the native app to become active again.",
+        });
         return;
       }
 
@@ -1814,7 +1851,25 @@ function DashboardPage() {
     return () => {
       void handle?.remove().catch(() => undefined);
     };
-  }, [clockOutPerpsAgent, jupiterPerpsController, nativeShell, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
+  }, [jupiterPerpsController, nativeShell, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
+
+  useEffect(() => {
+    if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
+    if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+
+    const heartbeatTimer = window.setInterval(() => {
+      void sendPerpsSessionHeartbeat({
+        appOpen: true,
+        appForeground: true,
+        walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
+        walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+      });
+    }, 15_000);
+
+    return () => {
+      window.clearInterval(heartbeatTimer);
+    };
+  }, [jupiterPerpsController, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
 
   useEffect(() => {
     pendingTakeProfitRef.current = pendingTakeProfit;
@@ -1952,9 +2007,15 @@ function DashboardPage() {
     const hasUserWallet = wallet.connected || Boolean(jupiterPerpsController?.connected);
     const requiresRemoteAuth = !perpsAgentSession.sessionId.startsWith("local-");
     if (!hasUserWallet || (requiresRemoteAuth && !remoteAuthToken)) {
-      void clockOutPerpsAgent("Trading session ended because the wallet session is no longer valid.");
+      void sendPerpsSessionHeartbeat({
+        appOpen: true,
+        appForeground: typeof document === "undefined" ? true : document.visibilityState === "visible",
+        walletConnected: hasUserWallet,
+        walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
+        reason: "Trading session is waiting for the wallet session to reconnect.",
+      });
     }
-  }, [clockOutPerpsAgent, jupiterPerpsController?.connected, perpsAgentSession, remoteAuthToken, wallet.connected]);
+  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, perpsAgentSession, remoteAuthToken, sendPerpsSessionHeartbeat, wallet.connected]);
 
   useEffect(() => {
     const provider = getPhantomAuthProvider();
@@ -4867,14 +4928,11 @@ function DashboardPage() {
               height={338}
               priority
             />
-            <div className="header-status-stack">
-              <div className="header-status-summary">
-                <div className="badge badge-status badge-status-primary">{perpsAutoTradeStatus}</div>
-                <div className={`badge badge-status ${perpsModeLabel === "Paper mode" ? "badge-status-paper" : "badge-status-live"}`}>
+            <div className="header-status-layout">
+              <div className="header-status-top">
+                <div className={`badge badge-status badge-status-agent ${perpsModeLabel === "Paper mode" ? "badge-status-paper" : "badge-status-live"}`}>
                   Perps Agent: {perpsConnectionLabel} · {perpsSessionStateLabel} · {perpsModeLabel}
                 </div>
-              </div>
-              <div className="header-status-actions">
                 <div ref={notificationPanelRef} className="notification-bell-wrap">
                   <button
                     type="button"
@@ -4904,7 +4962,10 @@ function DashboardPage() {
                     </div>
                   ) : null}
                 </div>
-                <div className="badge badge-status badge-status-wide">{autoTradeStatus}</div>
+              </div>
+              <div className="header-status-bottom">
+                <div className="badge badge-status badge-status-primary badge-status-full">{perpsAutoTradeStatus}</div>
+                <div className="badge badge-status badge-status-wide badge-status-full">{autoTradeStatus}</div>
               </div>
             </div>
           </div>

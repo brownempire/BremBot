@@ -58,6 +58,7 @@ export const perpsAutomationSessionSchema = z.object({
   sessionState: perpsSessionStateSchema,
   startedAt: z.string().datetime().nullable(),
   lastHeartbeatAt: z.string().datetime().nullable(),
+  inactiveSince: z.string().datetime().nullable().optional(),
   endedAt: z.string().datetime().nullable(),
   mode: perpsSessionModeSchema,
   executionModel: perpsExecutionModelSchema,

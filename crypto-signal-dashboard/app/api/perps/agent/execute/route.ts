@@ -1,8 +1,7 @@
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
 import { perpsAgentSignalSchema } from "@/lib/perps/sessionTypes";
-import { getPerpsSession } from "@/lib/perps/sessionStore";
-import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
+import { getPerpsSessionWithTimeout, routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +17,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid perps agent payload.", detail: parsed.error.message }, { status: 400 });
   }
 
-  const session = await getPerpsSession(walletAddress);
+  const session = await getPerpsSessionWithTimeout(walletAddress);
   if (session?.mode === "live" && !isPerpsLiveWalletAllowed(walletAddress)) {
     return Response.json({
       error: "Live Perps automation is not enabled for this wallet.",

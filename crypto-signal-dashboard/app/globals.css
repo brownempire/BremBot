@@ -662,13 +662,8 @@ main {
     gap: 8px;
   }
 
-  .header-status-summary {
-    grid-template-columns: minmax(116px, 0.42fr) minmax(0, 1fr);
-    gap: 8px;
-  }
-
-  .header-status-actions {
-    grid-template-columns: 54px minmax(0, 1fr);
+  .header-status-top {
+    grid-template-columns: minmax(0, 1fr) 54px;
     gap: 8px;
   }
 
@@ -748,24 +743,29 @@ header {
   margin-bottom: 4px;
 }
 
-.header-status-stack {
+.header-status-layout {
   display: grid;
-  gap: 8px;
-  margin-top: 2px;
+  gap: 6px;
+  margin-top: 1px;
 }
 
-.header-status-summary {
+.header-status-top {
   display: grid;
-  grid-template-columns: minmax(132px, 0.38fr) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: stretch;
 }
 
-.header-status-actions {
+.header-status-bottom {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.header-status-layout .badge {
+  padding: 5px 10px;
+  border-radius: 18px;
+  font-size: 11px;
 }
 
 .badges {
@@ -790,13 +790,18 @@ header {
 .badge-status {
   white-space: normal;
   overflow-wrap: anywhere;
-  line-height: 1.35;
+  line-height: 1.28;
 }
 
 .badge-status-primary {
-  min-height: 54px;
+  min-height: 46px;
   display: flex;
   align-items: center;
+}
+
+.badge-status-agent,
+.badge-status-full {
+  width: 100%;
 }
 
 .badge-status-paper {
@@ -813,7 +818,7 @@ header {
 
 .badge-status-wide {
   width: 100%;
-  min-height: 54px;
+  min-height: 44px;
   display: flex;
   align-items: center;
 }
@@ -1284,14 +1289,14 @@ button:disabled {
 }
 
 .notification-bell-button {
-  width: 54px;
-  height: 54px;
-  min-width: 54px;
+  width: 46px;
+  height: 46px;
+  min-width: 46px;
   padding: 0;
-  border-radius: 18px;
+  border-radius: 15px;
   display: grid;
   place-items: center;
-  font-size: 24px;
+  font-size: 20px;
   background: rgba(255, 164, 92, 0.12);
   border-color: rgba(255, 164, 92, 0.38);
 }

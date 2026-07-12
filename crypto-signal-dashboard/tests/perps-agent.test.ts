@@ -36,6 +36,7 @@ test.beforeEach(() => {
   cleanupStores();
   process.env.PERPS_KILL_SWITCH = "false";
   process.env.PERPS_LIVE_ALLOWED_WALLETS = "";
+  process.env.PERPS_SESSION_HEARTBEAT_TIMEOUT_MS = "60000";
 });
 
 test.before(async () => {
@@ -66,7 +67,7 @@ test("clock in and clock out persists a wallet-scoped session", async () => {
   assert.equal(ended?.walletConnected, false);
 });
 
-test("heartbeat invalidates the session when the app leaves the foreground", async () => {
+test("heartbeat grants a grace window before timing out an inactive session", async () => {
   const wallet = "TestWallet2222222222222222222222222222222222";
   await tradingAgent.clockInPerpsSession(wallet, {
     mode: "paper",
@@ -82,8 +83,28 @@ test("heartbeat invalidates the session when the app leaves the foreground", asy
     reason: "Backgrounded",
   });
 
-  assert.equal(updated?.sessionState, "clocked_out");
+  assert.equal(updated?.sessionState, "clocked_in");
   assert.equal(updated?.warning, "Backgrounded");
+  assert.ok(updated?.inactiveSince);
+
+  const stored = await sessionStore.getPerpsSession(wallet);
+  assert.ok(stored);
+  await sessionStore.savePerpsSession({
+    ...stored,
+    inactiveSince: new Date(Date.now() - 61_000).toISOString(),
+    lastHeartbeatAt: new Date(Date.now() - 61_000).toISOString(),
+  });
+
+  const timedOut = await tradingAgent.heartbeatPerpsSession(wallet, {
+    appOpen: false,
+    appForeground: false,
+    walletConnected: false,
+    walletWriteEnabled: false,
+    reason: "Backgrounded",
+  });
+
+  assert.equal(timedOut?.sessionState, "clocked_out");
+  assert.match(timedOut?.warning ?? "", /timed out/i);
 });
 
 test("paper mode routes a signal only to the clocked-in user session", async () => {

@@ -1,8 +1,7 @@
 import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
-import { getPerpsSession } from "@/lib/perps/sessionStore";
 import { perpsSessionHeartbeatSchema } from "@/lib/perps/sessionTypes";
-import { heartbeatPerpsSession } from "@/lib/perps/tradingAgent";
+import { getPerpsSessionWithTimeout, heartbeatPerpsSession } from "@/lib/perps/tradingAgent";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +11,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const session = await getPerpsSession(walletAddress);
+  const session = await getPerpsSessionWithTimeout(walletAddress);
   const config = getPerpsSessionConfig();
   return Response.json({
     walletAddress,

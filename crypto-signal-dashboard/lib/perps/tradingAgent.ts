@@ -21,6 +21,44 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function parseIso(value: string | null | undefined) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getSessionTimeoutReason(timeoutMs: number) {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  return `Trading session timed out after ${seconds} seconds without an active app heartbeat.`;
+}
+
+async function resolveSessionTimeout(walletAddress: string, session: PerpsAutomationSession | null) {
+  if (!session || session.sessionState !== "clocked_in") return session;
+
+  const config = getPerpsSessionConfig();
+  const now = Date.now();
+  const inactiveSince = parseIso(session.inactiveSince);
+  const lastHeartbeatAt = parseIso(session.lastHeartbeatAt);
+  const timedOutWhileInactive =
+    inactiveSince !== null
+      && now - inactiveSince >= config.heartbeatTimeoutMs;
+  const timedOutHeartbeat =
+    inactiveSince === null
+      && lastHeartbeatAt !== null
+      && now - lastHeartbeatAt >= config.heartbeatTimeoutMs;
+
+  if (!timedOutWhileInactive && !timedOutHeartbeat) {
+    return session;
+  }
+
+  return clockOutPerpsSession(walletAddress, getSessionTimeoutReason(config.heartbeatTimeoutMs));
+}
+
+export async function getPerpsSessionWithTimeout(walletAddress: string) {
+  const existing = await getPerpsSession(walletAddress);
+  return resolveSessionTimeout(walletAddress, existing);
+}
+
 export async function clockInPerpsSession(walletAddress: string, input: PerpsClockInInput) {
   const config = getPerpsSessionConfig();
   const existing = await getPerpsSession(walletAddress);
@@ -40,6 +78,7 @@ export async function clockInPerpsSession(walletAddress: string, input: PerpsClo
     sessionState: "clocked_in",
     startedAt: existing?.startedAt ?? nowIso(),
     lastHeartbeatAt: nowIso(),
+    inactiveSince: null,
     endedAt: null,
     mode: requestedMode,
     executionModel,
@@ -70,6 +109,7 @@ export async function clockOutPerpsSession(walletAddress: string, reason?: strin
     walletConnected: false,
     walletWriteEnabled: false,
     lastHeartbeatAt: nowIso(),
+    inactiveSince: null,
     endedAt: nowIso(),
     warning: reason ?? existing.warning,
   };
@@ -81,14 +121,35 @@ export async function heartbeatPerpsSession(walletAddress: string, input: PerpsS
   const existing = await getPerpsSession(walletAddress);
   if (!existing) return null;
 
-  const shouldClockOut = !input.appOpen || !input.appForeground || !input.walletConnected;
-  if (shouldClockOut) {
-    return clockOutPerpsSession(walletAddress, input.reason ?? "Session ended because the app or wallet left the active foreground state.");
+  const config = getPerpsSessionConfig();
+  const inactive = !input.appOpen || !input.appForeground || !input.walletConnected;
+  const now = nowIso();
+
+  if (inactive) {
+    const inactiveSince = existing.inactiveSince ?? now;
+    const timedOut = (Date.parse(now) - Date.parse(inactiveSince)) >= config.heartbeatTimeoutMs;
+    if (timedOut) {
+      return clockOutPerpsSession(walletAddress, getSessionTimeoutReason(config.heartbeatTimeoutMs));
+    }
+
+    const next: PerpsAutomationSession = {
+      ...existing,
+      lastHeartbeatAt: now,
+      inactiveSince,
+      appOpen: input.appOpen,
+      appForeground: input.appForeground,
+      walletConnected: input.walletConnected,
+      walletWriteEnabled: input.walletWriteEnabled ?? existing.walletWriteEnabled,
+      warning: input.reason ?? existing.warning,
+    };
+    await savePerpsSession(next);
+    return next;
   }
 
   const next: PerpsAutomationSession = {
     ...existing,
-    lastHeartbeatAt: nowIso(),
+    lastHeartbeatAt: now,
+    inactiveSince: null,
     appOpen: input.appOpen,
     appForeground: input.appForeground,
     walletConnected: input.walletConnected,
@@ -101,7 +162,7 @@ export async function heartbeatPerpsSession(walletAddress: string, input: PerpsS
 export async function routePerpsSignalForUser(walletAddress: string, signal: PerpsAgentSignal) {
   const config = getPerpsSessionConfig();
   const decisionConfig = getTradeDecisionConfig();
-  const session = await getPerpsSession(walletAddress);
+  const session = await getPerpsSessionWithTimeout(walletAddress);
   if (!session) {
     return { ok: false, code: "NO_SESSION", message: "Clock In before routing automated perps signals." } as const;
   }
