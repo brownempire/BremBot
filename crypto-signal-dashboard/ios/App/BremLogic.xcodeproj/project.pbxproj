@@ -495,7 +495,7 @@
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(WIDGET_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -523,7 +523,7 @@
 			baseConfigurationReference = 958DCC732DB07C7200EA8C5F /* release.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(WIDGET_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
