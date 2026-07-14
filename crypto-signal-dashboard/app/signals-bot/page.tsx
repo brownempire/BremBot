@@ -6,17 +6,20 @@ import { Capacitor } from "@capacitor/core";
 import { LocalNotifications } from "@capacitor/local-notifications";
 import { PushNotifications } from "@capacitor/push-notifications";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
-import { isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
+import { isNativeIosRuntime, isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
+import { syncWidgetSnapshot } from "@/app/lib/widgetSync";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
 import { PerpsClockCard } from "@/app/components/perps-agent/PerpsClockCard";
 import { PerpsExecutionFeed as PerpsAgentExecutionFeed } from "@/app/components/perps-agent/PerpsExecutionFeed";
 import { PerpsSessionStatus } from "@/app/components/perps-agent/PerpsSessionStatus";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
+import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
   JupiterPerpsWidgetController,
   JupiterPerpsWidgetSnapshot,
@@ -41,6 +44,9 @@ const PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY = "brembot.perps-agent.local-exec
 const PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY = "brembot.perps-agent.local-decision-log.v1";
 const PERPS_AGENT_LOCAL_LEARNING_PROFILE_STORAGE_KEY = "brembot.perps-agent.local-learning-profile.v1";
 const PERPS_SESSION_TIMEOUT_MS = 60_000;
+const IN_APP_REMOTE_AUTH_GRACE_MS = 20_000;
+const LIVE_PRICE_REFRESH_MS = 2_500;
+const WALLET_PORTFOLIO_REFRESH_MS = 45_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
@@ -409,7 +415,9 @@ function isPublicPerpsLiveWalletAllowed(walletAddress: string | null | undefined
 function loadLocalPerpsAgentSession() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
+    const raw =
+      window.localStorage.getItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
     if (!raw) return null;
     const session = JSON.parse(raw) as PerpsSessionSnapshot;
     if (session?.sessionState !== "clocked_in") {
@@ -429,10 +437,13 @@ function loadLocalPerpsAgentSession() {
       && now - Number(lastHeartbeatAt) >= PERPS_SESSION_TIMEOUT_MS;
 
     if (timedOutWhileInactive || timedOutHeartbeat) {
+      window.localStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
       window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
       return null;
     }
 
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY, raw);
+    window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
     return session;
   } catch {
     return null;
@@ -443,10 +454,12 @@ function saveLocalPerpsAgentSession(session: PerpsSessionSnapshot | null) {
   if (typeof window === "undefined") return;
   try {
     if (!session) {
+      window.localStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
       window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
       return;
     }
-    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+    window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_SESSION_STORAGE_KEY);
   } catch {
     // ignore storage failures
   }
@@ -914,15 +927,6 @@ function getNativePushPluginStatus() {
   };
 }
 
-function navigateToNotificationUrl(url: string) {
-  if (typeof window === "undefined" || !url) return;
-  if (/^https?:\/\//i.test(url)) {
-    window.location.assign(url);
-    return;
-  }
-  window.location.assign(url.startsWith("/") ? url : `/${url}`);
-}
-
 function getPhantomAuthProvider(): PhantomAuthProvider | null {
   if (typeof window === "undefined") return null;
   const candidate =
@@ -1000,6 +1004,7 @@ const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
 };
 
 function DashboardPage() {
+  const router = useRouter();
   const { connection } = useConnection();
   const wallet = useWallet();
   const walletAddress = wallet.publicKey?.toBase58() ?? null;
@@ -1112,6 +1117,7 @@ function DashboardPage() {
   const approvalConnectStartedRef = useRef<string | null>(null);
   const approvalExecutionStartedRef = useRef<string | null>(null);
   const activeApprovalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteAuthDisconnectTimeoutRef = useRef<number | null>(null);
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -1122,13 +1128,14 @@ function DashboardPage() {
   );
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
   const activePerpsAutoTradeToken = activePerpsAutoTradeSlot ? getAutoTradeTokenOption(activePerpsAutoTradeSlot.token) : null;
+  const latestSignal = signals[0] ?? null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
   const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
   const remoteSyncWalletAddress =
     remoteAuthSource === "phantom"
-      ? phantomAuthAddress
+      ? phantomAuthAddress ?? remoteAuthAddress
       : remoteAuthSource === "in-app"
-        ? walletAddress
+        ? walletAddress ?? remoteAuthAddress
         : null;
   const tradeStorageAddress =
     remoteAuthSource === "phantom"
@@ -1181,6 +1188,20 @@ function DashboardPage() {
     ?? perpsAgentSession?.walletAddress
     ?? null;
   const portfolioWalletAddress = activeWalletAddress;
+  const clearRemoteAuthDisconnectTimeout = useCallback(() => {
+    if (remoteAuthDisconnectTimeoutRef.current) {
+      clearTimeout(remoteAuthDisconnectTimeoutRef.current);
+      remoteAuthDisconnectTimeoutRef.current = null;
+    }
+  }, []);
+  const navigateToNotificationUrl = useCallback((url: string) => {
+    if (typeof window === "undefined" || !url) return;
+    if (/^https?:\/\//i.test(url)) {
+      window.location.assign(url);
+      return;
+    }
+    router.push(url.startsWith("/") ? url : `/${url}`);
+  }, [router]);
   const perpsWalletControlNote = perpsModeLabel === "Live mode"
     ? perpsLiveWalletAllowed
       ? "Live automation uses only your own connected wallet session. BremLogic does not use a shared backend trading wallet."
@@ -1259,10 +1280,6 @@ function DashboardPage() {
     const syncActiveTab = () => {
       if (typeof window === "undefined") return;
       const tab = new URLSearchParams(window.location.search).get("tab");
-      if (tab === "simulator") {
-        window.location.replace("/simulator");
-        return;
-      }
       if (tab === "signals" || tab === "perps" || tab === "simulator" || tab === "wallet") {
         setActiveSignalsTab(tab);
         return;
@@ -1280,7 +1297,7 @@ function DashboardPage() {
       window.removeEventListener("popstate", syncActiveTab);
       window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
     };
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2108,7 +2125,7 @@ function DashboardPage() {
   useEffect(() => {
     if (!nativeShell || !perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
 
-    let handle: { remove: () => Promise<void> } | null = null;
+    let cancelled = false;
     void App.addListener("appStateChange", ({ isActive }) => {
       if (!isActive) {
         void sendPerpsSessionHeartbeat({
@@ -2128,11 +2145,13 @@ function DashboardPage() {
         walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
       });
     }).then((listener) => {
-      handle = listener;
+      if (cancelled) {
+        void listener.remove().catch(() => undefined);
+      }
     }).catch(() => undefined);
 
     return () => {
-      void handle?.remove().catch(() => undefined);
+      cancelled = true;
     };
   }, [jupiterPerpsController, nativeShell, perpsAgentSession, sendPerpsSessionHeartbeat, wallet.connected]);
 
@@ -2274,15 +2293,33 @@ function DashboardPage() {
   }, [activeApprovalId, clearActiveApprovalState, clearActiveApprovalTimeout]);
 
   useEffect(() => {
+    if (remoteAuthSource !== "in-app") {
+      clearRemoteAuthDisconnectTimeout();
+    }
+    if (wallet.connected && remoteAuthSource === "in-app") {
+      clearRemoteAuthDisconnectTimeout();
+    }
     if (wallet.connected && walletAddress && !remoteAuthSource) {
+      clearRemoteAuthDisconnectTimeout();
       setRemoteAuthSource("in-app");
     }
     if (!wallet.connected && remoteAuthSource === "in-app") {
-      setRemoteAuthSource(null);
-      setRemoteAuthToken(null);
-      setRemoteAuthAddress(null);
+      if (remoteAuthDisconnectTimeoutRef.current) return;
+      remoteAuthDisconnectTimeoutRef.current = window.setTimeout(() => {
+        remoteAuthDisconnectTimeoutRef.current = null;
+        setRemoteAuthSource(null);
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+        setRemoteAuthStatus("Remote auth pending");
+      }, IN_APP_REMOTE_AUTH_GRACE_MS);
     }
-  }, [remoteAuthSource, wallet.connected, walletAddress]);
+  }, [clearRemoteAuthDisconnectTimeout, remoteAuthSource, wallet.connected, walletAddress]);
+
+  useEffect(() => {
+    return () => {
+      clearRemoteAuthDisconnectTimeout();
+    };
+  }, [clearRemoteAuthDisconnectTimeout]);
 
   useEffect(() => {
     const profile = loadLocalLearningProfile(perpsLogWalletAddress);
@@ -2356,6 +2393,7 @@ function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
     let simulateInterval: ReturnType<typeof setInterval> | null = null;
+    let polling = false;
     const simulatedFeed = createSimulatedFeed(trackedMarkets.map((market) => market.pair));
 
     const appendPrices = (
@@ -2418,6 +2456,8 @@ function DashboardPage() {
     };
 
     const pollLivePrices = async () => {
+      if (polling) return;
+      polling = true;
       try {
         const products = trackedMarkets.map((market) => market.coinbaseProduct).join(",");
         const response = await fetch(`/api/prices/live?products=${encodeURIComponent(products)}`, {
@@ -2452,13 +2492,16 @@ function DashboardPage() {
         appendPrices(pricesBySlot, changes24hBySlot, now);
       } catch (_error) {
         if (!cancelled) startSimulationFallback();
+      } finally {
+        polling = false;
       }
     };
 
     pollLivePrices().catch(() => undefined);
     const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       pollLivePrices().catch(() => undefined);
-    }, 1000);
+    }, LIVE_PRICE_REFRESH_MS);
 
     return () => {
       cancelled = true;
@@ -3110,7 +3153,7 @@ function DashboardPage() {
         void handle.remove();
       });
     };
-  }, [nativeShell]);
+  }, [navigateToNotificationUrl, nativeShell]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -3852,8 +3895,9 @@ function DashboardPage() {
   useEffect(() => {
     refreshWalletPortfolio().catch(() => undefined);
     const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       refreshWalletPortfolio().catch(() => undefined);
-    }, 30000);
+    }, WALLET_PORTFOLIO_REFRESH_MS);
 
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
@@ -4633,6 +4677,28 @@ function DashboardPage() {
     }
   }, [dashboardLayout]);
 
+  useEffect(() => {
+    if (!isNativeIosRuntime()) {
+      return;
+    }
+
+    void syncWidgetSnapshot({
+      title: "BremLogic",
+      latestSignalSymbol: latestSignal?.symbol ?? null,
+      latestSignalSummary: latestSignal?.summary ?? null,
+      latestSignalDirection: latestSignal?.direction ?? null,
+      latestSignalConfidence:
+        typeof latestSignal?.confidence === "number" && Number.isFinite(latestSignal.confidence)
+          ? latestSignal.confidence
+          : null,
+      walletBalanceUsd: typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd) ? totalBalanceUsd : null,
+      autoTradeStatus,
+      perpsAutoTradeStatus,
+      updatedAt: Date.now() / 1000,
+      targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals",
+    }).catch(() => undefined);
+  }, [autoTradeStatus, latestSignal, perpsAutoTradeStatus, totalBalanceUsd]);
+
   function getSectionLayout(id: DashboardSectionId) {
     return dashboardLayout.find((section) => section.id === id) ??
       DEFAULT_DASHBOARD_LAYOUT.find((section) => section.id === id) ??
@@ -5272,6 +5338,9 @@ function DashboardPage() {
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "perps"}>
           {renderStructuredPanel("perps")}
+        </div>
+        <div className="tab-panel" hidden={activeSignalsTab !== "simulator"}>
+          {activeSignalsTab === "simulator" ? <EmbeddedSimulatorPanel /> : null}
         </div>
         <div className="tab-panel" hidden={activeSignalsTab !== "wallet"}>
           {activeSignalsTab === "wallet" ? (

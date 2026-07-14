@@ -41,7 +41,7 @@ type TradingViewChartProps = {
 const SCRIPT_ID = "tradingview-widget-script";
 const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v1";
 const DEFAULT_INTERVAL = "5";
-const OVERLAY_REFRESH_MS = 1_000;
+const OVERLAY_REFRESH_MS = 3_000;
 let scriptLoadingPromise: Promise<void> | null = null;
 
 type ComputedGuide = {

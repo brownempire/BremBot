@@ -1,4 +1,4 @@
 CAPACITOR_DEBUG = true
 // Leave blank for Personal Team / local-notifications-only builds.
 // Set to App/BremLogic.entitlements when using a paid Apple Developer account with Push Notifications enabled.
-APP_ENTITLEMENTS =
+APP_ENTITLEMENTS = App/BremLogic.entitlements

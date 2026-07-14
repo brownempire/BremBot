@@ -1,9 +1,5 @@
-import { SimulatorExperience } from "@/app/components/SimulatorExperience";
+import { redirect } from "next/navigation";
 
 export default function SimulatorPage() {
-  return (
-    <main className="simulator-page simulator-page-local">
-      <SimulatorExperience />
-    </main>
-  );
+  redirect("/signals-bot?tab=simulator");
 }

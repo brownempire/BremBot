@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
@@ -127,10 +127,10 @@ const TAB_ITEMS: TabItem[] = [
     match: (pathname, tab) => pathname === "/signals-bot" && tab === "perps",
   },
   {
-    href: "/simulator",
+    href: "/signals-bot?tab=simulator",
     label: "Simulator",
     icon: SimIcon,
-    match: (pathname) => pathname === "/simulator",
+    match: (pathname, tab) => pathname === "/signals-bot" && tab === "simulator",
   },
   {
     href: "/signals-bot?tab=wallet",
@@ -170,6 +170,7 @@ function renderSignalsTabButton(item: TabItem, pathname: string, currentTab: str
 
 export function BottomTabs() {
   const pathname = usePathname();
+  const router = useRouter();
   const [currentTab, setCurrentTab] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
 
@@ -204,7 +205,7 @@ export function BottomTabs() {
     }
     const nextUrl = new URL(href, window.location.origin);
     if (nextUrl.pathname !== "/signals-bot") {
-      window.location.assign(nextUrl.toString());
+      router.push(`${nextUrl.pathname}${nextUrl.search}`);
       return;
     }
     nextUrl.searchParams.delete("ai");
@@ -219,7 +220,7 @@ export function BottomTabs() {
       document.activeElement.blur();
     }
     if (pathname !== "/signals-bot") {
-      window.location.assign("/signals-bot?tab=signals&ai=open");
+      router.push("/signals-bot?tab=signals&ai=open");
       return;
     }
     window.dispatchEvent(new Event(AI_PANEL_TOGGLE_EVENT));

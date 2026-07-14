@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AA1000010000000000000001 /* BremBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000010000000000000001 /* BremBridgeViewController.swift */; };
+		AA1000020000000000000002 /* WidgetSyncPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000020000000000000002 /* WidgetSyncPlugin.swift */; };
+		AA1000030000000000000003 /* BremLogicWidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000030000000000000003 /* BremLogicWidgetShared.swift */; };
+		AA1000040000000000000004 /* BremLogicWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AA2000040000000000000004 /* BremLogicWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		AA1000050000000000000005 /* BremLogicWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000050000000000000005 /* BremLogicWidget.swift */; };
+		AA1000060000000000000006 /* BremLogicWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000060000000000000006 /* BremLogicWidgetBundle.swift */; };
+		AA1000070000000000000007 /* BremLogicWidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000030000000000000003 /* BremLogicWidgetShared.swift */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		4D22ABEA2AF431CB00220026 /* brem_approval.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4D22ABEF2AF431CB00220026 /* brem_approval.wav */; };
@@ -22,7 +29,39 @@
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		AA7000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA5000010000000000000001;
+			remoteInfo = BremLogicWidgetExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		AA3000010000000000000001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AA1000040000000000000004 /* BremLogicWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		AA2000010000000000000001 /* BremBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremBridgeViewController.swift; sourceTree = "<group>"; };
+		AA2000020000000000000002 /* WidgetSyncPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSyncPlugin.swift; sourceTree = "<group>"; };
+		AA2000030000000000000003 /* BremLogicWidgetShared.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWidgetShared.swift; sourceTree = "<group>"; };
+		AA2000040000000000000004 /* BremLogicWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BremLogicWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA2000050000000000000005 /* BremLogicWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWidget.swift; sourceTree = "<group>"; };
+		AA2000060000000000000006 /* BremLogicWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWidgetBundle.swift; sourceTree = "<group>"; };
+		AA2000070000000000000007 /* BremLogicWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BremLogicWidgetExtension.entitlements; sourceTree = "<group>"; };
+		AA2000080000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		4D22ABEF2AF431CB00220026 /* brem_approval.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_approval.wav; sourceTree = "<group>"; };
 		4D22ABF02AF431CB00220026 /* brem_open.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_open.wav; sourceTree = "<group>"; };
@@ -51,6 +90,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA3000020000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -60,6 +106,8 @@
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				958DCC732DB07C7200EA8C5F /* release.xcconfig */,
 				504EC3061FED79650016851F /* BremLogic */,
+				AA4000010000000000000001 /* WidgetShared */,
+				AA4000020000000000000002 /* BremLogicWidgetExtension */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -68,6 +116,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* BremLogic.app */,
+				AA2000040000000000000004 /* BremLogicWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -77,7 +126,9 @@
 			children = (
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				AA2000010000000000000001 /* BremBridgeViewController.swift */,
 				504EC3091FED79650016851F /* BremLogic.entitlements */,
+				AA2000020000000000000002 /* WidgetSyncPlugin.swift */,
 				4D22ABEF2AF431CB00220026 /* brem_approval.wav */,
 				4D22ABF02AF431CB00220026 /* brem_open.wav */,
 				4D22ABF12AF431CB00220026 /* brem_signal.wav */,
@@ -94,6 +145,25 @@
 			path = App;
 			sourceTree = "<group>";
 		};
+		AA4000010000000000000001 /* WidgetShared */ = {
+			isa = PBXGroup;
+			children = (
+				AA2000030000000000000003 /* BremLogicWidgetShared.swift */,
+			);
+			path = WidgetShared;
+			sourceTree = "<group>";
+		};
+		AA4000020000000000000002 /* BremLogicWidgetExtension */ = {
+			isa = PBXGroup;
+			children = (
+				AA2000050000000000000005 /* BremLogicWidget.swift */,
+				AA2000060000000000000006 /* BremLogicWidgetBundle.swift */,
+				AA2000070000000000000007 /* BremLogicWidgetExtension.entitlements */,
+				AA2000080000000000000008 /* Info.plist */,
+			);
+			path = BremLogicWidgetExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -104,10 +174,12 @@
 				504EC3001FED79650016851F /* Sources */,
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
+				AA3000010000000000000001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				AA6000010000000000000001 /* PBXTargetDependency */,
 			);
 			name = BremLogic;
 			packageProductDependencies = (
@@ -116,6 +188,25 @@
 			productName = BremLogic;
 			productReference = 504EC3041FED79650016851F /* BremLogic.app */;
 			productType = "com.apple.product-type.application";
+		};
+		AA5000010000000000000001 /* BremLogicWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA8000030000000000000003 /* Build configuration list for PBXNativeTarget "BremLogicWidgetExtension" */;
+			buildPhases = (
+				AA3000040000000000000004 /* Sources */,
+				AA3000020000000000000002 /* Frameworks */,
+				AA3000030000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BremLogicWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = BremLogicWidgetExtension;
+			productReference = AA2000040000000000000004 /* BremLogicWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -129,6 +220,9 @@
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
+					};
+					AA5000010000000000000001 = {
+						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
@@ -149,6 +243,7 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* BremLogic */,
+				AA5000010000000000000001 /* BremLogicWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -172,6 +267,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA3000030000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -179,11 +281,32 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA1000010000000000000001 /* BremBridgeViewController.swift in Sources */,
+				AA1000030000000000000003 /* BremLogicWidgetShared.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				AA1000020000000000000002 /* WidgetSyncPlugin.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA3000040000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA1000070000000000000007 /* BremLogicWidgetShared.swift in Sources */,
+				AA1000050000000000000005 /* BremLogicWidget.swift in Sources */,
+				AA1000060000000000000006 /* BremLogicWidgetBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AA6000010000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA5000010000000000000001 /* BremLogicWidgetExtension */;
+			targetProxy = AA7000010000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -367,6 +490,62 @@
 			};
 			name = Release;
 		};
+		AA8000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA8000020000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 958DCC732DB07C7200EA8C5F /* release.xcconfig */;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -384,6 +563,15 @@
 			buildConfigurations = (
 				504EC3171FED79650016851F /* Debug */,
 				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA8000030000000000000003 /* Build configuration list for PBXNativeTarget "BremLogicWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA8000010000000000000001 /* Debug */,
+				AA8000020000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

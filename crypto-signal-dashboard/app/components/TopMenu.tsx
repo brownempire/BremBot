@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
@@ -8,12 +8,13 @@ const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
 const MENU_ITEMS: Array<{ href: string; label: string; external?: boolean }> = [
   { href: "/signals-bot?tab=signals", label: "Signals" },
   { href: "/signals-bot?tab=perps", label: "Perps" },
-  { href: "/simulator", label: "Simulator" },
+  { href: "/signals-bot?tab=simulator", label: "Simulator" },
   { href: "/signals-bot?tab=wallet", label: "Wallet" },
 ];
 
 export function TopMenu() {
   const pathname = usePathname();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [currentTab, setCurrentTab] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -28,8 +29,8 @@ export function TopMenu() {
     if (href === "/signals-bot?tab=wallet") {
       return pathname === "/signals-bot" && currentTab === "wallet";
     }
-    if (href === "/simulator") {
-      return pathname === "/simulator";
+    if (href === "/signals-bot?tab=simulator") {
+      return pathname === "/signals-bot" && currentTab === "simulator";
     }
     return pathname === href;
   };
@@ -62,7 +63,7 @@ export function TopMenu() {
     if (typeof window === "undefined") return;
     const nextUrl = new URL(href, window.location.origin);
     if (nextUrl.pathname !== "/signals-bot") {
-      window.location.assign(nextUrl.toString());
+      router.push(`${nextUrl.pathname}${nextUrl.search}`);
       return;
     }
     window.history.pushState({}, "", `${nextUrl.pathname}${nextUrl.search}`);

@@ -1,11 +1,31 @@
 "use client";
 
 import { useEffect } from "react";
+import { App } from "@capacitor/app";
 import {
   isNativeIosRuntime,
   isNativeShellRuntime,
   isStandalonePwaRuntime,
 } from "@/app/lib/nativeShell";
+
+function resolveNativeOpenTarget(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol === "bremlogic:") {
+      const target = url.searchParams.get("target");
+      return target && target.startsWith("/") ? target : null;
+    }
+
+    if ((url.protocol === "https:" || url.protocol === "http:") && /(^|\.)bremlogic\.com$/i.test(url.hostname)) {
+      const target = `${url.pathname}${url.search}${url.hash}`;
+      return target.startsWith("/") ? target : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
 
 export function NativeShellConfigurator() {
   useEffect(() => {
@@ -45,6 +65,33 @@ export function NativeShellConfigurator() {
         // Ignore plugin/bootstrap errors outside the native shell.
       }
     })();
+
+    if (!isNativeIosRuntime()) {
+      return;
+    }
+
+    const navigateFromUrl = (rawUrl: string | null | undefined) => {
+      if (!rawUrl || typeof window === "undefined") return;
+      const target = resolveNativeOpenTarget(rawUrl);
+      if (!target) return;
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (current === target) return;
+      window.location.assign(target);
+    };
+
+    const listener = App.addListener("appUrlOpen", (event) => {
+      navigateFromUrl(event.url);
+    });
+
+    void App.getLaunchUrl()
+      .then((result) => {
+        navigateFromUrl(result?.url);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      void listener.then((handle) => handle.remove()).catch(() => undefined);
+    };
   }, []);
 
   return null;
