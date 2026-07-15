@@ -1131,6 +1131,10 @@ function DashboardPage() {
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
   const activePerpsAutoTradeToken = activePerpsAutoTradeSlot ? getAutoTradeTokenOption(activePerpsAutoTradeSlot.token) : null;
   const latestSignal = signals[0] ?? null;
+  const currentOpenPerp = useMemo(
+    () => readOnlyPerpsSnapshot.positions.find((position) => position.source !== "mock") ?? null,
+    [readOnlyPerpsSnapshot.positions]
+  );
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
   const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
   const remoteSyncWalletAddress =
@@ -4692,6 +4696,15 @@ function DashboardPage() {
         typeof latestSignal?.confidence === "number" && Number.isFinite(latestSignal.confidence)
           ? Number(latestSignal.confidence.toFixed(4))
           : null,
+      openPerpLabel: currentOpenPerp
+        ? `${currentOpenPerp.marketSymbol} ${currentOpenPerp.side.toUpperCase()}`
+        : "No open perps",
+      openPerpDetail: currentOpenPerp
+        ? [
+            currentOpenPerp.positionValue !== null ? formatUsd(currentOpenPerp.positionValue) : null,
+            currentOpenPerp.markPrice !== null ? `Mark ${formatUsd(currentOpenPerp.markPrice)}` : null,
+          ].filter(Boolean).join("  •  ")
+        : "Open the app to connect a live Perps session.",
       walletBalanceUsd:
         typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd)
           ? Number(totalBalanceUsd.toFixed(2))
@@ -4720,16 +4733,25 @@ function DashboardPage() {
         typeof latestSignal?.confidence === "number" && Number.isFinite(latestSignal.confidence)
           ? latestSignal.confidence
           : null,
+      openPerpLabel: currentOpenPerp
+        ? `${currentOpenPerp.marketSymbol} ${currentOpenPerp.side.toUpperCase()}`
+        : "No open perps",
+      openPerpDetail: currentOpenPerp
+        ? [
+            currentOpenPerp.positionValue !== null ? formatUsd(currentOpenPerp.positionValue) : null,
+            currentOpenPerp.markPrice !== null ? `Mark ${formatUsd(currentOpenPerp.markPrice)}` : null,
+          ].filter(Boolean).join("  •  ")
+        : "Open the app to connect a live Perps session.",
       walletBalanceUsd: typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd) ? totalBalanceUsd : null,
       autoTradeStatus,
       perpsAutoTradeStatus,
       perpsSessionState: perpsSessionStateLabel,
       perpsMode: perpsModeLabel,
       perpsExecutionModel: perpsAgentSession?.executionModel ?? "approval-assisted",
-      updatedAt: (latestSignal?.timestamp ?? Date.now()) / 1000,
-      targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals",
+      updatedAt: (currentOpenPerp?.lastUpdated ?? latestSignal?.timestamp ?? Date.now()) / 1000,
+      targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dperps",
     }).catch(() => undefined);
-  }, [autoTradeStatus, latestSignal, perpsAgentSession?.executionModel, perpsAutoTradeStatus, perpsModeLabel, perpsSessionStateLabel, totalBalanceUsd]);
+  }, [autoTradeStatus, currentOpenPerp, latestSignal, perpsAgentSession?.executionModel, perpsAutoTradeStatus, perpsModeLabel, perpsSessionStateLabel, totalBalanceUsd]);
 
   function getSectionLayout(id: DashboardSectionId) {
     return dashboardLayout.find((section) => section.id === id) ??

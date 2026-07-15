@@ -6,6 +6,8 @@ export type BremLogicWidgetSnapshotPayload = {
   latestSignalSummary?: string | null;
   latestSignalDirection?: string | null;
   latestSignalConfidence?: number | null;
+  openPerpLabel?: string | null;
+  openPerpDetail?: string | null;
   walletBalanceUsd?: number | null;
   autoTradeStatus?: string | null;
   perpsAutoTradeStatus?: string | null;

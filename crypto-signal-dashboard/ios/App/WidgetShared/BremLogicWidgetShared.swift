@@ -9,6 +9,8 @@ struct BremLogicWidgetSnapshot: Codable {
     var latestSignalSummary: String?
     var latestSignalDirection: String?
     var latestSignalConfidence: Double?
+    var openPerpLabel: String?
+    var openPerpDetail: String?
     var walletBalanceUsd: Double?
     var autoTradeStatus: String?
     var perpsAutoTradeStatus: String?
@@ -24,6 +26,8 @@ struct BremLogicWidgetSnapshot: Codable {
         latestSignalSummary: "Open the app to sync your latest signal snapshot.",
         latestSignalDirection: nil,
         latestSignalConfidence: nil,
+        openPerpLabel: "Open Perps",
+        openPerpDetail: "No open perps",
         walletBalanceUsd: nil,
         autoTradeStatus: "Auto-trade is off",
         perpsAutoTradeStatus: "Perps auto-trade is off",
