@@ -1118,7 +1118,6 @@ function DashboardPage() {
   const approvalExecutionStartedRef = useRef<string | null>(null);
   const activeApprovalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteAuthDisconnectTimeoutRef = useRef<number | null>(null);
-  const lastWidgetSyncAtRef = useRef(0);
   const lastWidgetSyncSignatureRef = useRef("");
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
@@ -4688,6 +4687,17 @@ function DashboardPage() {
       return;
     }
 
+    const openPerpPnlUsd =
+      typeof currentOpenPerp?.unrealizedPnl === "number" && Number.isFinite(currentOpenPerp.unrealizedPnl)
+        ? Number(currentOpenPerp.unrealizedPnl.toFixed(2))
+        : null;
+    const openPerpPnlPercent =
+      typeof openPerpPnlUsd === "number"
+      && typeof currentOpenPerp?.collateralValue === "number"
+      && Number.isFinite(currentOpenPerp.collateralValue)
+      && currentOpenPerp.collateralValue > 0
+        ? Number(((openPerpPnlUsd / currentOpenPerp.collateralValue) * 100).toFixed(2))
+        : null;
     const nextSignature = JSON.stringify({
       latestSignalSymbol: latestSignal?.symbol ?? null,
       latestSignalSummary: latestSignal?.summary ?? null,
@@ -4705,6 +4715,8 @@ function DashboardPage() {
             currentOpenPerp.markPrice !== null ? `Mark ${formatUsd(currentOpenPerp.markPrice)}` : null,
           ].filter(Boolean).join("  •  ")
         : "Open the app to connect a live Perps session.",
+      openPerpPnlUsd,
+      openPerpPnlPercent,
       walletBalanceUsd:
         typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd)
           ? Number(totalBalanceUsd.toFixed(2))
@@ -4715,13 +4727,10 @@ function DashboardPage() {
       perpsMode: perpsModeLabel,
       perpsExecutionModel: perpsAgentSession?.executionModel ?? "approval-assisted",
     });
-    const now = Date.now();
-    const recentlySynced = now - lastWidgetSyncAtRef.current < 5 * 60 * 1000;
-    if (recentlySynced && nextSignature === lastWidgetSyncSignatureRef.current) {
+    if (nextSignature === lastWidgetSyncSignatureRef.current) {
       return;
     }
 
-    lastWidgetSyncAtRef.current = now;
     lastWidgetSyncSignatureRef.current = nextSignature;
 
     void syncWidgetSnapshot({
@@ -4742,6 +4751,8 @@ function DashboardPage() {
             currentOpenPerp.markPrice !== null ? `Mark ${formatUsd(currentOpenPerp.markPrice)}` : null,
           ].filter(Boolean).join("  •  ")
         : "Open the app to connect a live Perps session.",
+      openPerpPnlUsd,
+      openPerpPnlPercent,
       walletBalanceUsd: typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd) ? totalBalanceUsd : null,
       autoTradeStatus,
       perpsAutoTradeStatus,

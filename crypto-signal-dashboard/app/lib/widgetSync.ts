@@ -8,6 +8,8 @@ export type BremLogicWidgetSnapshotPayload = {
   latestSignalConfidence?: number | null;
   openPerpLabel?: string | null;
   openPerpDetail?: string | null;
+  openPerpPnlUsd?: number | null;
+  openPerpPnlPercent?: number | null;
   walletBalanceUsd?: number | null;
   autoTradeStatus?: string | null;
   perpsAutoTradeStatus?: string | null;
@@ -44,6 +46,14 @@ export async function syncWidgetSnapshot(snapshot: BremLogicWidgetSnapshotPayloa
   }
 
   await WidgetSync.saveSnapshot(snapshot);
+}
+
+export async function reloadWidgetTimelines() {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "ios") {
+    return;
+  }
+
+  await WidgetSync.reloadTimelines();
 }
 
 export async function readWidgetSnapshot() {

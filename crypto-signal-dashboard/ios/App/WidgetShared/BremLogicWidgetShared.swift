@@ -11,6 +11,8 @@ struct BremLogicWidgetSnapshot: Codable {
     var latestSignalConfidence: Double?
     var openPerpLabel: String?
     var openPerpDetail: String?
+    var openPerpPnlUsd: Double?
+    var openPerpPnlPercent: Double?
     var walletBalanceUsd: Double?
     var autoTradeStatus: String?
     var perpsAutoTradeStatus: String?
@@ -28,6 +30,8 @@ struct BremLogicWidgetSnapshot: Codable {
         latestSignalConfidence: nil,
         openPerpLabel: "Open Perps",
         openPerpDetail: "No open perps",
+        openPerpPnlUsd: nil,
+        openPerpPnlPercent: nil,
         walletBalanceUsd: nil,
         autoTradeStatus: "Auto-trade is off",
         perpsAutoTradeStatus: "Perps auto-trade is off",
@@ -41,7 +45,7 @@ struct BremLogicWidgetSnapshot: Codable {
 
 enum BremLogicWidgetStore {
     static func sharedDefaults() -> UserDefaults? {
-        UserDefaults(suiteName: BremLogicWidgetAppGroup) ?? .standard
+        UserDefaults(suiteName: BremLogicWidgetAppGroup)
     }
 
     static func load() -> BremLogicWidgetSnapshot {
@@ -57,7 +61,14 @@ enum BremLogicWidgetStore {
     }
 
     static func save(_ snapshot: BremLogicWidgetSnapshot) throws {
-        let defaults = sharedDefaults() ?? .standard
+        guard let defaults = sharedDefaults() else {
+            throw NSError(
+                domain: "BremLogicWidgetStore",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Shared app group is unavailable."]
+            )
+        }
+
         let data = try JSONEncoder().encode(snapshot)
         defaults.set(data, forKey: BremLogicWidgetSnapshotDefaultsKey)
     }

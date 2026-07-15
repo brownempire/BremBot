@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WidgetKit
 
 struct BremLogicWidgetEntry: TimelineEntry {
@@ -32,6 +33,34 @@ struct BremLogicWidgetEntryView: View {
     private var balanceLabel: String? {
         guard let balance = entry.snapshot.walletBalanceUsd else { return nil }
         return String(format: "$%.2f", balance)
+    }
+
+    private var pnlLabel: String? {
+        guard let pnl = entry.snapshot.openPerpPnlUsd else { return nil }
+        let prefix = pnl >= 0 ? "+" : "-"
+        return "\(prefix)$\(String(format: "%.2f", abs(pnl)))"
+    }
+
+    private var pnlPercentLabel: String? {
+        guard let pnlPercent = entry.snapshot.openPerpPnlPercent else { return nil }
+        let prefix = pnlPercent >= 0 ? "+" : "-"
+        return "\(prefix)\(String(format: "%.2f", abs(pnlPercent)))%"
+    }
+
+    private var pnlColor: Color {
+        guard let pnl = entry.snapshot.openPerpPnlUsd else {
+            return .white.opacity(0.72)
+        }
+
+        if pnl > 0 {
+            return Color(red: 0.45, green: 0.92, blue: 0.62)
+        }
+
+        if pnl < 0 {
+            return Color(red: 1.0, green: 0.45, blue: 0.45)
+        }
+
+        return .white.opacity(0.72)
     }
 
     private var openPerpLabel: String {
@@ -71,14 +100,27 @@ struct BremLogicWidgetEntryView: View {
         }
     }
 
+    @ViewBuilder
+    private var brandLogo: some View {
+        if let image = UIImage(named: "BremLogicLogo")
+            ?? BremLogicWidgetAssetLoader.logoImage() {
+            Image(uiImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 116, height: 38, alignment: .leading)
+        } else {
+            Text("BremLogic")
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+        }
+    }
+
     var body: some View {
         applyWidgetBackground(
             to: VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
-                    Image("BremLogicLogo")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 116, height: 38, alignment: .leading)
+                    brandLogo
                     Spacer()
                     Text(updatedLabel)
                         .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -98,6 +140,12 @@ struct BremLogicWidgetEntryView: View {
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.78))
                         .lineLimit(2)
+                    if let pnlLabel {
+                        Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  •  "))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(pnlColor)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -107,9 +155,19 @@ struct BremLogicWidgetEntryView: View {
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.62))
                     Spacer()
-                    Text(balanceLabel ?? "Open app to sync")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                    HStack(spacing: 10) {
+                        Text(balanceLabel ?? "Open app to sync")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        if #available(iOS 17.0, *) {
+                            Button(intent: BremLogicWidgetRefreshIntent()) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(brandPrimary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
                 .padding(.top, 8)
                 .overlay(alignment: .top) {
@@ -134,5 +192,15 @@ struct BremLogicWidget: Widget {
         .configurationDisplayName("BremLogic Signals")
         .description("Shows the latest BremLogic signal snapshot and wallet summary.")
         .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
+enum BremLogicWidgetAssetLoader {
+    static func logoImage() -> UIImage? {
+        guard let path = Bundle.main.path(forResource: "BremLogicLogo", ofType: "png") else {
+            return nil
+        }
+
+        return UIImage(contentsOfFile: path)
     }
 }
