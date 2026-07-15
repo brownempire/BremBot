@@ -25,6 +25,10 @@ struct BremLogicWidgetProvider: TimelineProvider {
 struct BremLogicWidgetEntryView: View {
     let entry: BremLogicWidgetEntry
 
+    private var brandPrimary: Color {
+        Color(red: 0.57, green: 0.94, blue: 0.78)
+    }
+
     private var confidenceLabel: String? {
         guard let confidence = entry.snapshot.latestSignalConfidence else { return nil }
         return String(format: "%.0f%% confidence", confidence * 100)
@@ -48,6 +52,10 @@ struct BremLogicWidgetEntryView: View {
         guard let model = entry.snapshot.perpsExecutionModel?.trimmingCharacters(in: .whitespacesAndNewlines),
               !model.isEmpty else { return nil }
         return "Perps \(model)"
+    }
+
+    private var signalSymbolLabel: String {
+        entry.snapshot.latestSignalSymbol ?? "No live signal"
     }
 
     private var updatedLabel: String {
@@ -80,67 +88,99 @@ struct BremLogicWidgetEntryView: View {
     var body: some View {
         applyWidgetBackground(
             to: VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.snapshot.title)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.9))
-                    Text(entry.snapshot.latestSignalSymbol ?? "No live signal")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-                Spacer()
-                if let direction = entry.snapshot.latestSignalDirection, !direction.isEmpty {
-                    Text(direction.uppercased())
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.12))
-                        .clipShape(Capsule())
-                        .foregroundStyle(.white.opacity(0.95))
-                }
-            }
-
-            Text(entry.snapshot.latestSignalSummary ?? "Open the app to sync your latest signals.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.82))
-                .lineLimit(3)
-
-            Spacer(minLength: 0)
-
-            HStack(alignment: .bottom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let confidenceLabel {
-                        Text(confidenceLabel)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.mint)
+                HStack(alignment: .center, spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .fill(brandPrimary.opacity(0.16))
+                            .frame(width: 28, height: 28)
+                        Text("BL")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(brandPrimary)
                     }
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("BremLogic")
+                            .font(.system(size: 13, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text("Signals Widget")
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.62))
+                    }
+
+                    Spacer()
+
                     if let balanceLabel {
-                        Text("Wallet \(balanceLabel)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.75))
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text("Wallet")
+                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.58))
+                            Text(balanceLabel)
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
                     }
                 }
-                Spacer()
-                Text(updatedLabel)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
 
-            if let sessionLabel {
-                Text(sessionLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.76))
-                    .lineLimit(1)
-            }
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(signalSymbolLabel)
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text(entry.snapshot.latestSignalSummary ?? "Open the app to sync your latest signals.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(3)
+                    }
+                    Spacer()
+                    if let direction = entry.snapshot.latestSignalDirection, !direction.isEmpty {
+                        Text(direction.uppercased())
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(brandPrimary.opacity(0.18))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.white.opacity(0.95))
+                    }
+                }
 
-            if let executionLabel {
-                Text(executionLabel)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.64))
-                    .lineLimit(1)
+                Spacer(minLength: 0)
+
+                HStack(alignment: .bottom, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if let confidenceLabel {
+                            Text(confidenceLabel)
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(brandPrimary)
+                        }
+                        if let sessionLabel {
+                            Text(sessionLabel)
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.76))
+                                .lineLimit(1)
+                        }
+                        if let executionLabel {
+                            Text(executionLabel)
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.64))
+                                .lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                    if balanceLabel == nil {
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text("Wallet")
+                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.58))
+                            Text("Sync app")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.9))
+                        }
+                    }
+                    Text(updatedLabel)
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
             }
-        }
         )
         .padding(14)
         .widgetURL(URL(string: entry.snapshot.targetURL))
