@@ -12,6 +12,9 @@ struct BremLogicWidgetSnapshot: Codable {
     var walletBalanceUsd: Double?
     var autoTradeStatus: String?
     var perpsAutoTradeStatus: String?
+    var perpsSessionState: String?
+    var perpsMode: String?
+    var perpsExecutionModel: String?
     var updatedAt: Double
     var targetURL: String
 
@@ -24,6 +27,9 @@ struct BremLogicWidgetSnapshot: Codable {
         walletBalanceUsd: nil,
         autoTradeStatus: "Auto-trade is off",
         perpsAutoTradeStatus: "Perps auto-trade is off",
+        perpsSessionState: "Clocked Out",
+        perpsMode: "Paper mode",
+        perpsExecutionModel: "approval-assisted",
         updatedAt: Date().timeIntervalSince1970,
         targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals"
     )

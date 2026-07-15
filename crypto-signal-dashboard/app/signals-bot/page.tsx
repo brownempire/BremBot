@@ -4698,6 +4698,9 @@ function DashboardPage() {
           : null,
       autoTradeStatus,
       perpsAutoTradeStatus,
+      perpsSessionState: perpsSessionStateLabel,
+      perpsMode: perpsModeLabel,
+      perpsExecutionModel: perpsAgentSession?.executionModel ?? "approval-assisted",
     });
     const now = Date.now();
     const recentlySynced = now - lastWidgetSyncAtRef.current < 5 * 60 * 1000;
@@ -4720,10 +4723,13 @@ function DashboardPage() {
       walletBalanceUsd: typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd) ? totalBalanceUsd : null,
       autoTradeStatus,
       perpsAutoTradeStatus,
-      updatedAt: Date.now() / 1000,
+      perpsSessionState: perpsSessionStateLabel,
+      perpsMode: perpsModeLabel,
+      perpsExecutionModel: perpsAgentSession?.executionModel ?? "approval-assisted",
+      updatedAt: (latestSignal?.timestamp ?? Date.now()) / 1000,
       targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals",
     }).catch(() => undefined);
-  }, [autoTradeStatus, latestSignal, perpsAutoTradeStatus, totalBalanceUsd]);
+  }, [autoTradeStatus, latestSignal, perpsAgentSession?.executionModel, perpsAutoTradeStatus, perpsModeLabel, perpsSessionStateLabel, totalBalanceUsd]);
 
   function getSectionLayout(id: DashboardSectionId) {
     return dashboardLayout.find((section) => section.id === id) ??

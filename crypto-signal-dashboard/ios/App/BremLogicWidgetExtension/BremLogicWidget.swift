@@ -35,71 +35,114 @@ struct BremLogicWidgetEntryView: View {
         return String(format: "$%.2f", balance)
     }
 
+    private var sessionLabel: String? {
+        guard let state = entry.snapshot.perpsSessionState, !state.isEmpty else { return nil }
+        let mode = entry.snapshot.perpsMode?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let mode, !mode.isEmpty {
+            return "\(state) · \(mode)"
+        }
+        return state
+    }
+
+    private var executionLabel: String? {
+        guard let model = entry.snapshot.perpsExecutionModel?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !model.isEmpty else { return nil }
+        return "Perps \(model)"
+    }
+
     private var updatedLabel: String {
-        entry.date.formatted(date: .omitted, time: .shortened)
+        Date(timeIntervalSince1970: entry.snapshot.updatedAt).formatted(date: .omitted, time: .shortened)
+    }
+
+    private var widgetBackground: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.07, green: 0.09, blue: 0.15),
+                Color(red: 0.03, green: 0.04, blue: 0.08),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    @ViewBuilder
+    private func applyWidgetBackground<Content: View>(to content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.containerBackground(widgetBackground, for: .widget)
+        } else {
+            ZStack {
+                widgetBackground
+                content
+            }
+        }
     }
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.07, green: 0.09, blue: 0.15),
-                    Color(red: 0.03, green: 0.04, blue: 0.08),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(entry.snapshot.title)
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.9))
-                        Text(entry.snapshot.latestSignalSymbol ?? "No live signal")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                    }
-                    Spacer()
-                    if let direction = entry.snapshot.latestSignalDirection, !direction.isEmpty {
-                        Text(direction.uppercased())
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Capsule())
-                            .foregroundStyle(.white.opacity(0.95))
-                    }
+        applyWidgetBackground(
+            to: VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.snapshot.title)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.9))
+                    Text(entry.snapshot.latestSignalSymbol ?? "No live signal")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
                 }
-
-                Text(entry.snapshot.latestSignalSummary ?? "Open the app to sync your latest signals.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.82))
-                    .lineLimit(3)
-
-                Spacer(minLength: 0)
-
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        if let confidenceLabel {
-                            Text(confidenceLabel)
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.mint)
-                        }
-                        if let balanceLabel {
-                            Text("Wallet \(balanceLabel)")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.75))
-                        }
-                    }
-                    Spacer()
-                    Text(updatedLabel)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                if let direction = entry.snapshot.latestSignalDirection, !direction.isEmpty {
+                    Text(direction.uppercased())
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.12))
+                        .clipShape(Capsule())
+                        .foregroundStyle(.white.opacity(0.95))
                 }
             }
-            .padding(14)
+
+            Text(entry.snapshot.latestSignalSummary ?? "Open the app to sync your latest signals.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.82))
+                .lineLimit(3)
+
+            Spacer(minLength: 0)
+
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let confidenceLabel {
+                        Text(confidenceLabel)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.mint)
+                    }
+                    if let balanceLabel {
+                        Text("Wallet \(balanceLabel)")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+                Spacer()
+                Text(updatedLabel)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+
+            if let sessionLabel {
+                Text(sessionLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.76))
+                    .lineLimit(1)
+            }
+
+            if let executionLabel {
+                Text(executionLabel)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.64))
+                    .lineLimit(1)
+            }
         }
+        )
+        .padding(14)
         .widgetURL(URL(string: entry.snapshot.targetURL))
     }
 }

@@ -9,6 +9,9 @@ export type BremLogicWidgetSnapshotPayload = {
   walletBalanceUsd?: number | null;
   autoTradeStatus?: string | null;
   perpsAutoTradeStatus?: string | null;
+  perpsSessionState?: string | null;
+  perpsMode?: string | null;
+  perpsExecutionModel?: string | null;
   updatedAt: number;
   targetURL: string;
 };
