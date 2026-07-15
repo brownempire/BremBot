@@ -45,7 +45,7 @@ struct BremLogicWidgetSnapshot: Codable {
 
 enum BremLogicWidgetStore {
     static func sharedDefaults() -> UserDefaults? {
-        UserDefaults(suiteName: BremLogicWidgetAppGroup)
+        UserDefaults(suiteName: BremLogicWidgetAppGroup) ?? .standard
     }
 
     static func load() -> BremLogicWidgetSnapshot {
@@ -61,14 +61,7 @@ enum BremLogicWidgetStore {
     }
 
     static func save(_ snapshot: BremLogicWidgetSnapshot) throws {
-        guard let defaults = sharedDefaults() else {
-            throw NSError(
-                domain: "BremLogicWidgetStore",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Shared app group is unavailable."]
-            )
-        }
-
+        let defaults = sharedDefaults() ?? .standard
         let data = try JSONEncoder().encode(snapshot)
         defaults.set(data, forKey: BremLogicWidgetSnapshotDefaultsKey)
     }
