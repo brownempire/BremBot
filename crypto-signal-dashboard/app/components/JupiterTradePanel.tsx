@@ -9,7 +9,7 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUPITER_SWAP_TRIGGER_REFERRAL_ACCOUNT = "861hxXDmQiwY8Undw5VCvGSEP1LQxyzjthWDvJRjagUg";
 // Ultra dashboard referral account captured for a future wallet migration to the Ultra API:
 // 12PJUAzwcBKf1qgXkXTJpZXJTsTS2GhozyQPSSuhY5Th
-const DEFAULT_JUPITER_REFERRAL_FEE_BPS = 25;
+const DEFAULT_JUPITER_REFERRAL_FEE_BPS = 50;
 
 export type JupiterTradeRecord = {
   txid: string;
