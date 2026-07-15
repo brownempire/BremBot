@@ -6,6 +6,10 @@ import "@jup-ag/plugin/css";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const JUPITER_SWAP_TRIGGER_REFERRAL_ACCOUNT = "861hxXDmQiwY8Undw5VCvGSEP1LQxyzjthWDvJRjagUg";
+// Ultra dashboard referral account captured for a future wallet migration to the Ultra API:
+// 12PJUAzwcBKf1qgXkXTJpZXJTsTS2GhozyQPSSuhY5Th
+const DEFAULT_JUPITER_REFERRAL_FEE_BPS = 25;
 
 export type JupiterTradeRecord = {
   txid: string;
@@ -29,6 +33,11 @@ function getInitialOutputMint(defaultInputMint: string) {
   return defaultInputMint === USDC_MINT ? SOL_MINT : USDC_MINT;
 }
 
+function getJupiterReferralFeeBps() {
+  const value = Number(process.env.NEXT_PUBLIC_JUPITER_REFERRAL_FEE_BPS ?? DEFAULT_JUPITER_REFERRAL_FEE_BPS);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
 export function JupiterTradePanel({
   onTradeSuccess,
   defaultInputMint = SOL_MINT,
@@ -41,6 +50,7 @@ export function JupiterTradePanel({
   const integratedTargetIdRef = useRef(integratedTargetId);
   const passthroughWalletContextStateRef = useRef(passthroughWalletContextState);
   const initialOutputMint = useMemo(() => getInitialOutputMint(defaultInputMint), [defaultInputMint]);
+  const referralFeeBps = useMemo(() => getJupiterReferralFeeBps(), []);
 
   useEffect(() => {
     onTradeSuccessRef.current = onTradeSuccess;
@@ -83,6 +93,8 @@ export function JupiterTradePanel({
             swapMode: "ExactInOrOut",
             initialInputMint: defaultInputMint,
             initialOutputMint,
+            referralAccount: JUPITER_SWAP_TRIGGER_REFERRAL_ACCOUNT,
+            referralFee: referralFeeBps,
           },
           branding: {
             logoUri:
@@ -112,7 +124,7 @@ export function JupiterTradePanel({
         })
         .catch(() => undefined);
     };
-  }, [defaultInputMint, initialOutputMint, integratedTargetId]);
+  }, [defaultInputMint, initialOutputMint, integratedTargetId, referralFeeBps]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
