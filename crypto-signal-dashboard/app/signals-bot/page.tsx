@@ -1118,6 +1118,8 @@ function DashboardPage() {
   const approvalExecutionStartedRef = useRef<string | null>(null);
   const activeApprovalTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const remoteAuthDisconnectTimeoutRef = useRef<number | null>(null);
+  const lastWidgetSyncAtRef = useRef(0);
+  const lastWidgetSyncSignatureRef = useRef("");
   const activeAutoTradeSlot = useMemo(
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.activeSlotId) ?? null,
     [autoTradeSettings.activeSlotId, autoTradeSettings.slots]
@@ -4681,6 +4683,30 @@ function DashboardPage() {
     if (!isNativeIosRuntime()) {
       return;
     }
+
+    const nextSignature = JSON.stringify({
+      latestSignalSymbol: latestSignal?.symbol ?? null,
+      latestSignalSummary: latestSignal?.summary ?? null,
+      latestSignalDirection: latestSignal?.direction ?? null,
+      latestSignalConfidence:
+        typeof latestSignal?.confidence === "number" && Number.isFinite(latestSignal.confidence)
+          ? Number(latestSignal.confidence.toFixed(4))
+          : null,
+      walletBalanceUsd:
+        typeof totalBalanceUsd === "number" && Number.isFinite(totalBalanceUsd)
+          ? Number(totalBalanceUsd.toFixed(2))
+          : null,
+      autoTradeStatus,
+      perpsAutoTradeStatus,
+    });
+    const now = Date.now();
+    const recentlySynced = now - lastWidgetSyncAtRef.current < 5 * 60 * 1000;
+    if (recentlySynced && nextSignature === lastWidgetSyncSignatureRef.current) {
+      return;
+    }
+
+    lastWidgetSyncAtRef.current = now;
+    lastWidgetSyncSignatureRef.current = nextSignature;
 
     void syncWidgetSnapshot({
       title: "BremLogic",

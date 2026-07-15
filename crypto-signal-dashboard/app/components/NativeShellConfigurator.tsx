@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { App } from "@capacitor/app";
+import { useRouter } from "next/navigation";
 import {
   isNativeIosRuntime,
   isNativeShellRuntime,
@@ -28,6 +29,8 @@ function resolveNativeOpenTarget(rawUrl: string) {
 }
 
 export function NativeShellConfigurator() {
+  const router = useRouter();
+
   useEffect(() => {
     if (typeof document === "undefined") {
       return;
@@ -76,7 +79,7 @@ export function NativeShellConfigurator() {
       if (!target) return;
       const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       if (current === target) return;
-      window.location.assign(target);
+      router.replace(target);
     };
 
     const listener = App.addListener("appUrlOpen", (event) => {
@@ -92,7 +95,7 @@ export function NativeShellConfigurator() {
     return () => {
       void listener.then((handle) => handle.remove()).catch(() => undefined);
     };
-  }, []);
+  }, [router]);
 
   return null;
 }
