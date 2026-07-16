@@ -12,6 +12,7 @@ const walletAddress = "owner-wallet";
 function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAutomationConfig {
   return {
     walletAddress,
+    revision: 1,
     settings: {
       walletPercent: 25,
       walletAllocationMode: "percent",

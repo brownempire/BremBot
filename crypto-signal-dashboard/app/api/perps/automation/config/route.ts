@@ -1,6 +1,7 @@
-import { perpsAutomationConfigInputSchema } from "@/lib/perps/automationConfig";
+import { perpsAutomationConfigWriteSchema } from "@/lib/perps/automationConfig";
 import {
   getPerpsAutomationConfig,
+  PerpsAutomationConfigConflictError,
   savePerpsAutomationConfig,
 } from "@/lib/perps/automationConfigStore";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
@@ -30,7 +31,7 @@ export async function PUT(request: Request) {
   }
 
   const payload = await request.json().catch(() => null);
-  const parsed = perpsAutomationConfigInputSchema.safeParse(payload);
+  const parsed = perpsAutomationConfigWriteSchema.safeParse(payload);
   if (!parsed.success) {
     return Response.json({ error: "Invalid autonomous Perps configuration.", detail: parsed.error.message }, { status: 400 });
   }
@@ -41,9 +42,15 @@ export async function PUT(request: Request) {
       settings: parsed.data.settings,
       params: parsed.data.params,
       updatedAt: new Date().toISOString(),
-    });
+    }, parsed.data.expectedRevision);
     return Response.json({ config });
   } catch (error) {
+    if (error instanceof PerpsAutomationConfigConflictError) {
+      return Response.json({
+        error: error.message,
+        config: error.current,
+      }, { status: 409 });
+    }
     return Response.json({
       error: error instanceof Error ? error.message : "Unable to save autonomous Perps configuration.",
     }, { status: 503 });

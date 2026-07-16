@@ -3,6 +3,41 @@ import { getRedisClient } from "@/lib/server/redis";
 
 const REDIS_KEY = "brembot:perps:automation-configs";
 
+const SAVE_CONFIG_SCRIPT = `
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+local expectedRevision = tonumber(ARGV[2])
+local currentRevision = 0
+
+if current then
+  local ok, decoded = pcall(cjson.decode, current)
+  if ok then
+    currentRevision = tonumber(decoded.revision) or 1
+  else
+    currentRevision = 1
+  end
+end
+
+if currentRevision ~= expectedRevision then
+  return {0, current or ''}
+end
+
+local nextConfig = cjson.decode(ARGV[3])
+nextConfig.revision = currentRevision + 1
+local encoded = cjson.encode(nextConfig)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return {1, encoded}
+`;
+
+export class PerpsAutomationConfigConflictError extends Error {
+  current: PerpsAutomationConfig | null;
+
+  constructor(current: PerpsAutomationConfig | null) {
+    super("The wallet automation configuration changed on another device.");
+    this.name = "PerpsAutomationConfigConflictError";
+    this.current = current;
+  }
+}
+
 async function requireRedis() {
   const redis = await getRedisClient();
   if (!redis) {
@@ -10,7 +45,7 @@ async function requireRedis() {
   }
   return redis;
 }
-function parseConfig(value: string | null) {
+export function parsePerpsAutomationConfig(value: string | null) {
   if (!value) return null;
   try {
     const parsed = perpsAutomationConfigSchema.safeParse(JSON.parse(value));
@@ -22,23 +57,37 @@ function parseConfig(value: string | null) {
 
 export async function getPerpsAutomationConfig(walletAddress: string) {
   const redis = await requireRedis();
-  return parseConfig(await redis.hGet(REDIS_KEY, walletAddress));
+  return parsePerpsAutomationConfig(await redis.hGet(REDIS_KEY, walletAddress));
 }
 
 export async function listPerpsAutomationConfigs() {
   const redis = await requireRedis();
   const entries = await redis.hVals(REDIS_KEY);
   return entries.flatMap((entry) => {
-    const parsed = parseConfig(entry);
+    const parsed = parsePerpsAutomationConfig(entry);
     return parsed ? [parsed] : [];
   });
 }
 
-export async function savePerpsAutomationConfig(config: PerpsAutomationConfig) {
-  const parsed = perpsAutomationConfigSchema.parse(config);
+export async function savePerpsAutomationConfig(
+  config: Omit<PerpsAutomationConfig, "revision">,
+  expectedRevision: number
+) {
+  const parsed = perpsAutomationConfigSchema.parse({ ...config, revision: 1 });
   const redis = await requireRedis();
-  await redis.hSet(REDIS_KEY, parsed.walletAddress, JSON.stringify(parsed));
-  return parsed;
+  const result = await redis.eval(SAVE_CONFIG_SCRIPT, {
+    keys: [REDIS_KEY],
+    arguments: [parsed.walletAddress, String(expectedRevision), JSON.stringify(parsed)],
+  });
+  const [saved, raw] = Array.isArray(result) ? result : [];
+  const savedFlag = Number(saved);
+  const serialized = typeof raw === "string" ? raw : Buffer.isBuffer(raw) ? raw.toString("utf8") : "";
+  if (savedFlag !== 1) {
+    throw new PerpsAutomationConfigConflictError(parsePerpsAutomationConfig(serialized));
+  }
+  const next = parsePerpsAutomationConfig(serialized);
+  if (!next) throw new Error("Redis returned an invalid autonomous Perps configuration.");
+  return next;
 }
 
 export async function deletePerpsAutomationConfig(walletAddress: string) {

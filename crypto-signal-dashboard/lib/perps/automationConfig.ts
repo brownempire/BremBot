@@ -37,13 +37,19 @@ export const perpsAutomationConfigInputSchema = z.object({
   params: signalParamsSchema,
 });
 
+export const perpsAutomationConfigWriteSchema = perpsAutomationConfigInputSchema.extend({
+  expectedRevision: z.number().int().min(0),
+});
+
 export const perpsAutomationConfigSchema = perpsAutomationConfigInputSchema.extend({
   walletAddress: z.string().trim().min(1),
+  revision: z.number().int().positive().default(1),
   updatedAt: z.string().datetime(),
 });
 
 export type PerpsAutomationSettings = z.infer<typeof perpsAutomationSettingsSchema>;
 export type PerpsAutomationConfigInput = z.infer<typeof perpsAutomationConfigInputSchema>;
+export type PerpsAutomationConfigWrite = z.infer<typeof perpsAutomationConfigWriteSchema>;
 export type PerpsAutomationConfig = z.infer<typeof perpsAutomationConfigSchema>;
 export type AutomationToken = z.infer<typeof automationTokenSchema>;
 

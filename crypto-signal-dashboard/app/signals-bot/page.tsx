@@ -50,6 +50,7 @@ const LIVE_PRICE_REFRESH_MS = 15_000;
 const LIVE_PRICE_MAX_BACKOFF_MS = 120_000;
 const WALLET_PORTFOLIO_REFRESH_MS = 120_000;
 const PERPS_HEARTBEAT_REFRESH_MS = 60_000;
+const AUTOMATION_CONFIG_REFRESH_MS = 30_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
@@ -146,6 +147,14 @@ type AutoTradeSettings = {
   disableTpLock: boolean;
 };
 
+type AutomationConfigSyncState = {
+  walletAddress: string | null;
+  revision: number;
+  updatedAt: string | null;
+  status: "idle" | "loading" | "ready" | "saving" | "synced" | "conflict" | "error";
+  message: string;
+};
+
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   walletPercent: 25,
   walletAllocationMode: "percent",
@@ -167,6 +176,18 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   mode: "all",
   disableTpLock: false,
 };
+
+function walletParamsStorageKey(walletAddress: string) {
+  return `${PARAMS_STORAGE_KEY}:${walletAddress}`;
+}
+
+function walletAutoTradeSettingsStorageKey(walletAddress: string) {
+  return `${AUTO_TRADE_SETTINGS_STORAGE_KEY}:${walletAddress}`;
+}
+
+function serializeAutomationConfig(settings: AutoTradeSettings, signalParams: UserParams) {
+  return JSON.stringify({ settings, params: signalParams });
+}
 
 const PERPS_AUTO_TRADE_APPROVAL_TIMEOUT_MS = 60_000;
 const AUTO_TRADE_ERROR_AUTO_RESET_MS = 20_000;
@@ -1094,7 +1115,13 @@ function DashboardPage() {
   const [nativeShell, setNativeShell] = useState(false);
   const [standalonePwa, setStandalonePwa] = useState(false);
   const [localAutomationSettingsLoaded, setLocalAutomationSettingsLoaded] = useState(false);
-  const [remoteAutomationConfigWallet, setRemoteAutomationConfigWallet] = useState<string | null>(null);
+  const [automationConfigSync, setAutomationConfigSync] = useState<AutomationConfigSyncState>({
+    walletAddress: null,
+    revision: 0,
+    updatedAt: null,
+    status: "idle",
+    message: "Authenticate a wallet to sync master controls.",
+  });
   const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
   const resizeStateRef = useRef<{
@@ -1106,6 +1133,10 @@ function DashboardPage() {
   } | null>(null);
   const autoTradeBusyRef = useRef(false);
   const perpsAutoTradeBusyRef = useRef(false);
+  const autoTradeSettingsRef = useRef(autoTradeSettings);
+  const paramsRef = useRef(params);
+  const automationConfigSyncRef = useRef(automationConfigSync);
+  const syncedAutomationSnapshotRef = useRef<string | null>(null);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
   const readOnlyPerpsSnapshotRef = useRef<JupiterPerpsWidgetSnapshot>({
     agentAvailableUsdc: null,
@@ -1153,6 +1184,9 @@ function DashboardPage() {
     remoteAuthSource === "phantom"
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
+  const automationConfigSyncLabel = automationConfigSync.walletAddress
+    ? `${automationConfigSync.message} · ${shortAddress(automationConfigSync.walletAddress)}${automationConfigSync.revision > 0 ? ` · revision ${automationConfigSync.revision}` : ""}${automationConfigSync.updatedAt ? ` · ${new Date(automationConfigSync.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
+    : automationConfigSync.message;
   const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
   const perpsWalletConnected = Boolean(jupiterPerpsController?.connected || wallet.connected);
   const perpsConnectionLabel: "Disconnected" | "Connected" = perpsWalletConnected ? "Connected" : "Disconnected";
@@ -3390,63 +3424,240 @@ function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    autoTradeSettingsRef.current = autoTradeSettings;
+  }, [autoTradeSettings]);
+
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
+
+  useEffect(() => {
+    automationConfigSyncRef.current = automationConfigSync;
+  }, [automationConfigSync]);
+
+  const applyRemoteAutomationConfig = useCallback((
+    config: PerpsAutomationConfig,
+    message: string,
+    status: AutomationConfigSyncState["status"] = "synced"
+  ) => {
+    const nextSettings = config.settings as AutoTradeSettings;
+    const snapshot = serializeAutomationConfig(nextSettings, config.params);
+    autoTradeSettingsRef.current = nextSettings;
+    paramsRef.current = config.params;
+    syncedAutomationSnapshotRef.current = snapshot;
+    setAutoTradeSettings(nextSettings);
+    setParams(config.params);
+    setAutomationConfigSync({
+      walletAddress: config.walletAddress,
+      revision: config.revision,
+      updatedAt: config.updatedAt,
+      status,
+      message,
+    });
+    setParamsSaveStatus(message);
+    try {
+      window.localStorage.setItem(walletAutoTradeSettingsStorageKey(config.walletAddress), JSON.stringify(nextSettings));
+      window.localStorage.setItem(walletParamsStorageKey(config.walletAddress), JSON.stringify(config.params));
+    } catch {
+      // The wallet-scoped cache is optional; Redis remains authoritative.
+    }
+  }, []);
+
+  useEffect(() => {
     const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
     if (!remoteAuthToken || !configWalletAddress || !localAutomationSettingsLoaded) {
-      setRemoteAutomationConfigWallet(null);
+      syncedAutomationSnapshotRef.current = null;
+      setAutomationConfigSync({
+        walletAddress: null,
+        revision: 0,
+        updatedAt: null,
+        status: "idle",
+        message: remoteSyncWalletAddress
+          ? "Authenticate this wallet to sync master controls."
+          : "Connect a wallet to sync master controls.",
+      });
       return;
     }
 
     let cancelled = false;
-    setRemoteAutomationConfigWallet(null);
-    fetch("/api/perps/automation/config", {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${remoteAuthToken}` },
-    })
-      .then(async (response) => {
-        const payload = await response.json().catch(() => null) as { config?: PerpsAutomationConfig | null } | null;
-        if (!response.ok) throw new Error("Unable to load server automation configuration.");
-        return payload?.config ?? null;
-      })
-      .then((config) => {
+    syncedAutomationSnapshotRef.current = null;
+    setAutomationConfigSync({
+      walletAddress: configWalletAddress,
+      revision: 0,
+      updatedAt: null,
+      status: "loading",
+      message: "Loading wallet master controls...",
+    });
+
+    const refreshConfig = async (initial = false) => {
+      try {
+        const response = await fetch("/api/perps/automation/config", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${remoteAuthToken}` },
+        });
+        const payload = await response.json().catch(() => null) as {
+          config?: PerpsAutomationConfig | null;
+          error?: string;
+        } | null;
+        if (!response.ok) throw new Error(payload?.error || "Unable to load wallet master controls.");
         if (cancelled) return;
-        if (config) {
-          setAutoTradeSettings(config.settings as AutoTradeSettings);
-          setParams(config.params);
-          try {
-            window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(config.settings));
-            window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(config.params));
-          } catch {
-            // Browser storage is only a local mirror; Redis remains authoritative.
+
+        const config = payload?.config ?? null;
+        const currentSync = automationConfigSyncRef.current;
+        if (!config) {
+          if (initial || currentSync.walletAddress !== configWalletAddress) {
+            syncedAutomationSnapshotRef.current = null;
+            setAutomationConfigSync({
+              walletAddress: configWalletAddress,
+              revision: 0,
+              updatedAt: null,
+              status: "ready",
+              message: "Creating wallet master controls...",
+            });
           }
+          return;
         }
-        setRemoteAutomationConfigWallet(configWalletAddress);
-      })
-      .catch(() => {
-        if (!cancelled) setRemoteAutomationConfigWallet(null);
-      });
+
+        const shouldApply = initial
+          || currentSync.walletAddress !== configWalletAddress
+          || config.revision > currentSync.revision;
+        if (shouldApply) {
+          const currentSnapshot = serializeAutomationConfig(autoTradeSettingsRef.current, paramsRef.current);
+          const hadUnsavedChanges = Boolean(
+            syncedAutomationSnapshotRef.current
+            && syncedAutomationSnapshotRef.current !== currentSnapshot
+          );
+          applyRemoteAutomationConfig(
+            config,
+            hadUnsavedChanges
+              ? "Newer wallet settings were loaded; stale device edits were discarded."
+              : "Synced to wallet",
+            hadUnsavedChanges ? "conflict" : "synced"
+          );
+        } else if (currentSync.status === "error") {
+          setAutomationConfigSync((current) => ({
+            ...current,
+            status: "synced",
+            message: "Synced to wallet",
+          }));
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setAutomationConfigSync((current) => ({
+          ...current,
+          walletAddress: configWalletAddress,
+          status: "error",
+          message: error instanceof Error ? error.message : "Wallet master-control sync failed.",
+        }));
+      }
+    };
+
+    const handleForegroundRefresh = () => {
+      if (document.visibilityState === "visible") void refreshConfig();
+    };
+    void refreshConfig(true);
+    const intervalId = window.setInterval(() => { void refreshConfig(); }, AUTOMATION_CONFIG_REFRESH_MS);
+    document.addEventListener("visibilitychange", handleForegroundRefresh);
+    window.addEventListener("focus", handleForegroundRefresh);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleForegroundRefresh);
+      window.removeEventListener("focus", handleForegroundRefresh);
     };
-  }, [localAutomationSettingsLoaded, remoteAuthAddress, remoteAuthToken, remoteSyncWalletAddress]);
+  }, [applyRemoteAutomationConfig, localAutomationSettingsLoaded, remoteAuthAddress, remoteAuthToken, remoteSyncWalletAddress]);
 
   useEffect(() => {
     const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
-    if (!remoteAuthToken || !configWalletAddress || remoteAutomationConfigWallet !== configWalletAddress) return;
+    if (!remoteAuthToken || !configWalletAddress) return;
+    if (automationConfigSync.walletAddress !== configWalletAddress) return;
+    if (!["ready", "synced", "conflict"].includes(automationConfigSync.status)) return;
+
+    const snapshot = serializeAutomationConfig(autoTradeSettings, params);
+    if (snapshot === syncedAutomationSnapshotRef.current) return;
+    const expectedRevision = automationConfigSync.revision;
+    let cancelled = false;
+    let requestStarted = false;
 
     const timeoutId = window.setTimeout(() => {
+      requestStarted = true;
+      setAutomationConfigSync((current) => ({
+        ...current,
+        status: "saving",
+        message: "Saving wallet master controls...",
+      }));
       void fetch("/api/perps/automation/config", {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${remoteAuthToken}`,
         },
-        body: JSON.stringify({ settings: autoTradeSettings, params }),
-      }).catch(() => undefined);
-    }, 300);
+        body: JSON.stringify({
+          settings: autoTradeSettings,
+          params,
+          expectedRevision,
+        }),
+      }).then(async (response) => {
+        const payload = await response.json().catch(() => null) as {
+          config?: PerpsAutomationConfig | null;
+          error?: string;
+        } | null;
+        if (cancelled || automationConfigSyncRef.current.walletAddress !== configWalletAddress) return;
+        if (response.status === 409 && payload?.config) {
+          applyRemoteAutomationConfig(
+            payload.config,
+            "Another device saved newer settings. The wallet version was loaded.",
+            "conflict"
+          );
+          return;
+        }
+        if (!response.ok || !payload?.config) {
+          throw new Error(payload?.error || "Unable to save wallet master controls.");
+        }
 
-    return () => window.clearTimeout(timeoutId);
-  }, [autoTradeSettings, params, remoteAuthAddress, remoteAuthToken, remoteAutomationConfigWallet, remoteSyncWalletAddress]);
+        const savedConfig = payload.config;
+        syncedAutomationSnapshotRef.current = snapshot;
+        try {
+          window.localStorage.setItem(walletAutoTradeSettingsStorageKey(configWalletAddress), JSON.stringify(savedConfig.settings));
+          window.localStorage.setItem(walletParamsStorageKey(configWalletAddress), JSON.stringify(savedConfig.params));
+        } catch {
+          // The wallet-scoped cache is optional; Redis remains authoritative.
+        }
+        const currentSnapshot = serializeAutomationConfig(autoTradeSettingsRef.current, paramsRef.current);
+        setAutomationConfigSync({
+          walletAddress: configWalletAddress,
+          revision: savedConfig.revision,
+          updatedAt: savedConfig.updatedAt,
+          status: currentSnapshot === snapshot ? "synced" : "ready",
+          message: currentSnapshot === snapshot ? "Synced to wallet" : "Saving newer wallet edits...",
+        });
+        if (currentSnapshot === snapshot) setParamsSaveStatus("Synced to wallet");
+      }).catch((error) => {
+        if (cancelled || automationConfigSyncRef.current.walletAddress !== configWalletAddress) return;
+        setAutomationConfigSync((current) => ({
+          ...current,
+          status: "error",
+          message: error instanceof Error ? error.message : "Wallet master-control save failed.",
+        }));
+      });
+    }, 650);
+
+    return () => {
+      if (!requestStarted) cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    applyRemoteAutomationConfig,
+    autoTradeSettings,
+    automationConfigSync.revision,
+    automationConfigSync.status,
+    automationConfigSync.walletAddress,
+    params,
+    remoteAuthAddress,
+    remoteAuthToken,
+    remoteSyncWalletAddress,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4672,9 +4883,14 @@ function DashboardPage() {
   }
 
   function persistAutoTradeSettings(next: AutoTradeSettings) {
+    autoTradeSettingsRef.current = next;
     setAutoTradeSettings(next);
     try {
-      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+      const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
+      const storageKey = configWalletAddress
+        ? walletAutoTradeSettingsStorageKey(configWalletAddress)
+        : AUTO_TRADE_SETTINGS_STORAGE_KEY;
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
     } catch (_error) {
       // ignore storage errors
     }
@@ -4771,15 +4987,27 @@ function DashboardPage() {
 
   function saveSignalParams() {
     try {
-      window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(params));
-      window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(autoTradeSettings));
-      setParamsSaveStatus("Saved");
+      const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
+      const paramsKey = configWalletAddress ? walletParamsStorageKey(configWalletAddress) : PARAMS_STORAGE_KEY;
+      const settingsKey = configWalletAddress
+        ? walletAutoTradeSettingsStorageKey(configWalletAddress)
+        : AUTO_TRADE_SETTINGS_STORAGE_KEY;
+      window.localStorage.setItem(paramsKey, JSON.stringify(params));
+      window.localStorage.setItem(settingsKey, JSON.stringify(autoTradeSettings));
+      const alreadySynced = serializeAutomationConfig(autoTradeSettings, params) === syncedAutomationSnapshotRef.current;
+      setParamsSaveStatus(
+        configWalletAddress && remoteAuthToken
+          ? alreadySynced ? "Synced to wallet" : "Saving to wallet..."
+          : "Saved on this device"
+      );
     } catch (_error) {
       setParamsSaveStatus("Save failed");
     }
   }
 
   function resetSignalParams() {
+    paramsRef.current = DEFAULT_PARAMS;
+    autoTradeSettingsRef.current = DEFAULT_AUTO_TRADE_SETTINGS;
     setParams(DEFAULT_PARAMS);
     setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
     setPendingTakeProfit(null);
@@ -4789,6 +5017,11 @@ function DashboardPage() {
     try {
       window.localStorage.removeItem(PARAMS_STORAGE_KEY);
       window.localStorage.removeItem(AUTO_TRADE_SETTINGS_STORAGE_KEY);
+      const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
+      if (configWalletAddress) {
+        window.localStorage.removeItem(walletParamsStorageKey(configWalletAddress));
+        window.localStorage.removeItem(walletAutoTradeSettingsStorageKey(configWalletAddress));
+      }
     } catch (_error) {
       // ignore storage errors
     }
@@ -5127,7 +5360,10 @@ function DashboardPage() {
       return (
         <>
           <div className="controls params-toolbar">
-            <div className="subtext">{paramsSaveStatus}</div>
+            <div>
+              <div className="subtext">{paramsSaveStatus}</div>
+              <div className="subtext">Master controls · {automationConfigSyncLabel}</div>
+            </div>
             <button type="button" onClick={saveSignalParams}>Save</button>
             <button type="button" className="secondary" onClick={resetSignalParams}>Reset</button>
           </div>
