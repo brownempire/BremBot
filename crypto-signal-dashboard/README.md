@@ -88,6 +88,7 @@ For live feed setup:
 - Approval-assisted sessions stop after the configured foreground heartbeat timeout. Agent-wallet sessions and their Redis-backed monitor configuration remain active with the app closed until Clock Out, disabling Perps auto-trade, the kill switch, or another guardrail stops execution.
 - Agent credentials belong only in server environment variables: `PERPS_AGENT_OWNER_WALLET`, `PERPS_AGENT_WALLET_PUBLIC_KEY`, and `PERPS_AGENT_WALLET_PRIVATE_KEY`. Never expose the private key through a `NEXT_PUBLIC_` variable.
 - Redis is authoritative for wallet master controls. Authenticated devices refresh on app open, foreground return, and every 30 seconds; browser storage is only a wallet-scoped cache.
+- Autonomous Perps trade and exposure guardrails evaluate the selected collateral allocation against the agent wallet's live available USDC. Leveraged notional is controlled separately by `PERPS_MAX_LEVERAGE`; the fixed `PERPS_ASSUMED_CAPITAL_USD` value applies only to the legacy webhook/paper engine.
 - Production also requires a server-only `CRON_SECRET`; Vercel sends it to the configured cron route as a bearer token.
 - See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.
 

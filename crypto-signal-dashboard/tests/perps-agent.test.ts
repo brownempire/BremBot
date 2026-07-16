@@ -175,6 +175,9 @@ test("duplicate signals are blocked within the same user scope", async () => {
     collateralUsd: 20,
     leverage: 2,
     maxSlippageBps: 100,
+    marketContext: {
+      availableUsdc: 200,
+    },
   };
 
   const first = await tradingAgent.routePerpsSignalForUser(wallet, payload);

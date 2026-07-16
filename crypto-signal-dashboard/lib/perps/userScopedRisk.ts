@@ -7,12 +7,17 @@ export function evaluateUserScopedPerpsRisk(input: {
   maxLeverage: number;
   maxTradePct: number;
   maxExposurePct: number;
-  assumedCapitalUsd?: number;
 }) {
-  const capitalUsd = input.assumedCapitalUsd ?? 1000;
-  const currentOpenExposure = input.existingExecutions
+  const reportedAvailableUsdc = input.signal.marketContext?.availableUsdc;
+  const availableCapitalUsd = typeof reportedAvailableUsdc === "number" && Number.isFinite(reportedAvailableUsdc) && reportedAvailableUsdc > 0
+    ? reportedAvailableUsdc
+    : input.signal.collateralUsd;
+  const currentCommittedCollateral = input.existingExecutions
     .filter((entry) => ["prepared", "approval_required", "submitted", "confirmed", "paper_executed"].includes(entry.status))
-    .reduce((sum, entry) => sum + entry.sizeUsd, 0);
+    .reduce((sum, entry) => sum + entry.collateralUsd, 0);
+  const maxTradeCollateralUsd = availableCapitalUsd * input.maxTradePct;
+  const maxExposureCollateralUsd = availableCapitalUsd * input.maxExposurePct;
+  const roundUsd = (value: number) => Number(value.toFixed(2));
 
   if (input.session.killSwitch) {
     return { approved: false, code: "KILL_SWITCH", message: "Perps automation is blocked by the global kill switch." };
@@ -37,12 +42,20 @@ export function evaluateUserScopedPerpsRisk(input: {
     return { approved: false, code: "LEVERAGE_TOO_HIGH", message: `Requested leverage ${input.signal.leverage}x exceeds the configured limit of ${input.maxLeverage}x.` };
   }
 
-  if (input.signal.sizeUsd > capitalUsd * input.maxTradePct) {
-    return { approved: false, code: "SIZE_TOO_LARGE", message: "Requested perps size exceeds the current per-user guardrails." };
+  if (input.signal.collateralUsd > maxTradeCollateralUsd) {
+    return {
+      approved: false,
+      code: "SIZE_TOO_LARGE",
+      message: `Requested collateral $${roundUsd(input.signal.collateralUsd)} exceeds the $${roundUsd(maxTradeCollateralUsd)} wallet-allocation guardrail.`,
+    };
   }
 
-  if (currentOpenExposure + input.signal.sizeUsd > capitalUsd * input.maxExposurePct) {
-    return { approved: false, code: "EXPOSURE_TOO_HIGH", message: "This trade would push the user's exposure above the current cap." };
+  if (currentCommittedCollateral + input.signal.collateralUsd > maxExposureCollateralUsd) {
+    return {
+      approved: false,
+      code: "EXPOSURE_TOO_HIGH",
+      message: `Committed collateral would reach $${roundUsd(currentCommittedCollateral + input.signal.collateralUsd)}, above the $${roundUsd(maxExposureCollateralUsd)} wallet-allocation cap.`,
+    };
   }
 
   const duplicate = input.existingExecutions.find((entry) => entry.signalId === input.signal.signalId);
