@@ -135,43 +135,47 @@ struct BremLogicWidgetEntryView: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: 116, height: 38, alignment: .leading)
+                .frame(width: 96, height: 28, alignment: .leading)
         } else {
             Text("BremLogic")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: 16, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
         }
     }
 
     var body: some View {
         applyWidgetBackground(
-            to: VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
+            to: VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .top, spacing: 6) {
                     brandLogo
                     Spacer()
                     Text(updatedLabel)
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.58))
+                        .lineLimit(1)
                 }
 
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Open Perps")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundStyle(brandPrimary)
                         .textCase(.uppercase)
                     Text(openPerpLabel)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Text(openPerpDetail)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(2)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
                     if let pnlLabel {
                         Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  •  "))
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
                             .foregroundStyle(pnlColor)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                 }
 
@@ -183,9 +187,10 @@ struct BremLogicWidgetEntryView: View {
                             .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.58))
                         Text(balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
                     Spacer(minLength: 8)
                     VStack(alignment: .trailing, spacing: 2) {
@@ -193,20 +198,21 @@ struct BremLogicWidgetEntryView: View {
                             .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.58))
                         Text(balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
                     if #available(iOS 17.0, *) {
                         Button(intent: BremLogicWidgetRefreshIntent()) {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                                 .foregroundStyle(brandPrimary)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, 6)
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.white.opacity(0.08))
@@ -214,7 +220,8 @@ struct BremLogicWidgetEntryView: View {
                 }
             }
         )
-        .padding(14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .widgetURL(URL(string: entry.snapshot.targetURL))
     }
 }
