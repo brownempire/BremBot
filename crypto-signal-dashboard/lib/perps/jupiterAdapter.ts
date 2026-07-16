@@ -1,6 +1,18 @@
-import { MINTS, createPerpsClient, type Asset, type InputToken, type Side } from "jupiter-perps-api-sdk";
+import {
+  MINTS,
+  createPerpsClient,
+  type Asset,
+  type InputToken,
+  type Side,
+  type TransactionAction,
+} from "jupiter-perps-api-sdk";
 
 import { PerpsExecutionError } from "@/lib/perps/errors";
+import {
+  buildEntryWithTpslFallback,
+  getInitialPositionTpsl,
+  getStandalonePositionTpsl,
+} from "@/lib/perps/tpslPlan";
 import type { PerpsSignalPayload } from "@/lib/perps/types";
 
 const perps = createPerpsClient();
@@ -21,9 +33,7 @@ function usdToAtomicUsdcString(value: number) {
   return String(Math.max(1, Math.floor(value * 1_000_000)));
 }
 
-function uiUsdPriceToRawUsdString(value: number) {
-  return String(Math.max(1, Math.round(value * 1_000_000)));
-}
+type PerpsTradingClient = Pick<typeof perps.trading, "increasePosition" | "createTpsl">;
 
 function getAssetForMarket(market: string): Asset {
   const asset = MARKET_TO_ASSET[market.toUpperCase()];
@@ -33,7 +43,11 @@ function getAssetForMarket(market: string): Asset {
   return asset;
 }
 
-export async function buildPerpsTransactionForSignal(signal: PerpsSignalPayload, walletAddress: string) {
+export async function buildPerpsTransactionForSignal(
+  signal: PerpsSignalPayload,
+  walletAddress: string,
+  tradingClient: PerpsTradingClient = perps.trading
+) {
   const asset = getAssetForMarket(signal.market);
   const side: Side = signal.side;
   const inputToken: InputToken = "USDC";
@@ -43,7 +57,8 @@ export async function buildPerpsTransactionForSignal(signal: PerpsSignalPayload,
     throw new PerpsExecutionError("LIVE_CLOSE_NOT_IMPLEMENTED", "Live close execution is not enabled in this build yet.", 501);
   }
 
-  const response = await perps.trading.increasePosition({
+  const requestedTpsl = getInitialPositionTpsl(signal);
+  const request = {
     asset,
     inputToken,
     inputTokenAmount,
@@ -51,15 +66,13 @@ export async function buildPerpsTransactionForSignal(signal: PerpsSignalPayload,
     walletAddress,
     leverage: String(signal.leverage),
     maxSlippageBps: String(signal.maxSlippageBps),
-    tpsl: [
-      ...(signal.takeProfit?.enabled && signal.takeProfit.priceUsd
-        ? [{ receiveToken: inputToken, requestType: "tp" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.takeProfit.priceUsd) }]
-        : []),
-      ...(signal.stopLoss?.enabled && signal.stopLoss.priceUsd
-        ? [{ receiveToken: inputToken, requestType: "sl" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.stopLoss.priceUsd) }]
-        : []),
-    ],
-  });
+  };
+
+  const built = await buildEntryWithTpslFallback(
+    requestedTpsl,
+    (tpsl) => tradingClient.increasePosition({ ...request, tpsl })
+  );
+  const { response, tpslMode } = built;
 
   if (!response.serializedTxBase64) {
     throw new PerpsExecutionError("MISSING_SERIALIZED_TX", "Jupiter Perps did not return a serialized transaction.", 502);
@@ -71,10 +84,22 @@ export async function buildPerpsTransactionForSignal(signal: PerpsSignalPayload,
     serializedTxBase64: response.serializedTxBase64,
     positionPubkey: response.positionPubkey ?? null,
     quote: response.quote,
+    tpslMode,
   };
 }
 
-export async function executeSignedPerpsTransaction(action: "increase-position" | "close-position", serializedTxBase64: string) {
+export async function buildPerpsTpslTransactionForSignal(
+  signal: PerpsSignalPayload,
+  walletAddress: string,
+  positionPubkey: string,
+  tradingClient: PerpsTradingClient = perps.trading
+) {
+  const tpsl = getStandalonePositionTpsl(signal);
+  if (tpsl.length === 0) return null;
+  return tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
+}
+
+export async function executeSignedPerpsTransaction(action: TransactionAction, serializedTxBase64: string) {
   const baseUrl = process.env.PERPS_JUPITER_API_BASE?.trim() || "https://perps-api.jup.ag/v1";
   const response = await fetch(`${baseUrl}/transaction/execute`, {
     method: "POST",

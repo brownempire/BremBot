@@ -102,6 +102,12 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   assert.equal((routedSignal as PerpsAgentSignal | null)?.asset, "SOL");
   assert.equal((routedSignal as PerpsAgentSignal | null)?.collateralUsd, 25);
   assert.equal((routedSignal as PerpsAgentSignal | null)?.leverage, 2);
+  const routedTakeProfit = (routedSignal as PerpsAgentSignal | null)?.takeProfitPrice ?? 0;
+  const routedStopLoss = (routedSignal as PerpsAgentSignal | null)?.stopLossPrice ?? 0;
+  const entryPrice = points[points.length - 1]?.v ?? 0;
+  const positionSizeUsd = 25 * 2;
+  assert.ok(((routedTakeProfit - entryPrice) / entryPrice) * positionSizeUsd >= 1);
+  assert.ok(((entryPrice - routedStopLoss) / entryPrice) * positionSizeUsd >= 1);
   assert.equal(savedCursor, points[points.length - 1]?.t);
 });
 

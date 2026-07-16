@@ -1581,6 +1581,26 @@ function DashboardPage() {
     };
   }, [jupiterPerpsController?.walletAddress, remoteAuthToken, remoteSyncWalletAddress, walletAddress]);
 
+  const clearPerpsAgentExecutions = useCallback(async () => {
+    if (!remoteAuthToken) {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
+      }
+      setPerpsAgentExecutions([]);
+      return;
+    }
+
+    const response = await fetch("/api/perps/executions", {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${remoteAuthToken}` },
+    });
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    if (!response.ok) {
+      throw new Error(payload?.error ?? "Unable to clear recent agent executions.");
+    }
+    setPerpsAgentExecutions([]);
+  }, [remoteAuthToken]);
+
   const submitPerpsAgentSignal = useCallback(async (input: {
     signal: Signal;
     request: PendingPerpsApprovalRequest;
@@ -2969,17 +2989,19 @@ function DashboardPage() {
                     await jupiterPerpsController?.refresh().catch(() => undefined);
                     await refreshPerpsAgentState().catch(() => undefined);
                     setPerpsAutoTradeStatus(
-                      `Live mode · Agent wallet submitted ${tradeLabel} · ${autonomous.txid.slice(0, 10)}...`
+                      preparedResult.message
+                        ? `Live mode · ${preparedResult.message}`
+                        : `Live mode · Agent wallet submitted ${tradeLabel} · ${autonomous.txid.slice(0, 10)}...`
                     );
                     await sendSignalNotification(
                       `Autonomous Trade Submitted: ${signal.symbol}`,
-                      `${tradeLabel} executed through the associated agent wallet.`,
+                      preparedResult.message ?? `${tradeLabel} executed through the associated agent wallet.`,
                       "/signals-bot?tab=perps",
                       NATIVE_NOTIFICATION_SOUNDS.approval,
                     );
                     await sendRemotePushNotification({
                       title: `Autonomous Trade Submitted: ${signal.symbol}`,
-                      body: `${tradeLabel} executed through the associated agent wallet.`,
+                      body: preparedResult.message ?? `${tradeLabel} executed through the associated agent wallet.`,
                       url: "/signals-bot?tab=perps",
                       walletAddress: walletAddress ?? undefined,
                       sound: NATIVE_NOTIFICATION_SOUNDS.approval,
@@ -5300,7 +5322,7 @@ function DashboardPage() {
               ? "Approval-assisted mode keeps every automated Perps action inside the user's own wallet/session flow."
               : "Agent-wallet mode keeps ownership on the associated agent wallet while syncing positions and controls into this primary-wallet session."}
           />
-          <PerpsAgentExecutionFeed executions={perpsAgentExecutions} />
+          <PerpsAgentExecutionFeed executions={perpsAgentExecutions} onClear={clearPerpsAgentExecutions} />
           <JupiterPerpsPositionWidget
             authToken={remoteAuthToken}
             onSnapshotChange={setReadOnlyPerpsSnapshot}

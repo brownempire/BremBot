@@ -9,6 +9,7 @@ const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "brembot-perps-agent-"));
 process.env.REDIS_URL = "";
 process.env.PERPS_SESSIONS_FILE = path.join(tempRoot, "sessions.json");
 process.env.PERPS_USER_EXECUTIONS_FILE = path.join(tempRoot, "executions.json");
+process.env.PERPS_USER_EXECUTION_FEED_STATE_FILE = path.join(tempRoot, "execution-feed-state.json");
 process.env.PERPS_DECISION_JOURNAL_FILE = path.join(tempRoot, "trade-decision-journal.md");
 process.env.PERPS_DECISION_EVENTS_FILE = path.join(tempRoot, "trade-decision-events.ndjson");
 process.env.PERPS_KILL_SWITCH = "false";
@@ -24,6 +25,7 @@ function cleanupStores() {
   for (const file of [
     process.env.PERPS_SESSIONS_FILE,
     process.env.PERPS_USER_EXECUTIONS_FILE,
+    process.env.PERPS_USER_EXECUTION_FEED_STATE_FILE,
     process.env.PERPS_DECISION_JOURNAL_FILE,
     process.env.PERPS_DECISION_EVENTS_FILE,
   ]) {
@@ -156,6 +158,51 @@ test("paper mode routes a signal only to the clocked-in user session", async () 
   assert.match(journal, /BremLogic Trade Decision Journal/);
   assert.match(journal, /SOL\/USD/);
   assert.match(journal, /shadow mode on/);
+});
+
+test("clearing the execution feed preserves wallet audit records and accepts later executions", async () => {
+  const wallet = "TestWalletFeed333333333333333333333333333333";
+  const baseExecution = {
+    executionId: "feed-old",
+    sessionId: "session-feed",
+    walletAddress: wallet,
+    signalId: "signal-old",
+    symbol: "SOL/USD",
+    summary: "Old execution",
+    side: "long" as const,
+    asset: "SOL" as const,
+    mode: "paper" as const,
+    executionModel: "approval-assisted" as const,
+    status: "paper_executed" as const,
+    reasonCode: "PAPER_EXECUTED",
+    reasonMessage: "Recorded before the feed was cleared.",
+    collateralUsd: 10,
+    sizeUsd: 20,
+    leverage: 2,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    txid: null,
+    positionPubkey: null,
+    createdAt: new Date(Date.now() - 1_000).toISOString(),
+    updatedAt: new Date(Date.now() - 1_000).toISOString(),
+  };
+  await auditStore.createUserPerpsExecution(baseExecution);
+
+  await auditStore.clearUserPerpsExecutionFeed(wallet);
+  assert.equal((await auditStore.listVisibleUserPerpsExecutions(wallet)).length, 0);
+  assert.equal((await auditStore.listUserPerpsExecutions(wallet)).length, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await auditStore.createUserPerpsExecution({
+    ...baseExecution,
+    executionId: "feed-new",
+    signalId: "signal-new",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  const visible = await auditStore.listVisibleUserPerpsExecutions(wallet);
+  assert.deepEqual(visible.map((entry) => entry.executionId), ["feed-new"]);
+  assert.equal((await auditStore.listUserPerpsExecutions(wallet)).length, 2);
 });
 
 test("duplicate signals are blocked within the same user scope", async () => {

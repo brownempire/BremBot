@@ -1,6 +1,10 @@
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { perpsExecutionAckSchema } from "@/lib/perps/sessionTypes";
-import { listUserPerpsExecutions, updateUserPerpsExecution } from "@/lib/perps/userExecutionAudit";
+import {
+  clearUserPerpsExecutionFeed,
+  listVisibleUserPerpsExecutions,
+  updateUserPerpsExecution,
+} from "@/lib/perps/userExecutionAudit";
 
 export const dynamic = "force-dynamic";
 
@@ -12,12 +16,22 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? 20) || 20));
-  const executions = (await listUserPerpsExecutions(walletAddress)).slice(0, limit);
+  const executions = (await listVisibleUserPerpsExecutions(walletAddress)).slice(0, limit);
 
   return Response.json({
     walletAddress,
     executions,
   });
+}
+
+export async function DELETE(request: Request) {
+  const walletAddress = await getAuthorizedWalletAddress(request);
+  if (!walletAddress) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const clearedBefore = await clearUserPerpsExecutionFeed(walletAddress);
+  return Response.json({ ok: true, clearedBefore });
 }
 
 export async function PATCH(request: Request) {

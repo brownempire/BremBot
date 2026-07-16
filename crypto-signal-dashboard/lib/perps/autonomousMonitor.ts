@@ -24,6 +24,7 @@ const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const MONITOR_LOCK_TTL_MS = 55_000;
+const MIN_TPSL_EXPECTED_PNL_USD = 1;
 
 type MonitorExecutionResult = {
   walletAddress: string;
@@ -168,10 +169,13 @@ function computeTriggerPrices(options: {
 }) {
   const direction = options.side === "long" ? 1 : -1;
   const positionSizeUsd = options.collateralUsd * options.leverage;
-  const takeProfitMove = options.config.settings.perpsTakeProfitMode === "usd"
+  const requestedTakeProfitMove = options.config.settings.perpsTakeProfitMode === "usd"
     ? (positionSizeUsd > 0 ? options.config.settings.perpsTakeProfitValue / positionSizeUsd : 0)
     : options.takeProfitPercent > 0 ? options.takeProfitPercent / 100 / options.leverage : 0;
-  const stopLossMove = options.stopLossPercent > 0 ? options.stopLossPercent / 100 / options.leverage : 0;
+  const requestedStopLossMove = options.stopLossPercent > 0 ? options.stopLossPercent / 100 / options.leverage : 0;
+  const minimumTriggerMove = positionSizeUsd > 0 ? MIN_TPSL_EXPECTED_PNL_USD / positionSizeUsd : 0;
+  const takeProfitMove = requestedTakeProfitMove > 0 ? Math.max(requestedTakeProfitMove, minimumTriggerMove) : 0;
+  const stopLossMove = requestedStopLossMove > 0 ? Math.max(requestedStopLossMove, minimumTriggerMove) : 0;
   return {
     takeProfitPrice: takeProfitMove > 0 ? options.entryPrice * (1 + direction * takeProfitMove) : null,
     stopLossPrice: stopLossMove > 0 ? options.entryPrice * (1 - direction * stopLossMove) : null,

@@ -1622,6 +1622,23 @@ button:disabled {
   gap: 10px;
 }
 
+.perps-agent-feed.is-scrollable {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.perps-agent-clear-button {
+  padding: 7px 11px;
+  border-radius: 9px;
+}
+
+.perps-agent-feed-error {
+  color: #ffb7b7;
+  font-size: 12px;
+}
+
 .perps-agent-feed-row {
   display: flex;
   justify-content: space-between;

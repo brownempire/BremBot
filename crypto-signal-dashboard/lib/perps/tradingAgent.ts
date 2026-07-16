@@ -304,8 +304,12 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
   if (session.mode === "live" && session.executionModel === "delegated-ready") {
     try {
       const agentWalletAddress = assertAgentWalletSigner(walletAddress);
-      const { buildPerpsTransactionForSignal, executeSignedPerpsTransaction } = await import("@/lib/perps/jupiterAdapter");
-      const built = await buildPerpsTransactionForSignal({
+      const {
+        buildPerpsTpslTransactionForSignal,
+        buildPerpsTransactionForSignal,
+        executeSignedPerpsTransaction,
+      } = await import("@/lib/perps/jupiterAdapter");
+      const executionSignal = {
         signalId: signal.signalId,
         strategyId: signal.smartTradeProfile ?? "bremlogic-agent",
         market: `${signal.asset}-PERP`,
@@ -322,16 +326,54 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         reason: signal.summary,
         walletAddress: agentWalletAddress,
         source: "ui-local",
-      }, agentWalletAddress);
+      } as const;
+      const built = await buildPerpsTransactionForSignal(executionSignal, agentWalletAddress);
       const signed = signSerializedPerpsTransaction(built.serializedTxBase64);
       const submitted = await executeSignedPerpsTransaction("increase-position", signed.signedSerializedTxBase64);
       if (!submitted.txid) {
         throw new Error("Jupiter did not return a transaction signature for the autonomous order.");
       }
+      const positionPubkey = submitted.positionPubkey ?? built.positionPubkey;
+      let protectionTxid: string | null = null;
+      let protectionError: string | null = null;
+      if (built.tpslMode === "deferred") {
+        if (!positionPubkey) {
+          protectionError = "Jupiter did not return the position reference needed to attach TP/SL.";
+        } else {
+          for (let attempt = 0; attempt < 3 && !protectionTxid; attempt += 1) {
+            if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+            try {
+              const protection = await buildPerpsTpslTransactionForSignal(
+                executionSignal,
+                agentWalletAddress,
+                positionPubkey
+              );
+              if (!protection) break;
+              const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);
+              const submittedProtection = await executeSignedPerpsTransaction(
+                "create-tpsl",
+                signedProtection.signedSerializedTxBase64
+              );
+              protectionTxid = submittedProtection.txid ?? null;
+              if (!protectionTxid) throw new Error("Jupiter did not return a TP/SL transaction signature.");
+              protectionError = null;
+            } catch (protectionFailure) {
+              protectionError = protectionFailure instanceof Error
+                ? protectionFailure.message
+                : "Unable to attach autonomous TP/SL protection.";
+            }
+          }
+        }
+      }
+
       const updated = await updateUserPerpsExecution(walletAddress, execution.executionId, {
         status: "submitted",
         txid: submitted.txid,
-        positionPubkey: submitted.positionPubkey ?? built.positionPubkey,
+        positionPubkey,
+        errorMessage: protectionError,
+        reasonMessage: protectionError
+          ? `Entry submitted, but automatic TP/SL attachment needs attention: ${protectionError}`
+          : execution.reasonMessage,
       });
       return {
         ok: true,
@@ -339,10 +381,18 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         autonomousResult: {
           agentWalletAddress,
           txid: submitted.txid,
-          positionPubkey: submitted.positionPubkey ?? built.positionPubkey,
+          positionPubkey,
+          protectionTxid,
+          tpslMode: built.tpslMode,
         },
         decision: decision.recommendation,
-        message: "The signal was submitted through the associated autonomous wallet.",
+        message: protectionError
+          ? `The signal was submitted, but automatic TP/SL attachment needs attention: ${protectionError}`
+          : built.tpslMode === "deferred"
+            ? "The signal was submitted and TP/SL protection was attached automatically after entry."
+            : built.tpslMode === "bundled"
+              ? "The signal and TP/SL protection were submitted together through the associated autonomous wallet."
+              : "The signal was submitted through the associated autonomous wallet.",
       } as const;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Autonomous Perps execution failed.";
