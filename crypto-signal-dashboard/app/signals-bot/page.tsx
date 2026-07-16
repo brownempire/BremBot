@@ -1063,6 +1063,7 @@ function DashboardPage() {
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
+    agentAvailableUsdc: null,
     walletAddress: null,
     positions: [],
     pendingTriggers: [],
@@ -1099,6 +1100,7 @@ function DashboardPage() {
   const perpsAutoTradeBusyRef = useRef(false);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
   const readOnlyPerpsSnapshotRef = useRef<JupiterPerpsWidgetSnapshot>({
+    agentAvailableUsdc: null,
     walletAddress: null,
     positions: [],
     pendingTriggers: [],
@@ -2714,7 +2716,8 @@ function DashboardPage() {
                 return;
               }
 
-              if (!jupiterPerpsController) {
+              const delegatedAgentSession = perpsAgentSession.executionModel === "delegated-ready";
+              if (!jupiterPerpsController && !delegatedAgentSession) {
                 setPerpsAutoTradeStatus(`Open the Perps panel once so BremLogic can load Jupiter Perps pricing for ${signal.symbol}`);
                 return;
               }
@@ -2737,7 +2740,9 @@ function DashboardPage() {
                 return;
               }
 
-              const usdcBalance = walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0;
+              const usdcBalance = delegatedAgentSession
+                ? (readOnlyPerpsSnapshotRef.current.agentAvailableUsdc ?? 0)
+                : (walletTokens.find((token) => token.mint === USDC_MINT)?.amount ?? 0);
               const baseCollateralPercent = getAllocationPercentOfBalance(autoTradeSettings, usdcBalance);
               const perpsTradePlan =
                 autoTradeSettings.perpsExecutionMode === "smart-trades"
@@ -2775,27 +2780,32 @@ function DashboardPage() {
                     marketEntryPrice > 0
                   ) {
                     try {
-                      const preview = await jupiterPerpsController.previewMarketPosition({
+                      const preview = jupiterPerpsController
+                        ? await jupiterPerpsController.previewMarketPosition({
                         asset: perpsAssetSymbol,
                         collateralToken: "USDC",
                         leverage: String(perpsTradePlan.leverage),
                         maxSlippageBps: "100",
                         side: isBullSignal ? "long" : "short",
                         uiAmount: collateralAmount,
-                      });
+                      })
+                        : null;
 
                       if (autoTradeSettings.perpsTakeProfitMode === "percent") {
-                        const adjustedTriggers = deriveFeeAdjustedPerpsTriggers({
+                        const adjustedTriggers = preview ? deriveFeeAdjustedPerpsTriggers({
                           desiredStopLossPercent: perpsTradePlan.stopLossPercent,
                           desiredTakeProfitPercent: perpsTradePlan.takeProfitPercent,
                           fallbackEntryPrice: marketEntryPrice,
                           preview,
-                        });
+                        }) : {
+                          takeProfitPrice: marketEntryPrice * (1 + (isBullSignal ? 1 : -1) * perpsTradePlan.takeProfitPercent / 100 / perpsTradePlan.leverage),
+                          stopLossPrice: marketEntryPrice * (1 - (isBullSignal ? 1 : -1) * perpsTradePlan.stopLossPercent / 100 / perpsTradePlan.leverage),
+                        };
                         takeProfitPrice = adjustedTriggers.takeProfitPrice;
                         stopLossPrice = adjustedTriggers.stopLossPrice;
                       } else {
-                        const previewEntryPrice = preview.quote.averagePriceUsd ?? marketEntryPrice;
-                        const previewPositionSizeUsd = preview.quote.positionSizeUsd
+                        const previewEntryPrice = preview?.quote.averagePriceUsd ?? marketEntryPrice;
+                        const previewPositionSizeUsd = preview?.quote.positionSizeUsd
                           ?? Number((collateralAmount * perpsTradePlan.leverage).toFixed(2));
                         takeProfitPrice = computePerpsTakeProfitTargetPrice({
                           entryPrice: previewEntryPrice,
@@ -2805,12 +2815,12 @@ function DashboardPage() {
                           value: autoTradeSettings.perpsTakeProfitValue,
                         });
                         stopLossPrice = autoTradeSettings.stopLossPercent > 0
-                          ? deriveFeeAdjustedPerpsTriggers({
+                          ? preview ? deriveFeeAdjustedPerpsTriggers({
                               desiredStopLossPercent: perpsTradePlan.stopLossPercent,
                               desiredTakeProfitPercent: 0,
                               fallbackEntryPrice: marketEntryPrice,
                               preview,
-                            }).stopLossPrice
+                            }).stopLossPrice : marketEntryPrice * (1 - (isBullSignal ? 1 : -1) * perpsTradePlan.stopLossPercent / 100 / perpsTradePlan.leverage)
                           : null;
                       }
                     } catch (previewError) {
@@ -2853,6 +2863,11 @@ function DashboardPage() {
                     ok: boolean;
                     message?: string;
                     preparedAction?: PendingPerpsApprovalRequest;
+                    autonomousResult?: {
+                      agentWalletAddress: string;
+                      positionPubkey: string | null;
+                      txid: string;
+                    };
                     execution?: PerpsExecutionSummary & { mode: "paper" | "live" };
                   };
                   const execution = preparedResult.execution;
@@ -2881,16 +2896,40 @@ function DashboardPage() {
                     return;
                   }
 
-                  if (!preparedResult.preparedAction || !jupiterPerpsController.connected || !jupiterPerpsController.canWrite) {
+                  if (preparedResult.autonomousResult) {
+                    const autonomous = preparedResult.autonomousResult;
+                    await jupiterPerpsController?.refresh().catch(() => undefined);
+                    await refreshPerpsAgentState().catch(() => undefined);
+                    setPerpsAutoTradeStatus(
+                      `Live mode · Agent wallet submitted ${tradeLabel} · ${autonomous.txid.slice(0, 10)}...`
+                    );
+                    await sendSignalNotification(
+                      `Autonomous Trade Submitted: ${signal.symbol}`,
+                      `${tradeLabel} executed through the associated agent wallet.`,
+                      "/signals-bot?tab=perps",
+                      NATIVE_NOTIFICATION_SOUNDS.approval,
+                    );
+                    await sendRemotePushNotification({
+                      title: `Autonomous Trade Submitted: ${signal.symbol}`,
+                      body: `${tradeLabel} executed through the associated agent wallet.`,
+                      url: "/signals-bot?tab=perps",
+                      walletAddress: walletAddress ?? undefined,
+                      sound: NATIVE_NOTIFICATION_SOUNDS.approval,
+                    });
+                    return;
+                  }
+
+                  if (!preparedResult.preparedAction || !jupiterPerpsController || !jupiterPerpsController.connected || !jupiterPerpsController.canWrite) {
                     throw new Error("Live Perps automation is approval-assisted and requires an active writable Jupiter Mobile session.");
                   }
+                  const writablePerpsController = jupiterPerpsController;
 
                   setPerpsAutoTradeStatus(
                     `Live mode · Clocked In · ${tradeLabel} awaiting your wallet session approval for ${signal.symbol}`
                   );
 
                   try {
-                    const directResult = await jupiterPerpsController.openMarketPosition(preparedResult.preparedAction);
+                    const directResult = await writablePerpsController.openMarketPosition(preparedResult.preparedAction);
                     if (remoteAuthToken) {
                       await fetch("/api/perps/executions", {
                         method: "PATCH",
@@ -4921,10 +4960,15 @@ function DashboardPage() {
             walletWriteEnabled={perpsAgentSession?.walletWriteEnabled ?? Boolean(jupiterPerpsController?.canWrite)}
             note={perpsAgentSession?.executionModel === "approval-assisted"
               ? "Approval-assisted mode keeps every automated Perps action inside the user's own wallet/session flow."
-              : "Delegated-ready mode is reserved for future non-custodial session authorization support."}
+              : "Agent-wallet mode keeps ownership on the associated agent wallet while syncing positions and controls into this primary-wallet session."}
           />
           <PerpsAgentExecutionFeed executions={perpsAgentExecutions} />
-          <JupiterPerpsPositionWidget onSnapshotChange={setReadOnlyPerpsSnapshot} onControllerChange={setJupiterPerpsController} />
+          <JupiterPerpsPositionWidget
+            authToken={remoteAuthToken}
+            onSnapshotChange={setReadOnlyPerpsSnapshot}
+            onControllerChange={setJupiterPerpsController}
+            primaryWalletAddress={remoteAuthAddress ?? remoteSyncWalletAddress ?? walletAddress}
+          />
         </>
       );
     }

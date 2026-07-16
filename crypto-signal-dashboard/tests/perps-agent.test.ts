@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { Keypair } from "@solana/web3.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "brembot-perps-agent-"));
 process.env.REDIS_URL = "";
@@ -37,6 +38,10 @@ test.beforeEach(() => {
   process.env.PERPS_KILL_SWITCH = "false";
   process.env.PERPS_LIVE_ALLOWED_WALLETS = "";
   process.env.PERPS_SESSION_HEARTBEAT_TIMEOUT_MS = "60000";
+  delete process.env.PERPS_AGENT_OWNER_WALLET;
+  delete process.env.PERPS_AGENT_WALLET_PUBLIC_KEY;
+  delete process.env.PERPS_AGENT_WALLET_PRIVATE_KEY;
+  delete process.env.PERPS_AGENT_WALLET_ASSOCIATIONS;
 });
 
 test.before(async () => {
@@ -225,6 +230,31 @@ test("live mode remains approval-assisted and fails closed without wallet write 
 
   assert.equal(result.ok, false);
   assert.equal(result.code, "WALLET_WRITE_UNAVAILABLE");
+});
+
+test("a matching associated agent signer enables delegated-ready live sessions", async () => {
+  const owner = Keypair.generate().publicKey.toBase58();
+  const agent = Keypair.generate();
+  process.env.PERPS_AGENT_OWNER_WALLET = owner;
+  process.env.PERPS_AGENT_WALLET_PUBLIC_KEY = agent.publicKey.toBase58();
+  process.env.PERPS_AGENT_WALLET_PRIVATE_KEY = JSON.stringify(Array.from(agent.secretKey));
+
+  const session = await tradingAgent.clockInPerpsSession(owner, {
+    mode: "live",
+    platform: "web",
+    walletProvider: "Phantom",
+  });
+
+  assert.equal(session.executionModel, "delegated-ready");
+  assert.equal(session.walletWriteEnabled, true);
+
+  const backgrounded = await tradingAgent.heartbeatPerpsSession(owner, {
+    appOpen: false,
+    appForeground: false,
+    walletConnected: false,
+  });
+  assert.equal(backgrounded?.sessionState, "clocked_in");
+  assert.equal(backgrounded?.walletWriteEnabled, true);
 });
 
 test("live wallet allowlist only enables configured wallets", () => {

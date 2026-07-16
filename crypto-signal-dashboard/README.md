@@ -76,11 +76,14 @@ For live feed setup:
 - `POST /api/perps/agent/execute` routes a signal only for the authenticated user wallet.
 - `GET/PATCH /api/perps/executions` returns and updates recent execution records for the authenticated user only.
 - `GET/PATCH /api/perps/kill-switch` reads or overrides the runtime kill switch.
+- `GET /api/perps/portfolio` combines the authenticated primary wallet and its associated agent wallet positions.
+- `POST/PATCH/DELETE /api/perps/agent/tpsl` manages an agent-owned position's TP/SL with the server-side agent signer.
+- `POST /api/perps/agent/close` closes an agent-owned position after verifying the primary-to-agent association.
 - Paper mode simulates user-scoped Perps actions without moving funds.
-- Live mode never uses a Bremlogic backend wallet. The current implementation is `approval-assisted`: the connected user's own wallet/session signs the action when required.
+- Live mode is `approval-assisted` unless an associated agent wallet and matching server-only signer are configured. With an agent wallet, approved signals execute autonomously and the Perps panel combines both wallets while preserving actual position ownership.
 - `PERPS_LIVE_ALLOWED_WALLETS` can restrict live Perps automation to specific wallet addresses only.
-- If the app leaves the foreground, the wallet disconnects, or the session becomes invalid, the Perps agent clocks out and stops.
-- The older backend live-wallet path is intentionally disabled in favor of the non-custodial session model.
+- Approval-assisted sessions stop after the configured foreground heartbeat timeout. Agent-wallet sessions remain active until Clock Out, the kill switch, or another guardrail stops execution.
+- Agent credentials belong only in server environment variables: `PERPS_AGENT_OWNER_WALLET`, `PERPS_AGENT_WALLET_PUBLIC_KEY`, and `PERPS_AGENT_WALLET_PRIVATE_KEY`. Never expose the private key through a `NEXT_PUBLIC_` variable.
 - See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.
 
 ## Roadmap

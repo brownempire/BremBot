@@ -2,8 +2,8 @@
 
 ## Summary
 - Every automated Perps action is scoped to the authenticated user's wallet.
-- BremLogic does not store user private keys on the backend.
-- Live mode is approval-assisted today, not delegated signing.
+- BremLogic never stores the primary wallet's private key.
+- Live mode supports either primary-wallet approval or a separately funded, associated agent wallet whose signer is configured server-side.
 - Manual spot trading and manual Perps flows remain user-signed.
 
 ## Wallet Paths
@@ -18,9 +18,18 @@
 - The session also ends when the app backgrounds, becomes hidden, the wallet disconnects, or the auth/session becomes invalid.
 
 ## Execution Models
-- `approval-assisted`: supported now. The app prepares a Perps action for the authenticated user and executes it through the user's own wallet session.
-- `delegated-ready`: reserved for future non-custodial session authorization support.
+- `approval-assisted`: the app prepares a Perps action for the authenticated primary wallet and requests its signature.
+- `delegated-ready`: the primary wallet authenticates the session, while a separately funded agent wallet owns and signs its own Jupiter positions. The panel aggregates both wallets and routes mutations to the actual position owner.
 
-## Current Limitation
-- True unattended Perps execution is not implemented because the current Jupiter/Solana wallet path does not expose a safe delegated signing model in this repo.
-- The code is structured so a future delegated/session authorization adapter can be added without changing the Clock In / Clock Out UX.
+## Agent Wallet Configuration
+- `PERPS_AGENT_OWNER_WALLET`: primary wallet address used for BremLogic authentication.
+- `PERPS_AGENT_WALLET_PUBLIC_KEY`: separately funded wallet that owns autonomous Jupiter positions.
+- `PERPS_AGENT_WALLET_PRIVATE_KEY`: server-only base58 secret key or JSON secret-key byte array matching the public key.
+- `PERPS_AGENT_WALLET_ASSOCIATIONS`: optional JSON owner-to-agent map. The configured signer must still match the resolved agent address.
+- `PERPS_LIVE_ALLOWED_WALLETS` and `NEXT_PUBLIC_PERPS_LIVE_ALLOWED_WALLETS` should contain the primary wallet address.
+
+The private key must be stored in the deployment provider's encrypted server environment and must never be committed, logged, returned by an API, or placed in a `NEXT_PUBLIC_` variable. Keep only capped trading collateral and transaction-fee SOL in the agent wallet.
+
+## Ownership Limitation
+- Agent positions remain owned on-chain by the agent wallet; the association does not transfer ownership to the primary wallet.
+- Jupiter's own UI shows the currently connected wallet. BremLogic's Perps panel is responsible for combining primary and agent data.

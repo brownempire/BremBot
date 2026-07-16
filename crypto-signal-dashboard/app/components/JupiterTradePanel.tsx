@@ -6,6 +6,9 @@ import "@jup-ag/plugin/css";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+// The embedded Jupiter widget resolves through the Ultra-style path in practice,
+// so the Wallet swap panel must use the Ultra referral account rather than the
+// Swap + Trigger referral account.
 const JUPITER_SWAP_REFERRAL_ACCOUNT = "12PJUAzwcBKf1qgXkXTJpZXJTsTS2GhozyQPSSuhY5Th";
 const DEFAULT_JUPITER_REFERRAL_FEE_BPS = 50;
 

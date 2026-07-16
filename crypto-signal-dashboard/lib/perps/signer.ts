@@ -21,9 +21,13 @@ function parsePrivateKey(value: string) {
 }
 
 export function getPerpsTradingKeypair() {
-  const privateKey = process.env.PERPS_TRADING_WALLET_PRIVATE_KEY;
+  const privateKey = process.env.PERPS_AGENT_WALLET_PRIVATE_KEY || process.env.PERPS_TRADING_WALLET_PRIVATE_KEY;
   if (!privateKey) {
-    throw new PerpsExecutionError("MISSING_TRADING_WALLET_KEY", "PERPS_TRADING_WALLET_PRIVATE_KEY is not configured.", 500);
+    throw new PerpsExecutionError(
+      "MISSING_TRADING_WALLET_KEY",
+      "PERPS_AGENT_WALLET_PRIVATE_KEY is not configured.",
+      500
+    );
   }
 
   return Keypair.fromSecretKey(parsePrivateKey(privateKey));
@@ -34,12 +38,26 @@ export function signSerializedPerpsTransaction(serializedTxBase64: string) {
   const raw = Buffer.from(serializedTxBase64, "base64");
   const tx = VersionedTransaction.deserialize(raw);
   const feePayer = tx.message.staticAccountKeys[0]?.toBase58();
-  const expectedFeePayer = process.env.PERPS_TRADING_WALLET_PUBLIC_KEY?.trim() || keypair.publicKey.toBase58();
+  const expectedFeePayer =
+    process.env.PERPS_AGENT_WALLET_PUBLIC_KEY?.trim()
+    || process.env.PERPS_TRADING_WALLET_PUBLIC_KEY?.trim()
+    || keypair.publicKey.toBase58();
 
   if (feePayer && feePayer !== expectedFeePayer) {
     throw new PerpsExecutionError(
       "FEE_PAYER_MISMATCH",
       `Refusing to sign a Jupiter Perps transaction for fee payer ${feePayer}. Expected ${expectedFeePayer}.`,
+      400
+    );
+  }
+
+  const requiredSigners = tx.message.staticAccountKeys
+    .slice(0, tx.message.header.numRequiredSignatures)
+    .map((key) => key.toBase58());
+  if (!requiredSigners.includes(keypair.publicKey.toBase58())) {
+    throw new PerpsExecutionError(
+      "SIGNER_NOT_REQUIRED",
+      "Refusing to sign a Jupiter Perps transaction that does not require the configured agent wallet.",
       400
     );
   }

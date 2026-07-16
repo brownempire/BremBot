@@ -4,6 +4,7 @@ import { getTradeDecisionConfig } from "@/lib/decision/config";
 import { createTradeDecisionRecord } from "@/lib/decision/engine";
 import { appendTradeDecisionRecord } from "@/lib/decision/logStore";
 import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
+import { assertAgentWalletSigner } from "@/lib/perps/agentWallet";
 import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
 import { resolvePerpsExecutionModel } from "@/lib/perps/executionModel";
 import { getPerpsSession, savePerpsSession } from "@/lib/perps/sessionStore";
@@ -14,8 +15,9 @@ import type {
   PerpsSessionHeartbeatInput,
   PerpsUserExecution,
 } from "@/lib/perps/sessionTypes";
-import { createUserPerpsExecution, listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
+import { createUserPerpsExecution, listUserPerpsExecutions, updateUserPerpsExecution } from "@/lib/perps/userExecutionAudit";
 import { evaluateUserScopedPerpsRisk } from "@/lib/perps/userScopedRisk";
+import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
 
 function nowIso() {
   return new Date().toISOString();
@@ -34,6 +36,7 @@ function getSessionTimeoutReason(timeoutMs: number) {
 
 async function resolveSessionTimeout(walletAddress: string, session: PerpsAutomationSession | null) {
   if (!session || session.sessionState !== "clocked_in") return session;
+  if (session.executionModel === "delegated-ready") return session;
 
   const config = getPerpsSessionConfig();
   const now = Date.now();
@@ -63,7 +66,7 @@ export async function clockInPerpsSession(walletAddress: string, input: PerpsClo
   const config = getPerpsSessionConfig();
   const existing = await getPerpsSession(walletAddress);
   const requestedMode = input.mode;
-  const delegation = getPerpsDelegationCapability();
+  const delegation = getPerpsDelegationCapability(walletAddress);
   const executionModel = resolvePerpsExecutionModel({ mode: requestedMode }, { delegatedExecutionAvailable: delegation.available });
   const warning =
     input.unlimitedSession
@@ -85,7 +88,7 @@ export async function clockInPerpsSession(walletAddress: string, input: PerpsClo
     appOpen: input.appOpen ?? true,
     appForeground: true,
     walletConnected: true,
-    walletWriteEnabled: requestedMode === "paper" ? true : input.platform === "native",
+    walletWriteEnabled: requestedMode === "paper" || executionModel === "delegated-ready" ? true : input.platform === "native",
     killSwitch: config.globalKillSwitch,
     unlimitedSession: Boolean(input.unlimitedSession),
     platform: input.platform ?? null,
@@ -122,6 +125,19 @@ export async function heartbeatPerpsSession(walletAddress: string, input: PerpsS
   if (!existing) return null;
 
   const config = getPerpsSessionConfig();
+  if (existing.executionModel === "delegated-ready") {
+    const next: PerpsAutomationSession = {
+      ...existing,
+      lastHeartbeatAt: nowIso(),
+      inactiveSince: null,
+      appOpen: input.appOpen,
+      appForeground: input.appForeground,
+      walletConnected: input.walletConnected,
+      walletWriteEnabled: true,
+    };
+    await savePerpsSession(next);
+    return next;
+  }
   const inactive = !input.appOpen || !input.appForeground || !input.walletConnected;
   const now = nowIso();
 
@@ -253,7 +269,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     mode: session.mode,
     executionModel: session.executionModel,
     status: risk.approved
-      ? (session.mode === "paper" ? "paper_executed" : "approval_required")
+      ? (session.mode === "paper" ? "paper_executed" : session.executionModel === "delegated-ready" ? "prepared" : "approval_required")
       : "blocked",
     reasonCode: risk.code,
     reasonMessage: risk.message,
@@ -283,6 +299,65 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       code: risk.code,
       message: risk.message,
     } as const;
+  }
+
+  if (session.mode === "live" && session.executionModel === "delegated-ready") {
+    try {
+      const agentWalletAddress = assertAgentWalletSigner(walletAddress);
+      const { buildPerpsTransactionForSignal, executeSignedPerpsTransaction } = await import("@/lib/perps/jupiterAdapter");
+      const built = await buildPerpsTransactionForSignal({
+        signalId: signal.signalId,
+        strategyId: signal.smartTradeProfile ?? "bremlogic-agent",
+        market: `${signal.asset}-PERP`,
+        assetMint: signal.asset,
+        side,
+        action: "open",
+        collateralUsd: resolvedSignal.collateralUsd,
+        sizeUsd: Number((resolvedSignal.collateralUsd * resolvedSignal.leverage).toFixed(2)),
+        leverage: resolvedSignal.leverage,
+        maxSlippageBps: resolvedSignal.maxSlippageBps,
+        takeProfit: { enabled: Boolean(resolvedSignal.takeProfitPrice), priceUsd: resolvedSignal.takeProfitPrice ?? null },
+        stopLoss: { enabled: Boolean(resolvedSignal.stopLossPrice), priceUsd: resolvedSignal.stopLossPrice ?? null },
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        reason: signal.summary,
+        walletAddress: agentWalletAddress,
+        source: "ui-local",
+      }, agentWalletAddress);
+      const signed = signSerializedPerpsTransaction(built.serializedTxBase64);
+      const submitted = await executeSignedPerpsTransaction("increase-position", signed.signedSerializedTxBase64);
+      if (!submitted.txid) {
+        throw new Error("Jupiter did not return a transaction signature for the autonomous order.");
+      }
+      const updated = await updateUserPerpsExecution(walletAddress, execution.executionId, {
+        status: "submitted",
+        txid: submitted.txid,
+        positionPubkey: submitted.positionPubkey ?? built.positionPubkey,
+      });
+      return {
+        ok: true,
+        execution: updated ?? execution,
+        autonomousResult: {
+          agentWalletAddress,
+          txid: submitted.txid,
+          positionPubkey: submitted.positionPubkey ?? built.positionPubkey,
+        },
+        decision: decision.recommendation,
+        message: "The signal was submitted through the associated autonomous wallet.",
+      } as const;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Autonomous Perps execution failed.";
+      const updated = await updateUserPerpsExecution(walletAddress, execution.executionId, {
+        status: "failed",
+        errorMessage: message,
+      });
+      return {
+        ok: false,
+        execution: updated ?? execution,
+        decision: decision.recommendation,
+        code: "AGENT_EXECUTION_FAILED",
+        message,
+      } as const;
+    }
   }
 
   return {

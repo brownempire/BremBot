@@ -22,7 +22,10 @@ export function evaluateUserScopedPerpsRisk(input: {
     return { approved: false, code: "SESSION_INACTIVE", message: "Clock In is required before perps automation can run." };
   }
 
-  if (!input.session.appOpen || !input.session.appForeground || !input.session.walletConnected) {
+  if (
+    input.session.executionModel !== "delegated-ready"
+    && (!input.session.appOpen || !input.session.appForeground || !input.session.walletConnected)
+  ) {
     return { approved: false, code: "SESSION_NOT_READY", message: "The user session is no longer active in the foreground app." };
   }
 

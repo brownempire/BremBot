@@ -33,6 +33,8 @@ export type JupiterPerpsPosition = {
   liquidationPriceIsEstimated: boolean;
   accountRef: string | null;
   lastUpdated: number | null;
+  walletAddress?: string | null;
+  walletRole?: "primary" | "agent";
 };
 
 export type JupiterPerpsPendingTrigger = {
@@ -57,6 +59,8 @@ export type JupiterPerpsPendingTrigger = {
   positionPubkey: string | null;
   positionRequestPubkey: string | null;
   lastUpdated: number | null;
+  walletAddress?: string | null;
+  walletRole?: "primary" | "agent";
 };
 
 export type JupiterPerpsAccountSnapshot = {
@@ -83,6 +87,8 @@ export type JupiterPerpsTrade = {
   txHash: string | null;
   lastUpdated: number | null;
   createdAt: number | null;
+  walletAddress?: string | null;
+  walletRole?: "primary" | "agent";
 };
 
 type LivePerpsPositionsResponse = {

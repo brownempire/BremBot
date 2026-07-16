@@ -2,6 +2,7 @@ import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { perpsSessionHeartbeatSchema } from "@/lib/perps/sessionTypes";
 import { getPerpsSessionWithTimeout, heartbeatPerpsSession } from "@/lib/perps/tradingAgent";
+import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET(request: Request) {
     walletAddress,
     session,
     globalKillSwitch: config.globalKillSwitch,
-    delegatedExecutionAvailable: config.delegatedExecutionAvailable,
+    delegatedExecutionAvailable: getPerpsDelegationCapability(walletAddress).available,
   });
 }
 

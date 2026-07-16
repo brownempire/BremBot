@@ -24,6 +24,7 @@ import {
 } from "@/lib/jupiterPerps";
 
 export type JupiterPerpsWidgetSnapshot = {
+  agentAvailableUsdc: number | null;
   walletAddress: string | null;
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
@@ -202,6 +203,10 @@ function getPerpsPositionMatchKey(parts: {
 }
 
 function doesTriggerBelongToPosition(position: JupiterPerpsPosition, trigger: JupiterPerpsPendingTrigger) {
+  if (position.walletAddress && trigger.walletAddress && position.walletAddress !== trigger.walletAddress) {
+    return false;
+  }
+
   const positionPubkey = position.accountRef?.trim();
   const triggerPositionPubkey = trigger.positionPubkey?.trim();
 
@@ -608,6 +613,7 @@ function EditableTpslMetric({
 }
 
 function PositionCard({
+  canModifyTpsl,
   closingPositionPubkey,
   isMutatingTpsl,
   onModifyTpsl,
@@ -617,6 +623,7 @@ function PositionCard({
   position,
   writeEnabled,
 }: {
+  canModifyTpsl: boolean;
   closingPositionPubkey: string | null;
   isMutatingTpsl: boolean;
   onModifyTpsl: (request: {
@@ -651,6 +658,11 @@ function PositionCard({
             <span className={`perps-side-badge ${position.side === "long" ? "long" : "short"}`}>
               {position.side === "long" ? "Long" : "Short"}
             </span>
+            {position.walletRole ? (
+              <span className="perps-trigger-badge">
+                {position.walletRole === "agent" ? "Agent" : "Primary"}
+              </span>
+            ) : null}
           </div>
           <div className="subtext">{position.marketName ?? "Jupiter Perps position"}</div>
         </div>
@@ -679,7 +691,7 @@ function PositionCard({
         <PositionMetric label="Collateral" value={position.collateralValue === null ? "-" : formatUsd(position.collateralValue)} />
         <PositionMetric label="Leverage" value={formatPercent(position.leverage)} />
         <EditableTpslMetric
-          disabled={!canClose}
+          disabled={!canModifyTpsl}
           isSaving={isMutatingTpsl}
           kind="tp"
           onSubmit={(triggerPrice, positionRequestPubkey) => onModifyTpsl({
@@ -693,7 +705,7 @@ function PositionCard({
           value={takeProfitTrigger?.triggerPrice ?? position.takeProfit}
         />
         <EditableTpslMetric
-          disabled={!canClose}
+          disabled={!canModifyTpsl}
           isSaving={isMutatingTpsl}
           kind="sl"
           onSubmit={(triggerPrice, positionRequestPubkey) => onModifyTpsl({
@@ -814,11 +826,15 @@ function LoadingState() {
 }
 
 function JupiterPerpsPositionWidgetBody({
+  authToken,
   onSnapshotChange,
   onControllerChange,
+  primaryWalletAddress,
 }: {
+  authToken?: string | null;
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
   onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
+  primaryWalletAddress?: string | null;
 }) {
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const [isWidgetVisible, setIsWidgetVisible] = useState(true);
@@ -838,8 +854,10 @@ function JupiterPerpsPositionWidgetBody({
   const isConnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isConnecting : false;
   const isDisconnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isDisconnecting : false;
   const walletAddress = nativeJupiterAdapterEnabled ? nativeJupiterWallet.walletAddress : null;
-  const { positions, pendingTriggers, recentTrades, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
-    walletAddress,
+  const portfolioWalletAddress = primaryWalletAddress ?? walletAddress;
+  const { agentAvailableUsdc, positions, pendingTriggers, recentTrades, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
+    authToken,
+    walletAddress: portfolioWalletAddress,
     showMockData,
     pollingEnabled: isWidgetVisible,
   });
@@ -882,6 +900,7 @@ function JupiterPerpsPositionWidgetBody({
 
   useEffect(() => {
     onSnapshotChange?.({
+      agentAvailableUsdc,
       walletAddress,
       positions,
       pendingTriggers,
@@ -891,7 +910,7 @@ function JupiterPerpsPositionWidgetBody({
       isMock,
       connected: isConnected,
     });
-  }, [error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
+  }, [agentAvailableUsdc, error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
 
   const autoTradeController = useMemo<JupiterPerpsWidgetController | null>(() => {
     if (!nativeJupiterAdapterEnabled) return null;
@@ -1076,11 +1095,28 @@ function JupiterPerpsPositionWidgetBody({
     }
 
     clearCloseError();
-
-    await closePosition({
-      positionPubkey,
-      receiveToken: getCloseReceiveToken(position),
-    });
+    if (position.walletRole === "agent") {
+      if (!authToken) throw new Error("Sign in with the associated primary wallet before closing an agent position.");
+      const response = await fetch("/api/perps/agent/close", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          positionPubkey,
+          receiveToken: getCloseReceiveToken(position),
+          maxSlippageBps: "100",
+        }),
+      });
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error || "Unable to close the autonomous Perps position.");
+    } else {
+      await closePosition({
+        positionPubkey,
+        receiveToken: getCloseReceiveToken(position),
+      });
+    }
 
     setPendingClosePositionPubkeys((current) => (
       current.includes(positionPubkey) ? current : [...current, positionPubkey]
@@ -1102,12 +1138,34 @@ function JupiterPerpsPositionWidgetBody({
     triggerPrice: string;
   }) {
     const positionPubkey = request.position.accountRef?.trim();
-    if (!positionPubkey || !walletAddress) {
-      throw new Error("Connect Jupiter Mobile before editing this TP/SL request.");
+    const isAgentPosition = request.position.walletRole === "agent";
+    if (!positionPubkey || (!isAgentPosition && !walletAddress)) {
+      throw new Error("Connect the position-owning wallet before editing this TP/SL request.");
+    }
+    if (isAgentPosition && !authToken) {
+      throw new Error("Sign in with the associated primary wallet before editing an agent position.");
     }
 
     const confirmedPositionPubkey = positionPubkey;
-    const confirmedWalletAddress = walletAddress;
+    const resolvedWalletAddress = request.position.walletAddress ?? walletAddress;
+    if (!resolvedWalletAddress) {
+      throw new Error("The position-owning wallet could not be resolved.");
+    }
+    const confirmedWalletAddress: string = resolvedWalletAddress;
+
+    async function mutateAgentTpsl(method: "POST" | "PATCH" | "DELETE", body: Record<string, unknown>) {
+      const response = await fetch("/api/perps/agent/tpsl", {
+        method,
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => null) as { error?: string; txid?: string } | null;
+      if (!response.ok) throw new Error(payload?.error || "Unable to modify the autonomous TP/SL request.");
+      return payload;
+    }
 
     clearOpenError();
     setPendingTpslMutationKey(`${confirmedPositionPubkey}:${request.kind}`);
@@ -1154,7 +1212,11 @@ function JupiterPerpsPositionWidgetBody({
       const cancelFailures: Error[] = [];
       for (const existingRequestPubkey of existingRequestPubkeys) {
         try {
-          await cancelTpsl({ positionRequestPubkey: existingRequestPubkey });
+          if (isAgentPosition) {
+            await mutateAgentTpsl("DELETE", { positionRequestPubkey: existingRequestPubkey });
+          } else {
+            await cancelTpsl({ positionRequestPubkey: existingRequestPubkey });
+          }
         } catch (error) {
           if (!isIgnorableTpslCancelError(error)) {
             cancelFailures.push(
@@ -1170,30 +1232,46 @@ function JupiterPerpsPositionWidgetBody({
         throw cancelFailures[0];
       }
 
-      await attachTpsl({
-        positionPubkey: confirmedPositionPubkey,
-        tpsl: desiredTpsl,
-        walletAddress: confirmedWalletAddress,
-      });
+      if (isAgentPosition) {
+        await mutateAgentTpsl("POST", { positionPubkey: confirmedPositionPubkey, tpsl: desiredTpsl });
+      } else {
+        await attachTpsl({
+          positionPubkey: confirmedPositionPubkey,
+          tpsl: desiredTpsl,
+          walletAddress: confirmedWalletAddress,
+        });
+      }
     }
 
     try {
       if (request.positionRequestPubkey) {
-        await updateTpsl({
-          positionRequestPubkey: request.positionRequestPubkey,
-          triggerPrice: request.triggerPrice,
-        });
+        if (isAgentPosition) {
+          await mutateAgentTpsl("PATCH", {
+            positionRequestPubkey: request.positionRequestPubkey,
+            triggerPrice: request.triggerPrice,
+          });
+        } else {
+          await updateTpsl({
+            positionRequestPubkey: request.positionRequestPubkey,
+            triggerPrice: request.triggerPrice,
+          });
+        }
       } else if (existingRequestPubkeys.length === 0) {
-        await attachTpsl({
-          positionPubkey: confirmedPositionPubkey,
-          tpsl: [{
+        const newTpsl = [{
             entirePosition: true,
             receiveToken: getPerpsTpslReceiveToken(request.position),
             requestType: request.kind,
             triggerPrice: request.triggerPrice,
-          }],
-          walletAddress: confirmedWalletAddress,
-        });
+        }];
+        if (isAgentPosition) {
+          await mutateAgentTpsl("POST", { positionPubkey: confirmedPositionPubkey, tpsl: newTpsl });
+        } else {
+          await attachTpsl({
+            positionPubkey: confirmedPositionPubkey,
+            tpsl: newTpsl,
+            walletAddress: confirmedWalletAddress,
+          });
+        }
       } else {
         await rebuildTpsl();
       }
@@ -1421,9 +1499,14 @@ function JupiterPerpsPositionWidgetBody({
                 doesTriggerBelongToPosition(position, trigger)
               ));
 
+              const manualPositionWriteEnabled = writeEnabled
+                && (!position.walletAddress || position.walletAddress === walletAddress);
+              const agentWriteEnabled = position.walletRole === "agent" && Boolean(authToken);
+
               return (
               <PositionCard
                 key={position.id}
+                canModifyTpsl={manualPositionWriteEnabled || agentWriteEnabled}
                 closingPositionPubkey={closingPositionPubkey}
                 isMutatingTpsl={pendingTpslMutationKey === `${position.accountRef?.trim() ?? ""}:tp` || pendingTpslMutationKey === `${position.accountRef?.trim() ?? ""}:sl`}
                 onModifyTpsl={handleModifyTpsl}
@@ -1431,7 +1514,7 @@ function JupiterPerpsPositionWidgetBody({
                 onClosePosition={handleClosePosition}
                 pendingClosePositionPubkeys={pendingClosePositionPubkeySet}
                 position={position}
-                writeEnabled={writeEnabled}
+                writeEnabled={manualPositionWriteEnabled || agentWriteEnabled}
               />
               );
             })}
@@ -1486,11 +1569,22 @@ function JupiterPerpsPositionWidgetBody({
 }
 
 export function JupiterPerpsPositionWidget({
+  authToken,
   onSnapshotChange,
   onControllerChange,
+  primaryWalletAddress,
 }: {
+  authToken?: string | null;
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
   onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
+  primaryWalletAddress?: string | null;
 }) {
-  return <JupiterPerpsPositionWidgetBody onSnapshotChange={onSnapshotChange} onControllerChange={onControllerChange} />;
+  return (
+    <JupiterPerpsPositionWidgetBody
+      authToken={authToken}
+      onSnapshotChange={onSnapshotChange}
+      onControllerChange={onControllerChange}
+      primaryWalletAddress={primaryWalletAddress}
+    />
+  );
 }

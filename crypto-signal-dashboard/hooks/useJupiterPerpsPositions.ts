@@ -11,12 +11,14 @@ import {
 } from "@/lib/jupiterPerps";
 
 type UseJupiterPerpsPositionsOptions = {
+  authToken?: string | null;
   walletAddress: string | null;
   showMockData: boolean;
   pollingEnabled?: boolean;
 };
 
 type JupiterPerpsPositionsState = {
+  agentAvailableUsdc: number | null;
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
   recentTrades: JupiterPerpsTrade[];
@@ -49,13 +51,17 @@ function getFriendlyErrorMessage(error: unknown) {
   return "Unable to load Jupiter Perps positions right now.";
 }
 
-async function fetchPerpsSnapshotFromApi(walletAddress: string) {
-  const response = await fetch(`/api/jupiter/perps?wallet=${encodeURIComponent(walletAddress)}`, {
+async function fetchPerpsSnapshotFromApi(walletAddress: string, authToken?: string | null) {
+  const response = await fetch(
+    authToken ? "/api/perps/portfolio" : `/api/jupiter/perps?wallet=${encodeURIComponent(walletAddress)}`,
+    {
     cache: "no-store",
-  });
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : undefined,
+    }
+  );
 
   const payload = (await response.json()) as
-    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[]; recentTrades: JupiterPerpsTrade[] }
+    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[]; recentTrades: JupiterPerpsTrade[]; agentAvailableUsdc?: number | null }
     | { error?: string };
 
   if (!response.ok) {
@@ -70,11 +76,13 @@ async function fetchPerpsSnapshotFromApi(walletAddress: string) {
 }
 
 export function useJupiterPerpsPositions({
+  authToken,
   walletAddress,
   showMockData,
   pollingEnabled = true,
 }: UseJupiterPerpsPositionsOptions): JupiterPerpsPositionsState {
   const [positions, setPositions] = useState<JupiterPerpsPosition[]>([]);
+  const [agentAvailableUsdc, setAgentAvailableUsdc] = useState<number | null>(null);
   const [pendingTriggers, setPendingTriggers] = useState<JupiterPerpsPendingTrigger[]>([]);
   const [recentTrades, setRecentTrades] = useState<JupiterPerpsTrade[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -119,6 +127,7 @@ export function useJupiterPerpsPositions({
       setIsLoading(false);
       setIsMock(showMockData);
       setPositions(showMockData ? getMockJupiterPerpsPositions() : []);
+      setAgentAvailableUsdc(null);
       setPendingTriggers(showMockData ? getMockJupiterPerpsPendingTriggers() : []);
       setRecentTrades([]);
       return;
@@ -134,9 +143,10 @@ export function useJupiterPerpsPositions({
 
     const request = (async () => {
       try {
-        const next = await fetchPerpsSnapshotFromApi(walletAddress);
+        const next = await fetchPerpsSnapshotFromApi(walletAddress, authToken);
         hasResolvedInitialLoadRef.current = true;
         setPositions(next.positions);
+        setAgentAvailableUsdc(next.agentAvailableUsdc ?? null);
         setPendingTriggers(next.pendingTriggers);
         setRecentTrades(next.recentTrades);
         setIsMock(false);
@@ -147,12 +157,14 @@ export function useJupiterPerpsPositions({
         if (!silent) {
           if (showMockData) {
             setPositions(getMockJupiterPerpsPositions());
+            setAgentAvailableUsdc(null);
             setPendingTriggers(getMockJupiterPerpsPendingTriggers());
             setRecentTrades([]);
             setIsMock(true);
             hasResolvedInitialLoadRef.current = true;
           } else {
             setPositions([]);
+            setAgentAvailableUsdc(null);
             setPendingTriggers([]);
             setRecentTrades([]);
             setIsMock(false);
@@ -169,7 +181,7 @@ export function useJupiterPerpsPositions({
 
     activeRequestRef.current = request;
     await request;
-  }, [clearError, setTimedError, showMockData, walletAddress]);
+  }, [authToken, clearError, setTimedError, showMockData, walletAddress]);
 
   useEffect(() => {
     hasResolvedInitialLoadRef.current = false;
@@ -196,6 +208,7 @@ export function useJupiterPerpsPositions({
   }, [clearErrorTimeout]);
 
   return {
+    agentAvailableUsdc,
     positions,
     pendingTriggers,
     recentTrades,

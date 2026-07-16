@@ -2,6 +2,7 @@ import { isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
 import { clockInPerpsSession } from "@/lib/perps/tradingAgent";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { perpsClockInSchema } from "@/lib/perps/sessionTypes";
+import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,10 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid clock-in payload.", detail: parsed.error.message }, { status: 400 });
   }
 
-  if (parsed.data.mode === "live" && parsed.data.platform !== "native") {
+  const delegation = getPerpsDelegationCapability(walletAddress);
+  if (parsed.data.mode === "live" && parsed.data.platform !== "native" && !delegation.available) {
     return Response.json({
-      error: "Live perps automation currently requires the native Jupiter Mobile wallet session path. Web/PWA remains delegated-ready only for now.",
+      error: "Live Perps automation requires either the native Jupiter Mobile approval path or a configured agent wallet.",
     }, { status: 409 });
   }
 
