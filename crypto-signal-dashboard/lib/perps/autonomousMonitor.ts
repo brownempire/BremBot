@@ -1,0 +1,381 @@
+import crypto from "node:crypto";
+
+import { getPerpsRuntimeOverride } from "@/lib/perps/auditLog";
+import {
+  getActivePerpsAsset,
+  isPerpsAutomationEnabled,
+  type PerpsAutomationConfig,
+} from "@/lib/perps/automationConfig";
+import { listPerpsAutomationConfigs } from "@/lib/perps/automationConfigStore";
+import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
+import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
+import { listPerpsSessions } from "@/lib/perps/sessionStore";
+import type { PerpsAutomationSession } from "@/lib/perps/sessionTypes";
+import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
+import { reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
+import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
+import { fetchJupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
+import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
+import type { PricePoint } from "@/lib/price/simulated";
+import { detectSignals, type Signal } from "@/lib/signal/engine";
+import { getRedisClient } from "@/lib/server/redis";
+
+const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
+const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
+const LAST_RUN_KEY = "brembot:perps:automation:last-run";
+const MONITOR_LOCK_TTL_MS = 55_000;
+
+type MonitorExecutionResult = {
+  walletAddress: string;
+  asset: "SOL" | "ETH" | "BTC" | null;
+  status: "executed" | "skipped" | "failed";
+  code: string;
+  message: string;
+  signalId?: string;
+};
+
+export type AutonomousMonitorResult = {
+  ok: boolean;
+  locked: boolean;
+  startedAt: string;
+  completedAt: string;
+  configuredWallets: number;
+  eligibleWallets: number;
+  results: MonitorExecutionResult[];
+};
+
+type MonitorDependencies = {
+  listConfigs: typeof listPerpsAutomationConfigs;
+  listSessions: typeof listPerpsSessions;
+  getRuntimeOverride: typeof getPerpsRuntimeOverride;
+  fetchCandles: typeof fetchCoinbaseMinuteCandles;
+  fetchSnapshot: typeof fetchJupiterPerpsAccountSnapshot;
+  getUsdcBalance: typeof getWalletUsdcBalance;
+  routeSignal: typeof routePerpsSignalForUser;
+  reconcileNoOpenPosition: typeof reconcileUserExecutionsWithoutOpenPosition;
+  getAgentWallet: typeof getAgentWalletForOwner;
+  isWalletAllowed: typeof isPerpsLiveWalletAllowed;
+  readLastSignal: (walletAddress: string, asset: string) => Promise<number | null>;
+  writeLastSignal: (walletAddress: string, asset: string, timestamp: number) => Promise<void>;
+};
+
+const defaultDependencies: MonitorDependencies = {
+  listConfigs: listPerpsAutomationConfigs,
+  listSessions: listPerpsSessions,
+  getRuntimeOverride: getPerpsRuntimeOverride,
+  fetchCandles: fetchCoinbaseMinuteCandles,
+  fetchSnapshot: fetchJupiterPerpsAccountSnapshot,
+  getUsdcBalance: getWalletUsdcBalance,
+  routeSignal: routePerpsSignalForUser,
+  reconcileNoOpenPosition: reconcileUserExecutionsWithoutOpenPosition,
+  getAgentWallet: getAgentWalletForOwner,
+  isWalletAllowed: isPerpsLiveWalletAllowed,
+  readLastSignal: async (walletAddress, asset) => {
+    const redis = await getRedisClient();
+    if (!redis) return null;
+    const value = await redis.hGet(LAST_SIGNAL_KEY, `${walletAddress}:${asset}`);
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  },
+  writeLastSignal: async (walletAddress, asset, timestamp) => {
+    const redis = await getRedisClient();
+    if (!redis) throw new Error("Redis is unavailable while saving the autonomous signal cursor.");
+    await redis.hSet(LAST_SIGNAL_KEY, `${walletAddress}:${asset}`, String(timestamp));
+  },
+};
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function computeVolatilityPercent(points: PricePoint[]) {
+  const values = points.map((point) => point.v).filter((value) => Number.isFinite(value) && value > 0);
+  if (values.length < 2) return 0;
+  const current = values[values.length - 1] ?? 0;
+  return current > 0 ? ((Math.max(...values) - Math.min(...values)) / current) * 100 : 0;
+}
+
+function computeTrendBias(points: PricePoint[]): "bullish" | "bearish" | "sideways" {
+  if (points.length < 2) return "sideways";
+  const first = points[0]?.v ?? 0;
+  const last = points[points.length - 1]?.v ?? 0;
+  if (first <= 0 || last <= 0) return "sideways";
+  const change = ((last - first) / first) * 100;
+  if (change >= 1) return "bullish";
+  if (change <= -1) return "bearish";
+  return "sideways";
+}
+
+function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: number) {
+  if (availableUsdc <= 0) return 0;
+  return config.settings.walletAllocationMode === "usd"
+    ? clamp((config.settings.walletPercent / availableUsdc) * 100, 0, 100)
+    : clamp(config.settings.walletPercent, 1, 100);
+}
+
+function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: Signal, availableUsdc: number) {
+  const baseCollateralPercent = getCollateralPercent(config, availableUsdc);
+  const volatilityPercent = computeVolatilityPercent(points);
+  if (config.settings.perpsExecutionMode !== "smart-trades") {
+    return {
+      collateralPercent: baseCollateralPercent,
+      leverage: config.settings.perpsLeverage,
+      stopLossPercent: config.settings.stopLossPercent,
+      takeProfitPercent: config.settings.perpsTakeProfitMode === "percent" ? config.settings.perpsTakeProfitValue : 0,
+      volatilityPercent,
+    };
+  }
+
+  const profile = {
+    conservative: { collateralBase: 0.4, leverageBase: 0.3, defaultTp: 0.9, defaultSl: 1.5, leverageCapMultiplier: 0.45 },
+    balanced: { collateralBase: 0.65, leverageBase: 0.5, defaultTp: 1.5, defaultSl: 3.5, leverageCapMultiplier: 0.65 },
+    aggressive: { collateralBase: 0.8, leverageBase: 1.35, defaultTp: 3, defaultSl: 7, leverageCapMultiplier: 2 },
+  }[config.settings.smartTradeProfile];
+  const volatilityFactor = clamp(volatilityPercent / 2.5, 0, 1.35);
+  const confidenceBias = clamp((signal.confidence - 0.55) / 0.35, -0.5, 1);
+  const collateralPercent = clamp(
+    baseCollateralPercent * (profile.collateralBase + confidenceBias * 0.18 - volatilityFactor * 0.16),
+    Math.min(5, baseCollateralPercent),
+    100
+  );
+  const leverage = clamp(
+    config.settings.perpsLeverage * (profile.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
+    1,
+    Math.min(250, Math.max(1, config.settings.perpsLeverage * profile.leverageCapMultiplier))
+  );
+  const baseTp = config.settings.perpsTakeProfitMode === "percent" && config.settings.perpsTakeProfitValue > 0
+    ? config.settings.perpsTakeProfitValue
+    : profile.defaultTp;
+  const baseSl = config.settings.stopLossPercent > 0 ? config.settings.stopLossPercent : profile.defaultSl;
+
+  return {
+    collateralPercent: Number(collateralPercent.toFixed(2)),
+    leverage: Number(leverage.toFixed(2)),
+    stopLossPercent: Number(clamp(baseSl * (1 + volatilityFactor * 0.18 - confidenceBias * 0.06), 0.2, 5).toFixed(2)),
+    takeProfitPercent: Number(clamp(baseTp * (1 + volatilityFactor * 0.28 + confidenceBias * 0.08), 0.2, 6).toFixed(2)),
+    volatilityPercent: Number(volatilityPercent.toFixed(2)),
+  };
+}
+
+function computeTriggerPrices(options: {
+  config: PerpsAutomationConfig;
+  entryPrice: number;
+  collateralUsd: number;
+  leverage: number;
+  side: "long" | "short";
+  stopLossPercent: number;
+  takeProfitPercent: number;
+}) {
+  const direction = options.side === "long" ? 1 : -1;
+  const positionSizeUsd = options.collateralUsd * options.leverage;
+  const takeProfitMove = options.config.settings.perpsTakeProfitMode === "usd"
+    ? (positionSizeUsd > 0 ? options.config.settings.perpsTakeProfitValue / positionSizeUsd : 0)
+    : options.takeProfitPercent > 0 ? options.takeProfitPercent / 100 / options.leverage : 0;
+  const stopLossMove = options.stopLossPercent > 0 ? options.stopLossPercent / 100 / options.leverage : 0;
+  return {
+    takeProfitPrice: takeProfitMove > 0 ? options.entryPrice * (1 + direction * takeProfitMove) : null,
+    stopLossPrice: stopLossMove > 0 ? options.entryPrice * (1 - direction * stopLossMove) : null,
+  };
+}
+
+function getSessionForConfig(config: PerpsAutomationConfig, sessions: PerpsAutomationSession[]) {
+  return sessions.find((session) => session.walletAddress === config.walletAddress) ?? null;
+}
+
+function skip(config: PerpsAutomationConfig, asset: "SOL" | "ETH" | "BTC" | null, code: string, message: string): MonitorExecutionResult {
+  return { walletAddress: config.walletAddress, asset, status: "skipped", code, message };
+}
+
+export async function runAutonomousPerpsMonitor(
+  overrides: Partial<MonitorDependencies> = {}
+): Promise<AutonomousMonitorResult> {
+  const deps = { ...defaultDependencies, ...overrides };
+  const startedAt = new Date().toISOString();
+  const [configs, sessions, runtimeOverride] = await Promise.all([
+    deps.listConfigs(),
+    deps.listSessions(),
+    deps.getRuntimeOverride(),
+  ]);
+  const globalKillSwitch = runtimeOverride.killSwitchOverride ?? getPerpsSessionConfig().globalKillSwitch;
+  const enabledConfigs = configs.filter(isPerpsAutomationEnabled);
+  const results: MonitorExecutionResult[] = [];
+
+  for (const config of enabledConfigs) {
+    const asset = getActivePerpsAsset(config);
+    if (!asset) continue;
+    const session = getSessionForConfig(config, sessions);
+    if (!session || session.sessionState !== "clocked_in") {
+      results.push(skip(config, asset, "SESSION_INACTIVE", "The autonomous Perps session is not clocked in."));
+      continue;
+    }
+    if (session.mode !== "live" || session.executionModel !== "delegated-ready") {
+      results.push(skip(config, asset, "SESSION_NOT_DELEGATED", "The session is not a delegated-ready live session."));
+      continue;
+    }
+    if (globalKillSwitch || session.killSwitch) {
+      results.push(skip(config, asset, "KILL_SWITCH", "The Perps kill switch is enabled."));
+      continue;
+    }
+    if (!deps.isWalletAllowed(config.walletAddress)) {
+      results.push(skip(config, asset, "WALLET_NOT_ALLOWED", "The primary wallet is not in the live Perps allowlist."));
+      continue;
+    }
+
+    try {
+      const agentWallet = deps.getAgentWallet(config.walletAddress);
+      if (!agentWallet) throw new Error("No autonomous wallet is associated with this primary wallet.");
+      const [snapshot, availableUsdc, points] = await Promise.all([
+        deps.fetchSnapshot(agentWallet),
+        deps.getUsdcBalance(agentWallet),
+        deps.fetchCandles(`${asset}-USD`, Math.max(15, config.params.trendWindow + 5)),
+      ]);
+      const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
+      if (openPositions.length > 0) {
+        results.push(skip(config, asset, "POSITION_ALREADY_OPEN", "An agent-owned Perps position is already open."));
+        continue;
+      }
+      await deps.reconcileNoOpenPosition(config.walletAddress);
+      if (availableUsdc === null || availableUsdc <= 0) {
+        results.push(skip(config, asset, "NO_COLLATERAL", "The autonomous wallet has no available USDC collateral."));
+        continue;
+      }
+
+      const latestTimestamp = points[points.length - 1]?.t ?? 0;
+      const windowStart = latestTimestamp - config.params.trendWindow * 60_000;
+      const windowPoints = points.filter((point) => point.t >= windowStart);
+      if (windowPoints.length < 3) {
+        results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
+        continue;
+      }
+      const lastSignalAt = await deps.readLastSignal(config.walletAddress, asset);
+      const signal = detectSignals({
+        symbol: `${asset}/USD`,
+        points: windowPoints,
+        params: config.params,
+        lastSignalAt: lastSignalAt ?? undefined,
+      })[0];
+      if (!signal) {
+        results.push(skip(config, asset, "NO_SIGNAL", "No qualifying signal was detected in the latest candle window."));
+        continue;
+      }
+      if (config.settings.mode === "buy-only" && signal.direction === "bearish") {
+        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
+        continue;
+      }
+
+      const plan = deriveTradePlan(config, windowPoints, signal, availableUsdc);
+      const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
+      if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
+        results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
+        continue;
+      }
+      const side = signal.direction === "bullish" ? "long" : "short";
+      const entryPrice = windowPoints[windowPoints.length - 1]?.v ?? 0;
+      const triggers = computeTriggerPrices({
+        config,
+        entryPrice,
+        collateralUsd,
+        leverage: plan.leverage,
+        side,
+        stopLossPercent: plan.stopLossPercent,
+        takeProfitPercent: plan.takeProfitPercent,
+      });
+      const firstPrice = windowPoints[0]?.v ?? entryPrice;
+      const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
+      const routed = await deps.routeSignal(config.walletAddress, {
+        signalId: signal.id,
+        symbol: signal.symbol,
+        summary: `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
+        direction: signal.direction,
+        signalConfidence: signal.confidence,
+        asset,
+        collateralUsd,
+        leverage: plan.leverage,
+        takeProfitPrice: triggers.takeProfitPrice,
+        stopLossPrice: triggers.stopLossPrice,
+        maxSlippageBps: 100,
+        smartTradeProfile: config.settings.smartTradeProfile,
+        executionStyle: config.settings.perpsExecutionMode,
+        marketContext: {
+          spotPrice: entryPrice,
+          volatilityPercent: plan.volatilityPercent,
+          trendBias: computeTrendBias(windowPoints),
+          availableUsdc,
+          hasOpenPosition: false,
+          recentPriceChangePercent,
+        },
+      });
+      await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+      results.push({
+        walletAddress: config.walletAddress,
+        asset,
+        status: routed.ok ? "executed" : "skipped",
+        code: "code" in routed && typeof routed.code === "string" ? routed.code : routed.ok ? "EXECUTED" : "NOT_EXECUTED",
+        message: routed.message,
+        signalId: signal.id,
+      });
+    } catch (error) {
+      results.push({
+        walletAddress: config.walletAddress,
+        asset,
+        status: "failed",
+        code: "MONITOR_ERROR",
+        message: error instanceof Error ? error.message : "Autonomous Perps monitoring failed.",
+      });
+    }
+  }
+
+  const completedAt = new Date().toISOString();
+  return {
+    ok: !results.some((result) => result.status === "failed"),
+    locked: true,
+    startedAt,
+    completedAt,
+    configuredWallets: configs.length,
+    eligibleWallets: enabledConfigs.length,
+    results,
+  };
+}
+
+export async function runLockedAutonomousPerpsMonitor() {
+  const redis = await getRedisClient();
+  if (!redis) throw new Error("Redis is required for the autonomous Perps monitor.");
+  const lockToken = crypto.randomUUID();
+  const acquired = await redis.set(MONITOR_LOCK_KEY, lockToken, { NX: true, PX: MONITOR_LOCK_TTL_MS });
+  if (acquired !== "OK") {
+    const now = new Date().toISOString();
+    return {
+      ok: true,
+      locked: false,
+      startedAt: now,
+      completedAt: now,
+      configuredWallets: 0,
+      eligibleWallets: 0,
+      results: [],
+    } satisfies AutonomousMonitorResult;
+  }
+
+  try {
+    const result = await runAutonomousPerpsMonitor();
+    await redis.set(LAST_RUN_KEY, JSON.stringify(result));
+    return result;
+  } finally {
+    await redis.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      { keys: [MONITOR_LOCK_KEY], arguments: [lockToken] }
+    ).catch(() => undefined);
+  }
+}
+
+export async function getLastAutonomousMonitorRun() {
+  const redis = await getRedisClient();
+  if (!redis) return null;
+  const raw = await redis.get(LAST_RUN_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AutonomousMonitorResult;
+  } catch {
+    return null;
+  }
+}

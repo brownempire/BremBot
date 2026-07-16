@@ -28,7 +28,7 @@ type JupiterPerpsPositionsState = {
   refetch: () => Promise<void>;
 };
 
-const LIVE_PERPS_REFRESH_MS = 5_000;
+const LIVE_PERPS_REFRESH_MS = 20_000;
 const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
 
 function getFriendlyErrorMessage(error: unknown) {

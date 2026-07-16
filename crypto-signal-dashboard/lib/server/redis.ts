@@ -16,7 +16,8 @@ export async function getRedisClient() {
     global.__brembotRedisClient = createClient({
       url: process.env.REDIS_URL,
       socket: {
-        reconnectStrategy: (retries) => Math.min(500 + retries * 100, 3000),
+        connectTimeout: 5_000,
+        reconnectStrategy: (retries) => retries >= 3 ? false : Math.min(500 + retries * 100, 3000),
       },
     });
     global.__brembotRedisClient.on("error", () => {

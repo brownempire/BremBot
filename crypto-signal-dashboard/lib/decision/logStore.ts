@@ -42,13 +42,12 @@ function formatDecisionMarkdown(record: TradeDecisionRecord) {
 
 export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
   const config = getTradeDecisionConfig();
-  ensureParentDir(config.journalFilePath);
-  ensureParentDir(config.eventsFilePath);
-
   const markdownEntry = formatDecisionMarkdown(record);
   const ndjsonEntry = `${JSON.stringify(record)}\n`;
 
   try {
+    ensureParentDir(config.journalFilePath);
+    ensureParentDir(config.eventsFilePath);
     if (!fs.existsSync(config.journalFilePath)) {
       fs.writeFileSync(
         config.journalFilePath,

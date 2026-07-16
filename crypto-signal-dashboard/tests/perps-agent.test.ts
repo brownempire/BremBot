@@ -267,3 +267,74 @@ test("live wallet allowlist only enables configured wallets", () => {
   assert.equal(sessionConfig.isPerpsLiveWalletAllowed(otherWallet), false);
   assert.equal(sessionConfig.isPerpsLiveWalletAllowed(null), false);
 });
+
+test("decision logging remains non-fatal when its directory cannot be created", async () => {
+  const blocker = path.join(tempRoot, "not-a-directory");
+  fs.writeFileSync(blocker, "blocker", "utf8");
+  process.env.PERPS_DECISION_JOURNAL_FILE = path.join(blocker, "journal.md");
+  process.env.PERPS_DECISION_EVENTS_FILE = path.join(blocker, "events.ndjson");
+  const { appendTradeDecisionRecord } = await import("../lib/decision/logStore");
+
+  await assert.doesNotReject(() => appendTradeDecisionRecord({
+    payload: {
+      decisionId: "decision-non-fatal",
+      createdAt: new Date().toISOString(),
+      walletAddress: "wallet",
+      sessionId: "session",
+      sessionMode: "paper",
+      executionModel: "approval-assisted",
+      signalId: "signal",
+      symbol: "SOL/USD",
+      summary: "Logging failure must not block execution.",
+      direction: "bullish",
+      signalConfidence: 0.8,
+      asset: "SOL",
+      requestedTrade: {
+        collateralUsd: 10,
+        leverage: 1,
+        takeProfitPrice: null,
+        stopLossPrice: null,
+        maxSlippageBps: 100,
+        executionStyle: null,
+        smartTradeProfile: null,
+      },
+      marketContext: {
+        spotPrice: 100,
+        volatilityPercent: 1,
+        trendBias: "bullish",
+        availableUsdc: 100,
+        hasOpenPosition: false,
+        recentPriceChangePercent: 1,
+      },
+      historyContext: {
+        recentExecutionCount: 0,
+        approvalRequiredCount: 0,
+        submittedCount: 0,
+        confirmedCount: 0,
+        paperExecutedCount: 0,
+        blockedCount: 0,
+        failedCount: 0,
+        recentFailureRate: 0,
+        recentBlockedRate: 0,
+      },
+      shadowMode: true,
+    },
+    recommendation: {
+      shouldTrade: true,
+      confidenceScore: 0.8,
+      riskGrade: "low",
+      sizeMultiplier: 1,
+      leverageMultiplier: 1,
+      recommendedCollateralUsd: 10,
+      recommendedLeverage: 1,
+      recommendedTakeProfitPrice: null,
+      recommendedStopLossPrice: null,
+      explanationTags: ["test"],
+      explanationSummary: "Test",
+      shadowMode: true,
+    },
+  }));
+
+  process.env.PERPS_DECISION_JOURNAL_FILE = path.join(tempRoot, "trade-decision-journal.md");
+  process.env.PERPS_DECISION_EVENTS_FILE = path.join(tempRoot, "trade-decision-events.ndjson");
+});

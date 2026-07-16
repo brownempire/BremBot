@@ -6,24 +6,30 @@ import { getPerpsSessionWithTimeout, routePerpsSignalForUser } from "@/lib/perps
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const walletAddress = await getAuthorizedWalletAddress(request);
-  if (!walletAddress) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  try {
+    const walletAddress = await getAuthorizedWalletAddress(request);
+    if (!walletAddress) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-  const payload = await request.json().catch(() => null);
-  const parsed = perpsAgentSignalSchema.safeParse(payload);
-  if (!parsed.success) {
-    return Response.json({ error: "Invalid perps agent payload.", detail: parsed.error.message }, { status: 400 });
-  }
+    const payload = await request.json().catch(() => null);
+    const parsed = perpsAgentSignalSchema.safeParse(payload);
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid perps agent payload.", detail: parsed.error.message }, { status: 400 });
+    }
 
-  const session = await getPerpsSessionWithTimeout(walletAddress);
-  if (session?.mode === "live" && !isPerpsLiveWalletAllowed(walletAddress)) {
-    return Response.json({
-      error: "Live Perps automation is not enabled for this wallet.",
-    }, { status: 403 });
-  }
+    const session = await getPerpsSessionWithTimeout(walletAddress);
+    if (session?.mode === "live" && !isPerpsLiveWalletAllowed(walletAddress)) {
+      return Response.json({
+        error: "Live Perps automation is not enabled for this wallet.",
+      }, { status: 403 });
+    }
 
-  const result = await routePerpsSignalForUser(walletAddress, parsed.data);
-  return Response.json(result, { status: result.ok ? 200 : 409 });
+    const result = await routePerpsSignalForUser(walletAddress, parsed.data);
+    return Response.json(result, { status: result.ok ? 200 : 409 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to execute the autonomous Perps signal.";
+    console.error("[Perps Agent Execute Error]", { message });
+    return Response.json({ error: "Autonomous Perps execution failed.", message }, { status: 500 });
+  }
 }

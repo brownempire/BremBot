@@ -10,7 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test:perps-agent": "node --import tsx --test tests/perps-agent.test.ts",
+    "test:perps-agent": "node --import tsx --test tests/*.test.ts",
     "cap:add:ios": "cap add ios",
     "cap:copy": "cap copy",
     "cap:sync:ios": "cap sync ios",

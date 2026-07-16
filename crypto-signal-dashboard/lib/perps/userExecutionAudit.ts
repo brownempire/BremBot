@@ -93,3 +93,25 @@ export async function updateUserPerpsExecution(walletAddress: string, executionI
   await writeStore(store);
   return next.find((entry) => entry.executionId === executionId) ?? null;
 }
+
+export async function reconcileUserExecutionsWithoutOpenPosition(walletAddress: string) {
+  const store = await readStore();
+  const current = store[walletAddress] ?? [];
+  let changed = false;
+  const now = new Date().toISOString();
+  const next = current.map((entry) => {
+    if (!["prepared", "submitted", "confirmed"].includes(entry.status)) return entry;
+    changed = true;
+    return perpsUserExecutionSchema.parse({
+      ...entry,
+      status: "cancelled",
+      reasonCode: "POSITION_CLOSED",
+      reasonMessage: "No matching open agent position remains on Jupiter Perps.",
+      updatedAt: now,
+    });
+  });
+  if (!changed) return current;
+  store[walletAddress] = next;
+  await writeStore(store);
+  return next;
+}

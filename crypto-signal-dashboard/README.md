@@ -79,11 +79,15 @@ For live feed setup:
 - `GET /api/perps/portfolio` combines the authenticated primary wallet and its associated agent wallet positions.
 - `POST/PATCH/DELETE /api/perps/agent/tpsl` manages an agent-owned position's TP/SL with the server-side agent signer.
 - `POST /api/perps/agent/close` closes an agent-owned position after verifying the primary-to-agent association.
+- `GET/PUT /api/perps/automation/config` syncs the authenticated wallet's automation settings to Redis.
+- `GET /api/perps/automation/run` is the `CRON_SECRET`-protected once-per-minute Vercel worker.
+- `GET /api/perps/automation/status` reports the most recent server monitor result for the authenticated wallet.
 - Paper mode simulates user-scoped Perps actions without moving funds.
 - Live mode is `approval-assisted` unless an associated agent wallet and matching server-only signer are configured. With an agent wallet, approved signals execute autonomously and the Perps panel combines both wallets while preserving actual position ownership.
 - `PERPS_LIVE_ALLOWED_WALLETS` can restrict live Perps automation to specific wallet addresses only.
-- Approval-assisted sessions stop after the configured foreground heartbeat timeout. Agent-wallet sessions remain active until Clock Out, the kill switch, or another guardrail stops execution.
+- Approval-assisted sessions stop after the configured foreground heartbeat timeout. Agent-wallet sessions and their Redis-backed monitor configuration remain active with the app closed until Clock Out, disabling Perps auto-trade, the kill switch, or another guardrail stops execution.
 - Agent credentials belong only in server environment variables: `PERPS_AGENT_OWNER_WALLET`, `PERPS_AGENT_WALLET_PUBLIC_KEY`, and `PERPS_AGENT_WALLET_PRIVATE_KEY`. Never expose the private key through a `NEXT_PUBLIC_` variable.
+- Production also requires a server-only `CRON_SECRET`; Vercel sends it to the configured cron route as a bearer token.
 - See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.
 
 ## Roadmap

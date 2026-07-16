@@ -4,26 +4,9 @@ import {
   fetchJupiterPerpsAccountSnapshot,
   type JupiterPerpsAccountSnapshot,
 } from "@/lib/jupiterPerps";
-import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
+import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
 
 export const dynamic = "force-dynamic";
-
-const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-
-async function getUsdcBalance(walletAddress: string | null) {
-  if (!walletAddress) return null;
-  const rpcUrl = process.env.SOLANA_RPC_URL?.trim()
-    || process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim()
-    || clusterApiUrl("mainnet-beta");
-  const accounts = await new Connection(rpcUrl, "confirmed").getParsedTokenAccountsByOwner(
-    new PublicKey(walletAddress),
-    { mint: USDC_MINT }
-  );
-  return accounts.value.reduce((sum, entry) => {
-    const amount = entry.account.data.parsed?.info?.tokenAmount?.uiAmount;
-    return sum + (typeof amount === "number" && Number.isFinite(amount) ? amount : 0);
-  }, 0);
-}
 
 function labelSnapshot(snapshot: JupiterPerpsAccountSnapshot, walletAddress: string, walletRole: PerpsWalletRole) {
   return {
@@ -68,7 +51,7 @@ export async function GET(request: Request) {
       wallet.role
     ))
   );
-  const agentAvailableUsdc = await getUsdcBalance(agentWalletAddress).catch(() => null);
+  const agentAvailableUsdc = await getWalletUsdcBalance(agentWalletAddress).catch(() => null);
   const fulfilled = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
 
   if (fulfilled.length === 0) {

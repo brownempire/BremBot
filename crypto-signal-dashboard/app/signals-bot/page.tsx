@@ -25,6 +25,7 @@ import type {
   JupiterPerpsWidgetSnapshot,
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
+import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -45,8 +46,10 @@ const PERPS_AGENT_LOCAL_DECISION_LOG_STORAGE_KEY = "brembot.perps-agent.local-de
 const PERPS_AGENT_LOCAL_LEARNING_PROFILE_STORAGE_KEY = "brembot.perps-agent.local-learning-profile.v1";
 const PERPS_SESSION_TIMEOUT_MS = 60_000;
 const IN_APP_REMOTE_AUTH_GRACE_MS = 20_000;
-const LIVE_PRICE_REFRESH_MS = 2_500;
-const WALLET_PORTFOLIO_REFRESH_MS = 45_000;
+const LIVE_PRICE_REFRESH_MS = 15_000;
+const LIVE_PRICE_MAX_BACKOFF_MS = 120_000;
+const WALLET_PORTFOLIO_REFRESH_MS = 120_000;
+const PERPS_HEARTBEAT_REFRESH_MS = 60_000;
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
 const AI_PANEL_STATE_EVENT = "bremlogic:ai-panel-state";
 const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
@@ -1086,7 +1089,12 @@ function DashboardPage() {
   const [remoteAuthToken, setRemoteAuthToken] = useState<string | null>(null);
   const [remoteAuthAddress, setRemoteAuthAddress] = useState<string | null>(null);
   const [phantomAuthAddress, setPhantomAuthAddress] = useState<string | null>(null);
-  const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: Date.now(), v: 0 }]);
+  const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: 0, v: 0 }]);
+  const [renderNow, setRenderNow] = useState(0);
+  const [nativeShell, setNativeShell] = useState(false);
+  const [standalonePwa, setStandalonePwa] = useState(false);
+  const [localAutomationSettingsLoaded, setLocalAutomationSettingsLoaded] = useState(false);
+  const [remoteAutomationConfigWallet, setRemoteAutomationConfigWallet] = useState<string | null>(null);
   const [dashboardLayout, setDashboardLayout] = useState<DashboardSectionLayout[]>(DEFAULT_DASHBOARD_LAYOUT);
   const [dragSectionId, setDragSectionId] = useState<DashboardSectionId | null>(null);
   const resizeStateRef = useRef<{
@@ -1145,7 +1153,6 @@ function DashboardPage() {
     remoteAuthSource === "phantom"
       ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
       : walletAddress ?? "paper-auto";
-  const nativeShell = isNativeShellApp();
   const [activeSignalsTab, setActiveSignalsTab] = useState<SignalsAppTab>("signals");
   const perpsWalletConnected = Boolean(jupiterPerpsController?.connected || wallet.connected);
   const perpsConnectionLabel: "Disconnected" | "Connected" = perpsWalletConnected ? "Connected" : "Disconnected";
@@ -1159,7 +1166,7 @@ function DashboardPage() {
   const perpsRuntimePlatform =
     nativeShell
       ? "native"
-      : isStandalonePwaRuntime()
+      : standalonePwa
         ? "pwa"
         : "web";
   const perpsPlatformLabel =
@@ -1279,6 +1286,12 @@ function DashboardPage() {
 
     return wallet.passthroughWalletContextState;
   }, [jupiterPerpsController, nativeShell, wallet.passthroughWalletContextState]);
+
+  useEffect(() => {
+    setRenderNow(Date.now());
+    setNativeShell(isNativeShellApp());
+    setStandalonePwa(isStandalonePwaRuntime());
+  }, []);
 
   useEffect(() => {
     const syncActiveTab = () => {
@@ -2170,7 +2183,7 @@ function DashboardPage() {
         walletConnected: wallet.connected || Boolean(jupiterPerpsController?.connected),
         walletWriteEnabled: Boolean(jupiterPerpsController?.canWrite),
       });
-    }, 15_000);
+    }, PERPS_HEARTBEAT_REFRESH_MS);
 
     return () => {
       window.clearInterval(heartbeatTimer);
@@ -2398,6 +2411,8 @@ function DashboardPage() {
     let cancelled = false;
     let simulateInterval: ReturnType<typeof setInterval> | null = null;
     let polling = false;
+    let consecutiveFailures = 0;
+    let nextPollAllowedAt = 0;
     const simulatedFeed = createSimulatedFeed(trackedMarkets.map((market) => market.pair));
 
     const appendPrices = (
@@ -2461,6 +2476,7 @@ function DashboardPage() {
 
     const pollLivePrices = async () => {
       if (polling) return;
+      if (Date.now() < nextPollAllowedAt) return;
       polling = true;
       try {
         const products = trackedMarkets.map((market) => market.coinbaseProduct).join(",");
@@ -2469,6 +2485,11 @@ function DashboardPage() {
         });
         const payload = await response.json();
         if (!response.ok || !payload?.markets) {
+          consecutiveFailures += 1;
+          nextPollAllowedAt = Date.now() + Math.min(
+            LIVE_PRICE_MAX_BACKOFF_MS,
+            LIVE_PRICE_REFRESH_MS * (2 ** Math.min(consecutiveFailures, 3))
+          );
           if (!cancelled) startSimulationFallback();
           return;
         }
@@ -2491,10 +2512,17 @@ function DashboardPage() {
         });
 
         if (cancelled) return;
+        consecutiveFailures = 0;
+        nextPollAllowedAt = 0;
         stopSimulationFallback();
         setPriceFeedStatus(source);
         appendPrices(pricesBySlot, changes24hBySlot, now);
       } catch (_error) {
+        consecutiveFailures += 1;
+        nextPollAllowedAt = Date.now() + Math.min(
+          LIVE_PRICE_MAX_BACKOFF_MS,
+          LIVE_PRICE_REFRESH_MS * (2 ** Math.min(consecutiveFailures, 3))
+        );
         if (!cancelled) startSimulationFallback();
       } finally {
         polling = false;
@@ -2717,6 +2745,12 @@ function DashboardPage() {
               }
 
               const delegatedAgentSession = perpsAgentSession.executionModel === "delegated-ready";
+              if (delegatedAgentSession) {
+                setPerpsAutoTradeStatus(
+                  `Server monitor active for ${activePerpsAutoTradeToken.symbol} · this browser signal is display-only`
+                );
+                return;
+              }
               if (!jupiterPerpsController && !delegatedAgentSession) {
                 setPerpsAutoTradeStatus(`Open the Perps panel once so BremLogic can load Jupiter Perps pricing for ${signal.symbol}`);
                 return;
@@ -3350,8 +3384,69 @@ function DashboardPage() {
       });
     } catch (_error) {
       setAutoTradeSettings(DEFAULT_AUTO_TRADE_SETTINGS);
+    } finally {
+      setLocalAutomationSettingsLoaded(true);
     }
   }, []);
+
+  useEffect(() => {
+    const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
+    if (!remoteAuthToken || !configWalletAddress || !localAutomationSettingsLoaded) {
+      setRemoteAutomationConfigWallet(null);
+      return;
+    }
+
+    let cancelled = false;
+    setRemoteAutomationConfigWallet(null);
+    fetch("/api/perps/automation/config", {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${remoteAuthToken}` },
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as { config?: PerpsAutomationConfig | null } | null;
+        if (!response.ok) throw new Error("Unable to load server automation configuration.");
+        return payload?.config ?? null;
+      })
+      .then((config) => {
+        if (cancelled) return;
+        if (config) {
+          setAutoTradeSettings(config.settings as AutoTradeSettings);
+          setParams(config.params);
+          try {
+            window.localStorage.setItem(AUTO_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(config.settings));
+            window.localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(config.params));
+          } catch {
+            // Browser storage is only a local mirror; Redis remains authoritative.
+          }
+        }
+        setRemoteAutomationConfigWallet(configWalletAddress);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteAutomationConfigWallet(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [localAutomationSettingsLoaded, remoteAuthAddress, remoteAuthToken, remoteSyncWalletAddress]);
+
+  useEffect(() => {
+    const configWalletAddress = remoteAuthAddress ?? remoteSyncWalletAddress;
+    if (!remoteAuthToken || !configWalletAddress || remoteAutomationConfigWallet !== configWalletAddress) return;
+
+    const timeoutId = window.setTimeout(() => {
+      void fetch("/api/perps/automation/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${remoteAuthToken}`,
+        },
+        body: JSON.stringify({ settings: autoTradeSettings, params }),
+      }).catch(() => undefined);
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [autoTradeSettings, params, remoteAuthAddress, remoteAuthToken, remoteAutomationConfigWallet, remoteSyncWalletAddress]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3414,6 +3509,13 @@ function DashboardPage() {
       return;
     }
 
+    if (perpsAgentSession?.executionModel === "delegated-ready" && perpsAgentSession.sessionState === "clocked_in") {
+      setPerpsAutoTradeStatus(
+        `Server monitor active for ${activePerpsAutoTradeToken.symbol} · checks every minute · app may close`
+      );
+      return;
+    }
+
     if (!jupiterPerpsController?.connected || !jupiterPerpsController.canWrite) {
       setPerpsAutoTradeStatus(getPerpsAutoTradeReadyStatus(activePerpsAutoTradeToken.symbol, { waitingForWallet: true }));
       return;
@@ -3441,6 +3543,8 @@ function DashboardPage() {
     getPerpsAutoTradeReadyStatus,
     isPerpsAutoTradeFailureCooldownActive,
     jupiterPerpsController,
+    perpsAgentSession?.executionModel,
+    perpsAgentSession?.sessionState,
     readOnlyPerpsSnapshot.positions.length,
   ]);
 
@@ -4062,8 +4166,8 @@ function DashboardPage() {
     });
 
     if (points.length > 0) return points;
-    return [{ t: Date.now(), v: 0 }];
-  }, [pnlTokenMint, recentTrades, selectedTokenUsdPrice]);
+    return [{ t: renderNow, v: 0 }];
+  }, [pnlTokenMint, recentTrades, renderNow, selectedTokenUsdPrice]);
 
   useEffect(() => {
     if (!remoteSyncWalletAddress || !remoteAuthToken) {
@@ -4103,8 +4207,9 @@ function DashboardPage() {
   const pnlValues = useMemo(() => {
     const latest = displayedPnlTimeline[displayedPnlTimeline.length - 1];
     const latestValue = latest?.v ?? 0;
-    const now = Date.now();
-    const yearStart = new Date(new Date().getFullYear(), 0, 1).getTime();
+    const now = renderNow;
+    const currentDate = renderNow > 0 ? new Date(renderNow) : new Date(0);
+    const yearStart = new Date(currentDate.getFullYear(), 0, 1).getTime();
 
     const calcSince = (cutoff: number) => {
       const base = displayedPnlTimeline.find((point) => point.t >= cutoff) ?? displayedPnlTimeline[0];
@@ -4117,28 +4222,28 @@ function DashboardPage() {
       d30: calcSince(now - 30 * 24 * 60 * 60 * 1000),
       ytd: calcSince(yearStart),
     };
-  }, [displayedPnlTimeline]);
+  }, [displayedPnlTimeline, renderNow]);
 
   const pnlChartPoints = useMemo(() => {
-    const now = Date.now();
+    const now = renderNow;
     const cutoff = pnlRange === "24h"
       ? now - 24 * 60 * 60 * 1000
       : pnlRange === "7d"
         ? now - 7 * 24 * 60 * 60 * 1000
         : pnlRange === "30d"
           ? now - 30 * 24 * 60 * 60 * 1000
-          : new Date(new Date().getFullYear(), 0, 1).getTime();
+          : new Date((renderNow > 0 ? new Date(renderNow) : new Date(0)).getFullYear(), 0, 1).getTime();
 
     const filtered = displayedPnlTimeline.filter((point) => point.t >= cutoff);
     if (filtered.length >= 2) return filtered;
     const fallback = displayedPnlTimeline[displayedPnlTimeline.length - 1] ?? { t: now, v: 0 };
     return [{ t: cutoff, v: fallback.v }, fallback];
-  }, [displayedPnlTimeline, pnlRange]);
+  }, [displayedPnlTimeline, pnlRange, renderNow]);
 
   const pnlChartPolyline = useMemo(() => {
     const width = 640;
     const height = 220;
-    const minX = pnlChartPoints[0]?.t ?? Date.now();
+    const minX = pnlChartPoints[0]?.t ?? renderNow;
     const maxX = pnlChartPoints[pnlChartPoints.length - 1]?.t ?? minX + 1;
     const values = pnlChartPoints.map((point) => point.v);
     const minY = Math.min(...values, 0);
@@ -4153,7 +4258,7 @@ function DashboardPage() {
         return `${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(" ");
-  }, [pnlChartPoints]);
+  }, [pnlChartPoints, renderNow]);
 
   function updateTrackedMarket(slotId: string, nextProduct: string) {
     const option = marketOptions.find((item) => item.coinbaseProduct === nextProduct);

@@ -32,7 +32,9 @@ export function isNativeShellRuntime() {
   }
 
   const runtimeWindow = window as Window & {
-    Capacitor?: unknown;
+    Capacitor?: {
+      isNativePlatform?: () => boolean;
+    };
     webkit?: {
       messageHandlers?: {
         bridge?: unknown;
@@ -42,7 +44,7 @@ export function isNativeShellRuntime() {
   };
   const userAgent = window.navigator.userAgent || "";
   const hasCapacitorBridge = Boolean(
-    runtimeWindow.Capacitor
+    runtimeWindow.Capacitor?.isNativePlatform?.()
     || (runtimeWindow.webkit
       && runtimeWindow.webkit.messageHandlers
       && (runtimeWindow.webkit.messageHandlers.bridge || runtimeWindow.webkit.messageHandlers.capacitor))

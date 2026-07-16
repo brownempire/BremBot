@@ -1030,7 +1030,12 @@ function JupiterPerpsPositionWidgetBody({
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);
-  }, [autoTradeController, onControllerChange]);
+    // Report only when the controller's externally visible connection state
+    // changes. Some native wallet callbacks receive a fresh identity after the
+    // parent stores the controller; depending on the full object here creates
+    // a parent/child render feedback loop in the native shell.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoTradeController?.canWrite, autoTradeController?.connected, autoTradeController?.walletAddress, onControllerChange]);
 
   useEffect(() => {
     const node = widgetRef.current;
