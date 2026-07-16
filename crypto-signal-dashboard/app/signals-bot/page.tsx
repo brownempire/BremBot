@@ -492,9 +492,12 @@ function saveLocalPerpsAgentSession(session: PerpsSessionSnapshot | null) {
 function loadLocalPerpsAgentExecutions() {
   if (typeof window === "undefined") return [] as PerpsExecutionSummary[];
   try {
-    const raw = window.sessionStorage.getItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
+    const raw = window.localStorage.getItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY)
+      ?? window.sessionStorage.getItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as PerpsExecutionSummary[];
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY, raw);
+    window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -504,7 +507,8 @@ function loadLocalPerpsAgentExecutions() {
 function saveLocalPerpsAgentExecutions(executions: PerpsExecutionSummary[]) {
   if (typeof window === "undefined") return;
   try {
-    window.sessionStorage.setItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY, JSON.stringify(executions));
+    window.localStorage.setItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY, JSON.stringify(executions));
+    window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
   } catch {
     // ignore storage failures
   }
@@ -1077,6 +1081,7 @@ function DashboardPage() {
   const [decisionLogContent, setDecisionLogContent] = useState("Loading decision log...");
   const [decisionLogBusy, setDecisionLogBusy] = useState(false);
   const [decisionLogEntries, setDecisionLogEntries] = useState<DecisionLogEntry[]>([]);
+  const [decisionLogExecutionHistory, setDecisionLogExecutionHistory] = useState<PerpsExecutionSummary[]>([]);
   const [decisionLearningBusy, setDecisionLearningBusy] = useState(false);
   const [decisionLearningStatus, setDecisionLearningStatus] = useState("Train the wallet-specific agent profile from saved decision history.");
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
@@ -1584,6 +1589,7 @@ function DashboardPage() {
   const clearPerpsAgentExecutions = useCallback(async () => {
     if (!remoteAuthToken) {
       if (typeof window !== "undefined") {
+        window.localStorage.removeItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
         window.sessionStorage.removeItem(PERPS_AGENT_LOCAL_EXECUTIONS_STORAGE_KEY);
       }
       setPerpsAgentExecutions([]);
@@ -1823,21 +1829,31 @@ function DashboardPage() {
     try {
       if (!remoteAuthToken) {
         const localEntries = loadLocalDecisionLogEntries(perpsLogWalletAddress);
+        setDecisionLogExecutionHistory(loadLocalPerpsAgentExecutions());
         setDecisionLogEntries(localEntries);
         setDecisionLogContent(localEntries.length > 0 ? "Local Perps agent decision log loaded." : "No decision log entries yet.");
         return;
       }
 
-      const response = await fetch("/api/perps/decision-log?limit=40", { cache: "no-store" });
-      const payload = await response.json().catch(() => null) as { content?: string; entries?: DecisionLogEntry[] } | null;
+      const response = await fetch("/api/perps/decision-log?limit=100", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      });
+      const payload = await response.json().catch(() => null) as {
+        content?: string;
+        entries?: DecisionLogEntry[];
+        executions?: PerpsExecutionSummary[];
+      } | null;
       if (!response.ok) {
         throw new Error("Unable to load the decision log.");
       }
       setDecisionLogContent(payload?.content?.trim() || "No decision log entries yet.");
       setDecisionLogEntries(Array.isArray(payload?.entries) ? payload!.entries : []);
+      setDecisionLogExecutionHistory(Array.isArray(payload?.executions) ? payload!.executions : []);
     } catch (error) {
       setDecisionLogContent(error instanceof Error ? error.message : "Unable to load the decision log.");
       setDecisionLogEntries([]);
+      setDecisionLogExecutionHistory([]);
     } finally {
       setDecisionLogBusy(false);
     }
@@ -1981,8 +1997,8 @@ function DashboardPage() {
   }, [aiChatMessages, currentAiMarket]);
 
   const legacyDecisionExecutions = useMemo(() => (
-    perpsAgentExecutions.filter((execution) => !execution.decisionSummary)
-  ), [perpsAgentExecutions]);
+    decisionLogExecutionHistory.filter((execution) => !execution.decisionSummary)
+  ), [decisionLogExecutionHistory]);
 
   const setAiPanelVisibility = useCallback((open: boolean) => {
     setAiPanelOpen(open);

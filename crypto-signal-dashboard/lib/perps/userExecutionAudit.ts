@@ -6,8 +6,8 @@ import { perpsUserExecutionSchema, type PerpsUserExecution } from "@/lib/perps/s
 const STORE_FILE_PATH = process.env.PERPS_USER_EXECUTIONS_FILE || "/tmp/brembot-perps-user-executions.json";
 const FEED_STATE_FILE_PATH = process.env.PERPS_USER_EXECUTION_FEED_STATE_FILE || "/tmp/brembot-perps-user-execution-feed-state.json";
 const REDIS_KEY = "brembot:perps:user-executions";
+const REDIS_RECORDS_KEY = "brembot:perps:user-execution-records:v2";
 const FEED_STATE_REDIS_KEY = "brembot:perps:user-execution-feed-state";
-const MAX_EXECUTIONS_PER_WALLET = 100;
 
 type UserExecutionMap = Record<string, PerpsUserExecution[]>;
 type UserExecutionFeedStateMap = Record<string, string>;
@@ -72,8 +72,12 @@ function writeFeedStateDisk(store: UserExecutionFeedStateMap) {
 async function getExecutionFeedClearedBefore(walletAddress: string) {
   const client = await getRedisClient().catch(() => null);
   if (client) {
-    const value = await client.hGet(FEED_STATE_REDIS_KEY, walletAddress);
-    return value && Number.isFinite(Date.parse(value)) ? value : null;
+    try {
+      const value = await client.hGet(FEED_STATE_REDIS_KEY, walletAddress);
+      return value && Number.isFinite(Date.parse(value)) ? value : null;
+    } catch {
+      // Fall through to the local fail-safe when Redis is temporarily unavailable.
+    }
   }
   return readFeedStateDisk()[walletAddress] ?? null;
 }
@@ -81,24 +85,69 @@ async function getExecutionFeedClearedBefore(walletAddress: string) {
 async function readRedisStore() {
   const client = await getRedisClient().catch(() => null);
   if (!client) return null;
-  const raw = await client.get(REDIS_KEY);
-  return raw ? parseExecutionMap(raw) : {};
-}
+  let legacyRaw: string | null;
+  let recordValues: string[];
+  try {
+    [legacyRaw, recordValues] = await Promise.all([
+      client.get(REDIS_KEY),
+      client.hVals(REDIS_RECORDS_KEY),
+    ]);
+  } catch {
+    return null;
+  }
+  const merged = legacyRaw ? parseExecutionMap(legacyRaw) : {};
 
-async function writeRedisStore(store: UserExecutionMap) {
-  const client = await getRedisClient().catch(() => null);
-  if (!client) return false;
-  await client.set(REDIS_KEY, JSON.stringify(store));
-  return true;
+  for (const value of recordValues) {
+    try {
+      const parsed = perpsUserExecutionSchema.safeParse(JSON.parse(value));
+      if (!parsed.success) continue;
+      const record = parsed.data;
+      const current = merged[record.walletAddress] ?? [];
+      merged[record.walletAddress] = [
+        record,
+        ...current.filter((entry) => entry.executionId !== record.executionId),
+      ];
+    } catch {
+      // Ignore malformed historical values without discarding valid records.
+    }
+  }
+
+  return merged;
 }
 
 async function readStore() {
-  return (await readRedisStore()) ?? readDiskStore();
+  const diskStore = readDiskStore();
+  const redisStore = await readRedisStore();
+  if (!redisStore) return diskStore;
+
+  const merged: UserExecutionMap = { ...diskStore };
+  Object.entries(redisStore).forEach(([walletAddress, records]) => {
+    const byId = new Map<string, PerpsUserExecution>();
+    (diskStore[walletAddress] ?? []).forEach((record) => byId.set(record.executionId, record));
+    records.forEach((record) => byId.set(record.executionId, record));
+    merged[walletAddress] = [...byId.values()];
+  });
+
+  const diskRecords = Object.values(diskStore).flat();
+  if (diskRecords.length > 0) {
+    await writeRedisRecords(diskRecords);
+  }
+  return merged;
 }
 
-async function writeStore(store: UserExecutionMap) {
-  const wroteRedis = await writeRedisStore(store);
-  if (!wroteRedis) writeDiskStore(store);
+async function writeRedisRecords(records: PerpsUserExecution[]) {
+  const client = await getRedisClient().catch(() => null);
+  if (!client) return false;
+  try {
+    const multi = client.multi();
+    records.forEach((record) => {
+      multi.hSet(REDIS_RECORDS_KEY, `${record.walletAddress}:${record.executionId}`, JSON.stringify(record));
+    });
+    await multi.exec();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function listUserPerpsExecutions(walletAddress: string) {
@@ -120,35 +169,47 @@ export async function clearUserPerpsExecutionFeed(walletAddress: string) {
   const clearedBefore = new Date().toISOString();
   const client = await getRedisClient().catch(() => null);
   if (client) {
-    await client.hSet(FEED_STATE_REDIS_KEY, walletAddress, clearedBefore);
-  } else {
-    const store = readFeedStateDisk();
-    store[walletAddress] = clearedBefore;
-    writeFeedStateDisk(store);
+    try {
+      await client.hSet(FEED_STATE_REDIS_KEY, walletAddress, clearedBefore);
+      return clearedBefore;
+    } catch {
+      // Preserve the UI-only clear marker locally if Redis is interrupted.
+    }
   }
+  const store = readFeedStateDisk();
+  store[walletAddress] = clearedBefore;
+  writeFeedStateDisk(store);
   return clearedBefore;
 }
 
 export async function createUserPerpsExecution(record: PerpsUserExecution) {
-  const store = await readStore();
-  const next = [record, ...(store[record.walletAddress] ?? []).filter((item) => item.executionId !== record.executionId)]
-    .slice(0, MAX_EXECUTIONS_PER_WALLET);
-  store[record.walletAddress] = next;
-  await writeStore(store);
+  const wroteRedis = await writeRedisRecords([record]);
+  if (!wroteRedis) {
+    const store = readDiskStore();
+    store[record.walletAddress] = [
+      record,
+      ...(store[record.walletAddress] ?? []).filter((item) => item.executionId !== record.executionId),
+    ];
+    writeDiskStore(store);
+  }
   return record;
 }
 
 export async function updateUserPerpsExecution(walletAddress: string, executionId: string, patch: Partial<PerpsUserExecution>) {
-  const store = await readStore();
-  const current = store[walletAddress] ?? [];
-  const next = current.map((entry) => (
-    entry.executionId === executionId
-      ? perpsUserExecutionSchema.parse({ ...entry, ...patch, updatedAt: new Date().toISOString() })
-      : entry
-  ));
-  store[walletAddress] = next;
-  await writeStore(store);
-  return next.find((entry) => entry.executionId === executionId) ?? null;
+  const current = await listUserPerpsExecutions(walletAddress);
+  const existing = current.find((entry) => entry.executionId === executionId);
+  if (!existing) return null;
+  const updated = perpsUserExecutionSchema.parse({ ...existing, ...patch, updatedAt: new Date().toISOString() });
+  const wroteRedis = await writeRedisRecords([updated]);
+  if (!wroteRedis) {
+    const store = readDiskStore();
+    store[walletAddress] = [
+      updated,
+      ...(store[walletAddress] ?? []).filter((entry) => entry.executionId !== executionId),
+    ];
+    writeDiskStore(store);
+  }
+  return updated;
 }
 
 export async function reconcileUserExecutionsWithoutOpenPosition(walletAddress: string) {
@@ -168,7 +229,11 @@ export async function reconcileUserExecutionsWithoutOpenPosition(walletAddress: 
     });
   });
   if (!changed) return current;
-  store[walletAddress] = next;
-  await writeStore(store);
+  const changedRecords = next.filter((entry, index) => entry !== current[index]);
+  const wroteRedis = await writeRedisRecords(changedRecords);
+  if (!wroteRedis) {
+    store[walletAddress] = next;
+    writeDiskStore(store);
+  }
   return next;
 }

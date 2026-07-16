@@ -205,6 +205,39 @@ test("clearing the execution feed preserves wallet audit records and accepts lat
   assert.equal((await auditStore.listUserPerpsExecutions(wallet)).length, 2);
 });
 
+test("durable execution history is not truncated at the former 100-record display cap", async () => {
+  const wallet = "TestWalletHistory333333333333333333333333333";
+  const createdAt = new Date().toISOString();
+  for (let index = 0; index < 105; index += 1) {
+    await auditStore.createUserPerpsExecution({
+      executionId: `history-${index}`,
+      sessionId: "session-history",
+      walletAddress: wallet,
+      signalId: `signal-${index}`,
+      symbol: "SOL/USD",
+      summary: "Persistent history test",
+      side: "long",
+      asset: "SOL",
+      mode: "paper",
+      executionModel: "approval-assisted",
+      status: "paper_executed",
+      reasonCode: "PAPER_EXECUTED",
+      reasonMessage: "Stored for durable history.",
+      collateralUsd: 10,
+      sizeUsd: 20,
+      leverage: 2,
+      takeProfitPrice: null,
+      stopLossPrice: null,
+      txid: null,
+      positionPubkey: null,
+      createdAt,
+      updatedAt: createdAt,
+    });
+  }
+
+  assert.equal((await auditStore.listUserPerpsExecutions(wallet)).length, 105);
+});
+
 test("duplicate signals are blocked within the same user scope", async () => {
   const wallet = "TestWallet4444444444444444444444444444444444";
   await tradingAgent.clockInPerpsSession(wallet, {

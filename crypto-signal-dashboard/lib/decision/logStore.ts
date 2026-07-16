@@ -4,7 +4,10 @@ import path from "node:path";
 import { getTradeDecisionConfig } from "@/lib/decision/config";
 import { tradeDecisionRecordSchema, type TradeDecisionRecord } from "@/lib/decision/types";
 import { shortenWalletAddress } from "@/lib/jupiterPerps";
+import { getRedisClient } from "@/lib/server/redis";
 import { formatUsd } from "@/lib/utils";
+
+const DECISION_RECORDS_REDIS_KEY = "brembot:perps:decision-records:v1";
 
 function ensureParentDir(filePath: string) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -46,6 +49,19 @@ export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
   const ndjsonEntry = `${JSON.stringify(record)}\n`;
 
   try {
+    const client = await getRedisClient();
+    if (client) {
+      await client.hSet(
+        DECISION_RECORDS_REDIS_KEY,
+        record.payload.decisionId,
+        JSON.stringify(record)
+      );
+    }
+  } catch {
+    // The local fallback below keeps decision logging non-fatal.
+  }
+
+  try {
     ensureParentDir(config.journalFilePath);
     ensureParentDir(config.eventsFilePath);
     if (!fs.existsSync(config.journalFilePath)) {
@@ -62,43 +78,65 @@ export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
   }
 }
 
-export async function readTradeDecisionJournal() {
+function readTradeDecisionRecordsFromDisk() {
   const config = getTradeDecisionConfig();
 
   try {
-    if (!fs.existsSync(config.journalFilePath)) {
-      return "# BremLogic Trade Decision Journal\n\nNo decision entries have been written yet.\n";
-    }
-    return fs.readFileSync(config.journalFilePath, "utf8");
-  } catch {
-    return "# BremLogic Trade Decision Journal\n\nUnable to read the decision journal right now.\n";
-  }
-}
-
-export async function listTradeDecisionRecords(limit = 50) {
-  const config = getTradeDecisionConfig();
-
-  try {
-    if (!fs.existsSync(config.eventsFilePath)) {
-      return [] as TradeDecisionRecord[];
-    }
-
+    if (!fs.existsSync(config.eventsFilePath)) return [] as TradeDecisionRecord[];
     const raw = fs.readFileSync(config.eventsFilePath, "utf8");
-    const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
-    const parsed = lines.flatMap((line) => {
+    return raw.split("\n").map((line) => line.trim()).filter(Boolean).flatMap((line) => {
       try {
-        const record = JSON.parse(line);
-        const result = tradeDecisionRecordSchema.safeParse(record);
+        const result = tradeDecisionRecordSchema.safeParse(JSON.parse(line));
         return result.success ? [result.data] : [];
       } catch {
         return [];
       }
     });
-
-    return parsed
-      .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt))
-      .slice(0, Math.max(1, limit));
   } catch {
     return [] as TradeDecisionRecord[];
   }
+}
+
+async function readTradeDecisionRecordsFromRedis() {
+  try {
+    const client = await getRedisClient();
+    if (!client) return null;
+    const values = await client.hVals(DECISION_RECORDS_REDIS_KEY);
+    return values.flatMap((value) => {
+      try {
+        const result = tradeDecisionRecordSchema.safeParse(JSON.parse(value));
+        return result.success ? [result.data] : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function listTradeDecisionRecords(limit = 50, walletAddress?: string | null) {
+  const redisRecords = await readTradeDecisionRecordsFromRedis();
+  const diskRecords = readTradeDecisionRecordsFromDisk();
+  const recordsById = new Map<string, TradeDecisionRecord>();
+  diskRecords.forEach((record) => recordsById.set(record.payload.decisionId, record));
+  redisRecords?.forEach((record) => recordsById.set(record.payload.decisionId, record));
+
+  return [...recordsById.values()]
+    .filter((record) => !walletAddress || record.payload.walletAddress === walletAddress)
+    .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt))
+    .slice(0, Math.max(1, limit));
+}
+
+export async function readTradeDecisionJournal(walletAddress?: string | null) {
+  const records = await listTradeDecisionRecords(100, walletAddress);
+  if (records.length > 0) {
+    return [
+      "# BremLogic Trade Decision Journal",
+      "",
+      ...records.map(formatDecisionMarkdown),
+    ].join("\n");
+  }
+
+  return "# BremLogic Trade Decision Journal\n\nNo decision entries have been written yet.\n";
 }

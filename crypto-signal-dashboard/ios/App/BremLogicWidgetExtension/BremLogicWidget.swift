@@ -13,13 +13,40 @@ struct BremLogicWidgetProvider: TimelineProvider {
     }
 
     func getSnapshot(in context: Context, completion: @escaping (BremLogicWidgetEntry) -> Void) {
-        completion(BremLogicWidgetEntry(date: Date(), snapshot: BremLogicWidgetStore.load()))
+        guard !context.isPreview else {
+            completion(BremLogicWidgetEntry(date: Date(), snapshot: .fallback))
+            return
+        }
+
+        Task {
+            let snapshot: BremLogicWidgetSnapshot
+            do {
+                snapshot = try await BremLogicWidgetServerClient.fetch()
+                try? BremLogicWidgetStore.save(snapshot)
+            } catch {
+                snapshot = BremLogicWidgetStore.load()
+            }
+            completion(BremLogicWidgetEntry(date: Date(), snapshot: snapshot))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicWidgetEntry>) -> Void) {
-        let entry = BremLogicWidgetEntry(date: Date(), snapshot: BremLogicWidgetStore.load())
-        let refreshDate = Date().addingTimeInterval(15 * 60)
-        completion(Timeline(entries: [entry], policy: .after(refreshDate)))
+        Task {
+            let snapshot: BremLogicWidgetSnapshot
+            let refreshInterval: TimeInterval
+            do {
+                snapshot = try await BremLogicWidgetServerClient.fetch()
+                try? BremLogicWidgetStore.save(snapshot)
+                refreshInterval = 15 * 60
+            } catch {
+                snapshot = BremLogicWidgetStore.load()
+                refreshInterval = 5 * 60
+            }
+
+            let entry = BremLogicWidgetEntry(date: Date(), snapshot: snapshot)
+            let refreshDate = Date().addingTimeInterval(refreshInterval)
+            completion(Timeline(entries: [entry], policy: .after(refreshDate)))
+        }
     }
 }
 
@@ -30,8 +57,8 @@ struct BremLogicWidgetEntryView: View {
         Color(red: 0.57, green: 0.94, blue: 0.78)
     }
 
-    private var balanceLabel: String? {
-        guard let balance = entry.snapshot.walletBalanceUsd else { return nil }
+    private func balanceLabel(_ balance: Double?) -> String {
+        guard let balance else { return "--" }
         return String(format: "$%.2f", balance)
     }
 
@@ -151,22 +178,32 @@ struct BremLogicWidgetEntryView: View {
                 Spacer(minLength: 0)
 
                 HStack(alignment: .center, spacing: 8) {
-                    Text("Wallet Value")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.62))
-                    Spacer()
-                    HStack(spacing: 10) {
-                        Text(balanceLabel ?? "Open app to sync")
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("MAIN")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.58))
+                        Text(balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
-                        if #available(iOS 17.0, *) {
-                            Button(intent: BremLogicWidgetRefreshIntent()) {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(brandPrimary)
-                            }
-                            .buttonStyle(.plain)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("AGENT")
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.58))
+                        Text(balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                    }
+                    if #available(iOS 17.0, *) {
+                        Button(intent: BremLogicWidgetRefreshIntent()) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(brandPrimary)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.top, 8)
@@ -190,7 +227,7 @@ struct BremLogicWidget: Widget {
             BremLogicWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("BremLogic Signals")
-        .description("Shows the latest BremLogic signal snapshot and wallet summary.")
+        .description("Shows the latest BremLogic Perps position and wallet summary.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
