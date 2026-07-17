@@ -49,6 +49,17 @@ export const tradeDecisionPayloadSchema = z.object({
   asset: z.enum(["SOL", "ETH", "BTC"]),
   requestedTrade: tradeDecisionRequestedTradeSchema,
   marketContext: tradeDecisionMarketContextSchema,
+  strategyContext: z.object({
+    signalType: z.enum(["trend", "breakout"]),
+    trendWindow: z.number().finite().min(1),
+    trendThreshold: z.number().finite().min(0),
+    breakoutPercent: z.number().finite().min(0),
+    cooldownSeconds: z.number().finite().min(0),
+    trendStrengthPercent: z.number().finite(),
+    breakoutStrengthPercent: z.number().finite(),
+    atrPercent: z.number().finite().min(0),
+    learningProfileId: z.string().trim().min(1).nullable(),
+  }).nullable().optional(),
   historyContext: tradeDecisionHistoryContextSchema,
   shadowMode: z.boolean(),
 });

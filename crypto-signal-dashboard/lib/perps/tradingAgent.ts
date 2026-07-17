@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { getTradeDecisionConfig } from "@/lib/decision/config";
 import { createTradeDecisionRecord } from "@/lib/decision/engine";
 import { appendTradeDecisionRecord } from "@/lib/decision/logStore";
+import { getActiveDecisionLearningProfile } from "@/lib/decision/learningStore";
 import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
 import { assertAgentWalletSigner } from "@/lib/perps/agentWallet";
 import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
@@ -18,6 +19,7 @@ import type {
 import { createUserPerpsExecution, listUserPerpsExecutions, updateUserPerpsExecution } from "@/lib/perps/userExecutionAudit";
 import { evaluateUserScopedPerpsRisk } from "@/lib/perps/userScopedRisk";
 import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
+import { executePerpsEntryWithRetries } from "@/lib/perps/entryRetry";
 
 function nowIso() {
   return new Date().toISOString();
@@ -183,12 +185,16 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     return { ok: false, code: "NO_SESSION", message: "Clock In before routing automated perps signals." } as const;
   }
 
-  const existingExecutions = await listUserPerpsExecutions(walletAddress);
+  const [existingExecutions, learningProfile] = await Promise.all([
+    listUserPerpsExecutions(walletAddress),
+    getActiveDecisionLearningProfile(walletAddress),
+  ]);
   const decision = createTradeDecisionRecord({
     walletAddress,
     session,
     signal,
     existingExecutions,
+    learningProfile,
   });
   await appendTradeDecisionRecord(decision);
 
@@ -225,6 +231,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       stopLossPrice: signal.stopLossPrice ?? null,
       txid: null,
       positionPubkey: null,
+      decisionId: decision.payload.decisionId,
       decisionConfidence: decision.recommendation.confidenceScore,
       decisionShouldTrade: decision.recommendation.shouldTrade,
       decisionSummary: decision.recommendation.explanationSummary,
@@ -280,6 +287,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     stopLossPrice: resolvedSignal.stopLossPrice ?? null,
     txid: null,
     positionPubkey: null,
+    decisionId: decision.payload.decisionId,
     decisionConfidence: decision.recommendation.confidenceScore,
     decisionShouldTrade: decision.recommendation.shouldTrade,
     decisionSummary: decision.recommendation.explanationSummary,
@@ -327,12 +335,13 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         walletAddress: agentWalletAddress,
         source: "ui-local",
       } as const;
-      const built = await buildPerpsTransactionForSignal(executionSignal, agentWalletAddress);
-      const signed = signSerializedPerpsTransaction(built.serializedTxBase64);
-      const submitted = await executeSignedPerpsTransaction("increase-position", signed.signedSerializedTxBase64);
-      if (!submitted.txid) {
-        throw new Error("Jupiter did not return a transaction signature for the autonomous order.");
-      }
+      const entryResult = await executePerpsEntryWithRetries({
+        signal: executionSignal,
+        build: (attemptSignal) => buildPerpsTransactionForSignal(attemptSignal, agentWalletAddress),
+        sign: (serializedTxBase64) => signSerializedPerpsTransaction(serializedTxBase64).signedSerializedTxBase64,
+        submit: (signedSerializedTxBase64) => executeSignedPerpsTransaction("increase-position", signedSerializedTxBase64),
+      });
+      const { built, submitted, signal: successfulSignal } = entryResult;
       const positionPubkey = submitted.positionPubkey ?? built.positionPubkey;
       let protectionTxid: string | null = null;
       let protectionError: string | null = null;
@@ -344,7 +353,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
             if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt * 750));
             try {
               const protection = await buildPerpsTpslTransactionForSignal(
-                executionSignal,
+                successfulSignal,
                 agentWalletAddress,
                 positionPubkey
               );
@@ -370,10 +379,17 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         status: "submitted",
         txid: submitted.txid,
         positionPubkey,
+        collateralUsd: successfulSignal.collateralUsd,
+        sizeUsd: successfulSignal.sizeUsd,
+        leverage: successfulSignal.leverage,
+        attemptCount: entryResult.attemptCount,
+        retrySummary: entryResult.failures,
         errorMessage: protectionError,
         reasonMessage: protectionError
           ? `Entry submitted, but automatic TP/SL attachment needs attention: ${protectionError}`
-          : execution.reasonMessage,
+          : entryResult.attemptCount > 1
+            ? `Entry submitted on parameter attempt ${entryResult.attemptCount} of 3 at ${successfulSignal.leverage}x leverage with ${successfulSignal.collateralUsd.toFixed(2)} USDC collateral.`
+            : execution.reasonMessage,
       });
       return {
         ok: true,
@@ -384,6 +400,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
           positionPubkey,
           protectionTxid,
           tpslMode: built.tpslMode,
+          attemptCount: entryResult.attemptCount,
         },
         decision: decision.recommendation,
         message: protectionError

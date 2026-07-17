@@ -1865,9 +1865,49 @@ function DashboardPage() {
       return;
     }
 
-    const entries = remoteAuthToken
-      ? decisionLogEntries
-      : loadLocalDecisionLogEntries(perpsLogWalletAddress);
+    if (remoteAuthToken) {
+      setDecisionLearningBusy(true);
+      setDecisionLearningStatus("Reconciling closed Jupiter trades and validating a wallet-specific training profile...");
+      try {
+        const response = await fetch("/api/perps/training", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${remoteAuthToken}` },
+        });
+        const payload = await response.json().catch(() => null) as {
+          error?: string;
+          activated?: boolean;
+          skipped?: boolean;
+          outcomeCount?: number;
+          reconciledOutcomes?: number;
+          profile?: {
+            version: number;
+            source: string;
+            summary: string;
+            validation: { passed: boolean; reasons: string[] };
+          };
+        } | null;
+        if (!response.ok || !payload?.profile) {
+          throw new Error(payload?.error ?? "Unable to train the server-side agent profile.");
+        }
+        const state = payload.activated
+          ? "activated"
+          : payload.profile.validation.passed
+            ? "already current"
+            : "saved as a candidate; the prior active profile remains in control";
+        setDecisionLearningStatus(
+          `Agent profile v${payload.profile.version} ${state}. ${payload.profile.summary} `
+          + `Closed outcomes: ${payload.outcomeCount ?? 0}; newly reconciled: ${payload.reconciledOutcomes ?? 0}.`
+        );
+        return;
+      } catch (error) {
+        setDecisionLearningStatus(error instanceof Error ? error.message : "Unable to train the server-side agent profile.");
+        return;
+      } finally {
+        setDecisionLearningBusy(false);
+      }
+    }
+
+    const entries = loadLocalDecisionLogEntries(perpsLogWalletAddress);
 
     if (entries.length === 0) {
       setDecisionLearningStatus("No decision log entries are available yet for this wallet.");
@@ -1905,7 +1945,7 @@ function DashboardPage() {
     } finally {
       setDecisionLearningBusy(false);
     }
-  }, [decisionLogEntries, perpsLogWalletAddress, remoteAuthToken]);
+  }, [perpsLogWalletAddress, remoteAuthToken]);
 
   const currentAiMarket = useMemo(() => {
     const selectedMarket = trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0] ?? null;

@@ -34,6 +34,17 @@ export const perpsAgentSignalSchema = z.object({
   maxSlippageBps: z.number().int().positive().max(10_000),
   smartTradeProfile: z.enum(["conservative", "balanced", "aggressive"]).optional(),
   executionStyle: z.enum(["set-parameters", "smart-trades"]).optional(),
+  strategyContext: z.object({
+    signalType: z.enum(["trend", "breakout"]),
+    trendWindow: z.number().finite().min(1),
+    trendThreshold: z.number().finite().min(0),
+    breakoutPercent: z.number().finite().min(0),
+    cooldownSeconds: z.number().finite().min(0),
+    trendStrengthPercent: z.number().finite(),
+    breakoutStrengthPercent: z.number().finite(),
+    atrPercent: z.number().finite().min(0),
+    learningProfileId: z.string().trim().min(1).nullable().optional(),
+  }).optional(),
   marketContext: z.object({
     spotPrice: z.number().finite().positive().nullable().optional(),
     volatilityPercent: z.number().finite().min(0).nullable().optional(),
@@ -100,6 +111,9 @@ export const perpsUserExecutionSchema = z.object({
   decisionSummary: z.string().trim().nullable().optional(),
   decisionTags: z.array(z.string().trim().min(1)).optional(),
   decisionShadowMode: z.boolean().optional(),
+  decisionId: z.string().trim().nullable().optional(),
+  attemptCount: z.number().int().min(1).max(3).optional(),
+  retrySummary: z.array(z.string().trim().min(1)).max(3).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });

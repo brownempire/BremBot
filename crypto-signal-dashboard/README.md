@@ -82,13 +82,16 @@ For live feed setup:
 - `GET/PUT /api/perps/automation/config` syncs the authenticated wallet's automation settings to Redis with atomic revisions, preventing stale devices from overwriting newer settings.
 - `GET /api/perps/automation/run` is the `CRON_SECRET`-protected once-per-minute Vercel worker.
 - `GET /api/perps/automation/status` reports the most recent server monitor result for the authenticated wallet.
+- `GET/POST /api/perps/training` reads the active wallet-scoped learning profile or reconciles closed Jupiter trades and trains a new version. Profiles and fee-aware outcomes are durable in Redis; failed holdout candidates are retained for audit but never replace the active profile.
 - Paper mode simulates user-scoped Perps actions without moving funds.
 - Live mode is `approval-assisted` unless an associated agent wallet and matching server-only signer are configured. With an agent wallet, approved signals execute autonomously and the Perps panel combines both wallets while preserving actual position ownership.
 - `PERPS_LIVE_ALLOWED_WALLETS` can restrict live Perps automation to specific wallet addresses only.
 - Approval-assisted sessions stop after the configured foreground heartbeat timeout. Agent-wallet sessions and their Redis-backed monitor configuration remain active with the app closed until Clock Out, disabling Perps auto-trade, the kill switch, or another guardrail stops execution.
 - Agent credentials belong only in server environment variables: `PERPS_AGENT_OWNER_WALLET`, `PERPS_AGENT_WALLET_PUBLIC_KEY`, and `PERPS_AGENT_WALLET_PRIVATE_KEY`. Never expose the private key through a `NEXT_PUBLIC_` variable.
 - Redis is authoritative for wallet master controls. Authenticated devices refresh on app open, foreground return, and every 30 seconds; browser storage is only a wallet-scoped cache.
+- The upgraded Train Agent flow starts with the operator-selected 15-minute / 0.5% trend / 0.3% breakout / 300-second cooldown / 80% allocation / 4% TP / 2% SL / 50x leverage baseline, then requires at least 50 closed trades and a chronological after-fee validation pass before promoting learned thresholds, direction bias, volatility limits, leverage, allocation, or ATR-based exits. The server attempts at most one automatic retraining cycle per day.
 - Autonomous Perps trade and exposure guardrails evaluate the selected collateral allocation against the agent wallet's live available USDC. Leveraged notional is controlled separately by `PERPS_MAX_LEVERAGE`; the fixed `PERPS_ASSUMED_CAPITAL_USD` value applies only to the legacy webhook/paper engine.
+- Confirmed entry-parameter rejections use a duplicate-safe three-attempt ladder: configured collateral/leverage, then 75%, then 50%. Build-time or explicit HTTP 400/422 parameter failures may retry; timeouts, missing transaction IDs, and other ambiguous submission results stop immediately. Bundled TP/SL still falls back to deferred protection, which has its own three attachment attempts.
 - Production also requires a server-only `CRON_SECRET`; Vercel sends it to the configured cron route as a bearer token.
 - See [docs/bremlogic-perps-session.md](/Users/lyrastudio/Documents/BremBot/crypto-signal-dashboard/docs/bremlogic-perps-session.md:1) for the architecture and limitations.
 

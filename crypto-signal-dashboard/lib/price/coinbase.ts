@@ -87,9 +87,20 @@ export async function fetchCoinbaseMinuteCandles(product: string, lookbackMinute
       if (!Array.isArray(entry) || entry.length < 5) return [];
       const candle = entry as CoinbaseCandle;
       const timestamp = Number(candle[0]) * 1000;
+      const low = Number(candle[1]);
+      const high = Number(candle[2]);
+      const open = Number(candle[3]);
       const close = Number(candle[4]);
+      const volume = Number(candle[5]);
       return Number.isFinite(timestamp) && Number.isFinite(close) && close > 0
-        ? [{ t: timestamp, v: close }]
+        ? [{
+            t: timestamp,
+            v: close,
+            o: Number.isFinite(open) && open > 0 ? open : undefined,
+            h: Number.isFinite(high) && high > 0 ? high : undefined,
+            l: Number.isFinite(low) && low > 0 ? low : undefined,
+            volume: Number.isFinite(volume) && volume >= 0 ? volume : undefined,
+          }]
         : [];
     })
     .sort((left, right) => left.t - right.t);

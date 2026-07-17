@@ -6,6 +6,7 @@ import type {
   TradeDecisionRecommendation,
   TradeDecisionRecord,
 } from "@/lib/decision/types";
+import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 
 function clamp(value: number, min: number, max: number) {
@@ -100,6 +101,12 @@ export function buildTradeDecisionPayload(input: {
       hasOpenPosition: signal.marketContext?.hasOpenPosition ?? false,
       recentPriceChangePercent: signal.marketContext?.recentPriceChangePercent ?? null,
     },
+    strategyContext: signal.strategyContext
+      ? {
+          ...signal.strategyContext,
+          learningProfileId: signal.strategyContext.learningProfileId ?? null,
+        }
+      : null,
     historyContext: {
       recentExecutionCount: recentExecutions.length,
       approvalRequiredCount: countByStatus("approval_required"),
@@ -115,7 +122,7 @@ export function buildTradeDecisionPayload(input: {
   };
 }
 
-export function evaluateTradeDecision(payload: TradeDecisionPayload): TradeDecisionRecommendation {
+export function evaluateTradeDecision(payload: TradeDecisionPayload, learningProfile: DecisionLearningProfile | null = null): TradeDecisionRecommendation {
   const config = getTradeDecisionConfig();
   const tags = new Set<string>(["decision-layer", payload.shadowMode ? "shadow-mode" : "active-mode"]);
   let confidence = 0.55;
@@ -123,6 +130,26 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload): TradeDecis
   if (typeof payload.signalConfidence === "number") {
     confidence += (payload.signalConfidence - 0.5) * 0.22;
     tags.add("signal-confidence-considered");
+  }
+
+  if (learningProfile) {
+    tags.add("wallet-trained-profile");
+    tags.add(`learning-profile-v${learningProfile.version}`);
+    if (learningProfile.preferredDirection !== "balanced") {
+      const preferred = learningProfile.preferredDirection === "bullish" ? "bullish" : "bearish";
+      if (payload.direction === preferred) {
+        confidence += 0.05;
+        tags.add("learned-direction-aligned");
+      } else {
+        confidence -= 0.08;
+        tags.add("learned-direction-counter");
+      }
+    }
+    const volatility = payload.marketContext.volatilityPercent;
+    if (typeof volatility === "number" && volatility > learningProfile.volatilityCeilingPercent) {
+      confidence -= 0.18;
+      tags.add("learned-volatility-ceiling-exceeded");
+    }
   }
 
   const trendBias = payload.marketContext.trendBias;
@@ -247,7 +274,10 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload): TradeDecis
       : 1;
 
   const recommendedCollateralUsd = round(payload.requestedTrade.collateralUsd * sizeMultiplier, 2);
-  const recommendedLeverage = round(payload.requestedTrade.leverage * leverageMultiplier, 2);
+  const recommendedLeverage = round(Math.min(
+    payload.requestedTrade.leverage * leverageMultiplier,
+    learningProfile?.leverageCap ?? Number.POSITIVE_INFINITY
+  ), 2);
   const recommendedTakeProfitPrice = adjustTriggerPrice(
     payload.direction,
     "tp",
@@ -263,7 +293,13 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload): TradeDecis
     triggerDistanceMultiplier
   );
 
-  const shouldTrade = confidence >= config.confidenceThreshold && !payload.marketContext.hasOpenPosition;
+  const confidenceThreshold = learningProfile?.minimumConfidence ?? config.confidenceThreshold;
+  const exceedsLearnedVolatility = Boolean(
+    learningProfile
+    && typeof payload.marketContext.volatilityPercent === "number"
+    && payload.marketContext.volatilityPercent > learningProfile.volatilityCeilingPercent
+  );
+  const shouldTrade = confidence >= confidenceThreshold && !payload.marketContext.hasOpenPosition && !exceedsLearnedVolatility;
   if (shouldTrade) {
     tags.add("passes-confidence-threshold");
   } else {
@@ -295,9 +331,10 @@ export function createTradeDecisionRecord(input: {
   session: PerpsAutomationSession;
   signal: PerpsAgentSignal;
   existingExecutions: PerpsUserExecution[];
+  learningProfile?: DecisionLearningProfile | null;
 }): TradeDecisionRecord {
   const payload = buildTradeDecisionPayload(input);
-  const recommendation = evaluateTradeDecision(payload);
+  const recommendation = evaluateTradeDecision(payload, input.learningProfile ?? null);
   return {
     payload,
     recommendation,

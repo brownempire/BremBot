@@ -12,13 +12,19 @@ import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/ses
 import { listPerpsSessions } from "@/lib/perps/sessionStore";
 import type { PerpsAutomationSession } from "@/lib/perps/sessionTypes";
 import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
-import { reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
+import { listUserPerpsExecutions, reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
 import { fetchJupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
-import { detectSignals, type Signal } from "@/lib/signal/engine";
+import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
 import { getRedisClient } from "@/lib/server/redis";
+import { getActiveDecisionLearningProfile } from "@/lib/decision/learningStore";
+import { getLearnedSignalParams, applyLearnedTradePlan } from "@/lib/decision/learningRuntime";
+import { listTradeDecisionRecords } from "@/lib/decision/logStore";
+import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
+import { trainWalletDecisionProfile } from "@/lib/decision/trainer";
+import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
@@ -56,6 +62,9 @@ type MonitorDependencies = {
   reconcileNoOpenPosition: typeof reconcileUserExecutionsWithoutOpenPosition;
   getAgentWallet: typeof getAgentWalletForOwner;
   isWalletAllowed: typeof isPerpsLiveWalletAllowed;
+  getLearningProfile: (walletAddress: string) => Promise<DecisionLearningProfile | null>;
+  reconcileLearningHistory: (walletAddress: string, snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>) => Promise<number>;
+  autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   readLastSignal: (walletAddress: string, asset: string) => Promise<number | null>;
   writeLastSignal: (walletAddress: string, asset: string, timestamp: number) => Promise<void>;
 };
@@ -71,6 +80,18 @@ const defaultDependencies: MonitorDependencies = {
   reconcileNoOpenPosition: reconcileUserExecutionsWithoutOpenPosition,
   getAgentWallet: getAgentWalletForOwner,
   isWalletAllowed: isPerpsLiveWalletAllowed,
+  getLearningProfile: getActiveDecisionLearningProfile,
+  reconcileLearningHistory: async (walletAddress, snapshot) => {
+    const [executions, decisions] = await Promise.all([
+      listUserPerpsExecutions(walletAddress),
+      listTradeDecisionRecords(2_000, walletAddress),
+    ]);
+    const outcomes = await reconcileTradeLearningOutcomes({ walletAddress, executions, decisions, snapshot });
+    return outcomes.length;
+  },
+  autoTrain: async (walletAddress, config) => {
+    await trainWalletDecisionProfile({ walletAddress, config, source: "automatic" });
+  },
   readLastSignal: async (walletAddress, asset) => {
     const redis = await getRedisClient();
     if (!redis) return null;
@@ -228,11 +249,17 @@ export async function runAutonomousPerpsMonitor(
     try {
       const agentWallet = deps.getAgentWallet(config.walletAddress);
       if (!agentWallet) throw new Error("No autonomous wallet is associated with this primary wallet.");
+      const learningProfile = await deps.getLearningProfile(config.walletAddress);
+      const learnedParams = getLearnedSignalParams(config, asset, learningProfile);
       const [snapshot, availableUsdc, points] = await Promise.all([
         deps.fetchSnapshot(agentWallet),
         deps.getUsdcBalance(agentWallet),
-        deps.fetchCandles(`${asset}-USD`, Math.max(15, config.params.trendWindow + 5)),
+        deps.fetchCandles(`${asset}-USD`, Math.max(15, learnedParams.trendWindow + 5)),
       ]);
+      const reconciledOutcomeCount = await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
+      if (reconciledOutcomeCount > 0) {
+        await deps.autoTrain(config.walletAddress, config).catch(() => undefined);
+      }
       const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
       if (openPositions.length > 0) {
         results.push(skip(config, asset, "POSITION_ALREADY_OPEN", "An agent-owned Perps position is already open."));
@@ -245,30 +272,60 @@ export async function runAutonomousPerpsMonitor(
       }
 
       const latestTimestamp = points[points.length - 1]?.t ?? 0;
-      const windowStart = latestTimestamp - config.params.trendWindow * 60_000;
+      const windowStart = latestTimestamp - learnedParams.trendWindow * 60_000;
       const windowPoints = points.filter((point) => point.t >= windowStart);
       if (windowPoints.length < 3) {
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
         continue;
       }
       const lastSignalAt = await deps.readLastSignal(config.walletAddress, asset);
+      const volatilityPercent = computeVolatilityPercent(windowPoints);
+      if (learningProfile && volatilityPercent > learningProfile.volatilityCeilingPercent) {
+        results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${learningProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
+        continue;
+      }
+      const signalMetrics = computeSignalMetrics(windowPoints);
       const signal = detectSignals({
         symbol: `${asset}/USD`,
         points: windowPoints,
-        params: config.params,
+        params: learnedParams,
         lastSignalAt: lastSignalAt ?? undefined,
       })[0];
       if (!signal) {
         results.push(skip(config, asset, "NO_SIGNAL", "No qualifying signal was detected in the latest candle window."));
         continue;
       }
+      if (learningProfile) {
+        const trendQualified = Math.abs(signalMetrics.trend.changePercent) >= learnedParams.trendThreshold;
+        const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= learnedParams.breakoutPercent
+          ? signalMetrics.breakoutChange
+          : signalMetrics.shortMomentum;
+        const breakoutQualified = Math.abs(breakoutMetric) >= learnedParams.breakoutPercent * 0.6;
+        const trendDirection = signalMetrics.trend.changePercent >= 0 ? "bullish" : "bearish";
+        const breakoutDirection = breakoutMetric >= 0 ? "bullish" : "bearish";
+        if (!trendQualified || !breakoutQualified || trendDirection !== breakoutDirection || signal.direction !== trendDirection) {
+          await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+          results.push(skip(config, asset, "LEARNED_CONFIRMATION_SKIP", "The signal did not have matching trend and breakout confirmation under the active trained profile."));
+          continue;
+        }
+      }
       if (config.settings.mode === "buy-only" && signal.direction === "bearish") {
         await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
         results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
         continue;
       }
+      if (
+        learningProfile
+        && learningProfile.preferredDirection !== "balanced"
+        && signal.direction !== learningProfile.preferredDirection
+      ) {
+        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        results.push(skip(config, asset, "LEARNED_DIRECTION_SKIP", `The active trained profile currently prefers ${learningProfile.preferredDirection} setups.`));
+        continue;
+      }
 
-      const plan = deriveTradePlan(config, windowPoints, signal, availableUsdc);
+      const basePlan = deriveTradePlan(config, windowPoints, signal, availableUsdc);
+      const plan = applyLearnedTradePlan({ basePlan, asset, points: windowPoints, profile: learningProfile });
       const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
@@ -301,6 +358,17 @@ export async function runAutonomousPerpsMonitor(
         maxSlippageBps: 100,
         smartTradeProfile: config.settings.smartTradeProfile,
         executionStyle: config.settings.perpsExecutionMode,
+        strategyContext: {
+          signalType: signal.type,
+          trendWindow: learnedParams.trendWindow,
+          trendThreshold: learnedParams.trendThreshold,
+          breakoutPercent: learnedParams.breakoutPercent,
+          cooldownSeconds: learnedParams.cooldownSeconds,
+          trendStrengthPercent: signalMetrics.trend.changePercent,
+          breakoutStrengthPercent: signalMetrics.breakoutChange,
+          atrPercent: plan.atrPercent,
+          learningProfileId: plan.profileId,
+        },
         marketContext: {
           spotPrice: entryPrice,
           volatilityPercent: plan.volatilityPercent,

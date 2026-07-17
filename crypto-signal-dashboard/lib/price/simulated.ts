@@ -3,6 +3,10 @@ import { clamp } from "../utils";
 export type PricePoint = {
   t: number;
   v: number;
+  o?: number;
+  h?: number;
+  l?: number;
+  volume?: number;
 };
 
 export type PriceSeries = {

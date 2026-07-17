@@ -38,6 +38,18 @@ export function computeTrend(points: PricePoint[]) {
   };
 }
 
+export function computeSignalMetrics(points: PricePoint[]) {
+  const trend = computeTrend(points);
+  const recent = points.slice(Math.max(0, points.length - Math.max(30, Math.floor(points.length / 3))));
+  const avg = recent.reduce((sum, point) => sum + point.v, 0) / Math.max(1, recent.length);
+  const breakoutChange = recent.length > 0 ? percentChange(points[points.length - 1]?.v ?? 0, avg) : 0;
+  const shortWindow = points.slice(Math.max(0, points.length - Math.min(45, Math.max(12, Math.floor(points.length / 6)))));
+  const shortMomentum = shortWindow.length > 1
+    ? percentChange(shortWindow[shortWindow.length - 1]?.v ?? 0, shortWindow[0]?.v ?? 0)
+    : 0;
+  return { trend, breakoutChange, shortMomentum };
+}
+
 export function detectSignals({
   symbol,
   points,
@@ -55,15 +67,7 @@ export function detectSignals({
     return [];
   }
 
-  const trend = computeTrend(points);
-  // Use a wider baseline to target slower, 15m+ style setups.
-  const recent = points.slice(Math.max(0, points.length - Math.max(30, Math.floor(points.length / 3))));
-  const avg = recent.reduce((sum, point) => sum + point.v, 0) / recent.length;
-  const breakoutChange = percentChange(points[points.length - 1].v, avg);
-  const shortWindow = points.slice(Math.max(0, points.length - Math.min(45, Math.max(12, Math.floor(points.length / 6)))));
-  const shortMomentum = shortWindow.length > 1
-    ? percentChange(shortWindow[shortWindow.length - 1].v, shortWindow[0].v)
-    : 0;
+  const { trend, breakoutChange, shortMomentum } = computeSignalMetrics(points);
 
   const signals: Signal[] = [];
 
