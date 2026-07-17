@@ -52,6 +52,7 @@ struct BremLogicWidgetProvider: TimelineProvider {
 
 struct BremLogicWidgetEntryView: View {
     let entry: BremLogicWidgetEntry
+    @Environment(\.widgetFamily) private var widgetFamily
 
     private var brandPrimary: Color {
         Color(red: 0.57, green: 0.94, blue: 0.78)
@@ -60,6 +61,22 @@ struct BremLogicWidgetEntryView: View {
     private func balanceLabel(_ balance: Double?) -> String {
         guard let balance else { return "--" }
         return String(format: "$%.2f", balance)
+    }
+
+    private func priceLabel(_ price: Double?) -> String {
+        guard let price else { return "--" }
+        if price >= 1_000 {
+            return String(format: "$%.0f", price)
+        }
+        return String(format: "$%.2f", price)
+    }
+
+    private func leverageLabel(_ leverage: Double?) -> String {
+        guard let leverage else { return "--" }
+        if leverage.rounded() == leverage {
+            return "\(Int(leverage))x"
+        }
+        return String(format: "%.1fx", leverage)
     }
 
     private var pnlLabel: String? {
@@ -98,6 +115,10 @@ struct BremLogicWidgetEntryView: View {
     private var openPerpDetail: String {
         let detail = entry.snapshot.openPerpDetail?.trimmingCharacters(in: .whitespacesAndNewlines)
         return detail?.isEmpty == false ? detail! : "Open the app to connect a live Perps session."
+    }
+
+    private var hasOpenPerp: Bool {
+        entry.snapshot.openPerpMarket != nil || entry.snapshot.openPerpPnlUsd != nil
     }
 
     private var updatedLabel: String {
@@ -143,85 +164,221 @@ struct BremLogicWidgetEntryView: View {
         }
     }
 
-    var body: some View {
-        applyWidgetBackground(
-            to: VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .top, spacing: 6) {
-                    brandLogo
-                    Spacer()
-                    Text(updatedLabel)
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.58))
-                        .lineLimit(1)
-                }
+    @ViewBuilder
+    private var compactContent: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 6) {
+                brandLogo
+                Spacer()
+                Text(updatedLabel)
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.58))
+                    .lineLimit(1)
+            }
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Open Perps")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(brandPrimary)
-                        .textCase(.uppercase)
-                    Text(openPerpLabel)
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Open Perps")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(brandPrimary)
+                    .textCase(.uppercase)
+                Text(openPerpLabel)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text(openPerpDetail)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                if let pnlLabel {
+                    Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  •  "))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    Text(openPerpDetail)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.78))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.72)
-                    if let pnlLabel {
-                        Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  •  "))
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(pnlColor)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
                 }
+            }
 
-                Spacer(minLength: 0)
+            Spacer(minLength: 0)
 
-                HStack(alignment: .center, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("MAIN")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.58))
-                        Text(balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MAIN")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.58))
+                    Text(balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("AGENT")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.58))
+                    Text(balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+                if #available(iOS 17.0, *) {
+                    Button(intent: BremLogicWidgetRefreshIntent()) {
+                        Image(systemName: "arrow.clockwise")
                             .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(brandPrimary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 6)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 1)
+            }
+        }
+    }
+
+    private func metricTile(_ title: String, _ value: String, accent: Color = .white) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title.uppercased())
+                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .stroke(Color.white.opacity(0.065), lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var largeContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                brandLogo
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
+                    Text("Updated \(updatedLabel)")
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+
+            if hasOpenPerp {
+                HStack(alignment: .bottom, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("OPEN PERPS")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(brandPrimary)
+                        Text(openPerpLabel)
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
+                        Text(openPerpDetail)
+                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.68))
+                            .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("AGENT")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.58))
-                        Text(balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                    if #available(iOS 17.0, *) {
-                        Button(intent: BremLogicWidgetRefreshIntent()) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 12, weight: .bold, design: .rounded))
-                                .foregroundStyle(brandPrimary)
+                    if let pnlLabel {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text("UNREALIZED PNL")
+                                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.5))
+                            Text(pnlLabel)
+                                .font(.system(size: 19, weight: .bold, design: .rounded))
+                                .foregroundStyle(pnlColor)
+                            if let pnlPercentLabel {
+                                Text(pnlPercentLabel)
+                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .foregroundStyle(pnlColor.opacity(0.9))
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                .padding(.top, 6)
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.08))
-                        .frame(height: 1)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                    metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
+                    metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
+                    metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
+                    metricTile("Mark", priceLabel(entry.snapshot.openPerpMarkPrice))
+                    metricTile("Leverage", leverageLabel(entry.snapshot.openPerpLeverage))
+                    metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
+                    metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                    metricTile("Stop Loss", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: Color(red: 1, green: 0.55, blue: 0.55))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("OPEN PERPS")
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(brandPrimary)
+                    Text("No open positions")
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(openPerpDetail)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.68))
+                }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
+                .padding(.top, 12)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 7) {
+                metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+                metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                if #available(iOS 17.0, *) {
+                    Button(intent: BremLogicWidgetRefreshIntent()) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(brandPrimary)
+                            .frame(width: 28, height: 42)
+                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 8)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 1)
+            }
+        }
+    }
+
+    var body: some View {
+        applyWidgetBackground(
+            to: Group {
+                if widgetFamily == .systemLarge {
+                    largeContent
+                } else {
+                    compactContent
                 }
             }
         )
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, widgetFamily == .systemLarge ? 12 : 10)
+        .padding(.vertical, widgetFamily == .systemLarge ? 10 : 8)
         .widgetURL(URL(string: entry.snapshot.targetURL))
     }
 }
@@ -235,7 +392,7 @@ struct BremLogicWidget: Widget {
         }
         .configurationDisplayName("BremLogic Signals")
         .description("Shows the latest BremLogic Perps position and wallet summary.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
 

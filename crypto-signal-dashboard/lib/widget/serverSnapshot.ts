@@ -10,6 +10,16 @@ export type WidgetServerSnapshot = {
   openPerpDetail: string;
   openPerpPnlUsd: number | null;
   openPerpPnlPercent: number | null;
+  openPerpMarket: string | null;
+  openPerpSide: "long" | "short" | null;
+  openPerpPositionValueUsd: number | null;
+  openPerpCollateralUsd: number | null;
+  openPerpEntryPrice: number | null;
+  openPerpMarkPrice: number | null;
+  openPerpLeverage: number | null;
+  openPerpLiquidationPrice: number | null;
+  openPerpTakeProfitPrice: number | null;
+  openPerpStopLossPrice: number | null;
   walletBalanceUsd: number | null;
   mainWalletBalanceUsd: number | null;
   agentWalletBalanceUsd: number | null;
@@ -108,6 +118,16 @@ export function buildWidgetServerSnapshot({
     openPerpDetail,
     openPerpPnlUsd: positionPnl,
     openPerpPnlPercent: finiteOrNull(pnlPercent),
+    openPerpMarket: position ? position.marketSymbol.replace(/\s+/g, "").toUpperCase() : null,
+    openPerpSide: position?.side ?? null,
+    openPerpPositionValueUsd: finiteOrNull(position?.positionValue),
+    openPerpCollateralUsd: positionCollateral,
+    openPerpEntryPrice: finiteOrNull(position?.entryPrice),
+    openPerpMarkPrice: finiteOrNull(position?.markPrice),
+    openPerpLeverage: finiteOrNull(position?.leverage),
+    openPerpLiquidationPrice: finiteOrNull(position?.liquidationPrice),
+    openPerpTakeProfitPrice: finiteOrNull(position?.takeProfit),
+    openPerpStopLossPrice: finiteOrNull(position?.stopLoss),
     walletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
     mainWalletBalanceUsd: finiteOrNull(mainWalletBalanceUsd),
     agentWalletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),

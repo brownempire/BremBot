@@ -14,6 +14,16 @@ struct BremLogicWidgetSnapshot: Codable {
     var openPerpDetail: String?
     var openPerpPnlUsd: Double?
     var openPerpPnlPercent: Double?
+    var openPerpMarket: String?
+    var openPerpSide: String?
+    var openPerpPositionValueUsd: Double?
+    var openPerpCollateralUsd: Double?
+    var openPerpEntryPrice: Double?
+    var openPerpMarkPrice: Double?
+    var openPerpLeverage: Double?
+    var openPerpLiquidationPrice: Double?
+    var openPerpTakeProfitPrice: Double?
+    var openPerpStopLossPrice: Double?
     var walletBalanceUsd: Double?
     var mainWalletBalanceUsd: Double?
     var agentWalletBalanceUsd: Double?
@@ -35,6 +45,16 @@ struct BremLogicWidgetSnapshot: Codable {
         openPerpDetail: "No open perps",
         openPerpPnlUsd: nil,
         openPerpPnlPercent: nil,
+        openPerpMarket: nil,
+        openPerpSide: nil,
+        openPerpPositionValueUsd: nil,
+        openPerpCollateralUsd: nil,
+        openPerpEntryPrice: nil,
+        openPerpMarkPrice: nil,
+        openPerpLeverage: nil,
+        openPerpLiquidationPrice: nil,
+        openPerpTakeProfitPrice: nil,
+        openPerpStopLossPrice: nil,
         walletBalanceUsd: nil,
         mainWalletBalanceUsd: nil,
         agentWalletBalanceUsd: nil,

@@ -70,6 +70,16 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.match(snapshot.openPerpDetail, /\$310\.00 position/);
   assert.equal(snapshot.openPerpPnlUsd, 10);
   assert.equal(snapshot.openPerpPnlPercent, 10);
+  assert.equal(snapshot.openPerpMarket, "SOL/USD");
+  assert.equal(snapshot.openPerpSide, "long");
+  assert.equal(snapshot.openPerpPositionValueUsd, 310);
+  assert.equal(snapshot.openPerpCollateralUsd, 100);
+  assert.equal(snapshot.openPerpEntryPrice, 150);
+  assert.equal(snapshot.openPerpMarkPrice, 155);
+  assert.equal(snapshot.openPerpLeverage, 3.1);
+  assert.equal(snapshot.openPerpLiquidationPrice, 120);
+  assert.equal(snapshot.openPerpTakeProfitPrice, 175);
+  assert.equal(snapshot.openPerpStopLossPrice, 135);
   assert.equal(snapshot.walletBalanceUsd, 360);
   assert.equal(snapshot.mainWalletBalanceUsd, 75);
   assert.equal(snapshot.agentWalletBalanceUsd, 360);
@@ -97,6 +107,8 @@ test("widget summary provides a useful idle state without inventing a balance", 
   assert.equal(snapshot.openPerpLabel, "No open perps");
   assert.equal(snapshot.openPerpDetail, "Agent is monitoring for the next setup.");
   assert.equal(snapshot.openPerpPnlUsd, null);
+  assert.equal(snapshot.openPerpMarket, null);
+  assert.equal(snapshot.openPerpEntryPrice, null);
   assert.equal(snapshot.walletBalanceUsd, null);
   assert.equal(snapshot.mainWalletBalanceUsd, null);
   assert.equal(snapshot.agentWalletBalanceUsd, null);
