@@ -5,7 +5,7 @@ import SwiftUI
 struct BremLogicWidgetBundle: WidgetBundle {
     var body: some Widget {
         BremLogicWidget()
-        if #available(iOS 16.0, *) {
+        if #available(iOS 16.1, *) {
             BremLogicLockScreenWidget()
         }
     }
