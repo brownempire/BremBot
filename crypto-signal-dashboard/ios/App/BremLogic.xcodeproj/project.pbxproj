@@ -16,6 +16,14 @@
 		AA1000070000000000000007 /* BremLogicWidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000030000000000000003 /* BremLogicWidgetShared.swift */; };
 		AA1000080000000000000008 /* BremLogicLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
 		AA1000090000000000000010 /* BremLogicWidgetRefreshIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000100000000000000010 /* BremLogicWidgetRefreshIntent.swift */; };
+		AB1000010000000000000001 /* BremLogicWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000030000000000000003 /* BremLogicWatchApp.swift */; };
+		AB1000020000000000000002 /* BremLogicWatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000040000000000000004 /* BremLogicWatchContentView.swift */; };
+		AB1000030000000000000003 /* BremLogicWatchSnapshot.swift in Watch App Sources */ = {isa = PBXBuildFile; fileRef = AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */; };
+		AB1000040000000000000004 /* BremLogicWatchWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000050000000000000005 /* BremLogicWatchWidgetBundle.swift */; };
+		AB1000050000000000000005 /* BremLogicWatchWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000060000000000000006 /* BremLogicWatchWidget.swift */; };
+		AB1000060000000000000006 /* BremLogicWatchSnapshot.swift in Widget Sources */ = {isa = PBXBuildFile; fileRef = AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */; };
+		AB1000070000000000000007 /* BremLogicWatchWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AB2000020000000000000002 /* BremLogicWatchWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		AB1000080000000000000008 /* BremLogicWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AB2000010000000000000001 /* BremLogicWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		4D22ABEA2AF431CB00220026 /* brem_approval.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4D22ABEF2AF431CB00220026 /* brem_approval.wav */; };
@@ -39,6 +47,20 @@
 			remoteGlobalIDString = AA5000010000000000000001;
 			remoteInfo = BremLogicWidgetExtension;
 		};
+		AB7000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AB5000010000000000000001;
+			remoteInfo = BremLogicWatch;
+		};
+		AB7000020000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AB5000020000000000000002;
+			remoteInfo = BremLogicWatchWidgetExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -51,6 +73,28 @@
 				AA1000040000000000000004 /* BremLogicWidget.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB3000040000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AB1000070000000000000007 /* BremLogicWatchWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB3000080000000000000008 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				AB1000080000000000000008 /* BremLogicWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -66,6 +110,14 @@
 		AA2000080000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA2000090000000000000009 /* BremLogicLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BremLogicLogo.png; sourceTree = "<group>"; };
 		AA2000100000000000000010 /* BremLogicWidgetRefreshIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWidgetRefreshIntent.swift; sourceTree = "<group>"; };
+		AB2000010000000000000001 /* BremLogicWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BremLogicWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB2000020000000000000002 /* BremLogicWatchWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BremLogicWatchWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB2000030000000000000003 /* BremLogicWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchApp.swift; sourceTree = "<group>"; };
+		AB2000040000000000000004 /* BremLogicWatchContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchContentView.swift; sourceTree = "<group>"; };
+		AB2000050000000000000005 /* BremLogicWatchWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchWidgetBundle.swift; sourceTree = "<group>"; };
+		AB2000060000000000000006 /* BremLogicWatchWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchWidget.swift; sourceTree = "<group>"; };
+		AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchSnapshot.swift; sourceTree = "<group>"; };
+		AB2000080000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		4D22ABEF2AF431CB00220026 /* brem_approval.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_approval.wav; sourceTree = "<group>"; };
 		4D22ABF02AF431CB00220026 /* brem_open.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_open.wav; sourceTree = "<group>"; };
@@ -101,6 +153,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB3000020000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB3000060000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -112,6 +178,9 @@
 				504EC3061FED79650016851F /* BremLogic */,
 				AA4000010000000000000001 /* WidgetShared */,
 				AA4000020000000000000002 /* BremLogicWidgetExtension */,
+				AB4000010000000000000001 /* BremLogicWatchApp */,
+				AB4000020000000000000002 /* BremLogicWatchWidgetExtension */,
+				AB4000030000000000000003 /* BremLogicWatchShared */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -121,6 +190,8 @@
 			children = (
 				504EC3041FED79650016851F /* BremLogic.app */,
 				AA2000040000000000000004 /* BremLogicWidget.appex */,
+				AB2000010000000000000001 /* BremLogicWatch.app */,
+				AB2000020000000000000002 /* BremLogicWatchWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -170,6 +241,33 @@
 			path = BremLogicWidgetExtension;
 			sourceTree = "<group>";
 		};
+		AB4000010000000000000001 /* BremLogicWatchApp */ = {
+			isa = PBXGroup;
+			children = (
+				AB2000030000000000000003 /* BremLogicWatchApp.swift */,
+				AB2000040000000000000004 /* BremLogicWatchContentView.swift */,
+			);
+			path = BremLogicWatchApp;
+			sourceTree = "<group>";
+		};
+		AB4000020000000000000002 /* BremLogicWatchWidgetExtension */ = {
+			isa = PBXGroup;
+			children = (
+				AB2000050000000000000005 /* BremLogicWatchWidgetBundle.swift */,
+				AB2000060000000000000006 /* BremLogicWatchWidget.swift */,
+				AB2000080000000000000008 /* Info.plist */,
+			);
+			path = BremLogicWatchWidgetExtension;
+			sourceTree = "<group>";
+		};
+		AB4000030000000000000003 /* BremLogicWatchShared */ = {
+			isa = PBXGroup;
+			children = (
+				AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */,
+			);
+			path = BremLogicWatchShared;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -181,11 +279,13 @@
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
 				AA3000010000000000000001 /* Embed App Extensions */,
+				AB3000080000000000000008 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				AA6000010000000000000001 /* PBXTargetDependency */,
+				AB6000010000000000000001 /* PBXTargetDependency */,
 			);
 			name = BremLogic;
 			packageProductDependencies = (
@@ -214,6 +314,46 @@
 			productReference = AA2000040000000000000004 /* BremLogicWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		AB5000010000000000000001 /* BremLogicWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB9000010000000000000001 /* Build configuration list for PBXNativeTarget "BremLogicWatch" */;
+			buildPhases = (
+				AB3000010000000000000001 /* Sources */,
+				AB3000020000000000000002 /* Frameworks */,
+				AB3000030000000000000003 /* Resources */,
+				AB3000040000000000000004 /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AB6000020000000000000002 /* PBXTargetDependency */,
+			);
+			name = BremLogicWatch;
+			packageProductDependencies = (
+			);
+			productName = BremLogicWatch;
+			productReference = AB2000010000000000000001 /* BremLogicWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+		AB5000020000000000000002 /* BremLogicWatchWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AB9000020000000000000002 /* Build configuration list for PBXNativeTarget "BremLogicWatchWidgetExtension" */;
+			buildPhases = (
+				AB3000050000000000000005 /* Sources */,
+				AB3000060000000000000006 /* Frameworks */,
+				AB3000070000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BremLogicWatchWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = BremLogicWatchWidgetExtension;
+			productReference = AB2000020000000000000002 /* BremLogicWatchWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -229,6 +369,12 @@
 					};
 					AA5000010000000000000001 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					AB5000010000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					AB5000020000000000000002 = {
+						CreatedOnToolsVersion = 26.0;
 					};
 				};
 			};
@@ -250,6 +396,8 @@
 			targets = (
 				504EC3031FED79650016851F /* BremLogic */,
 				AA5000010000000000000001 /* BremLogicWidgetExtension */,
+				AB5000010000000000000001 /* BremLogicWatch */,
+				AB5000020000000000000002 /* BremLogicWatchWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -281,6 +429,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB3000030000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB3000070000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -306,6 +468,26 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB3000010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB1000010000000000000001 /* BremLogicWatchApp.swift in Sources */,
+				AB1000020000000000000002 /* BremLogicWatchContentView.swift in Sources */,
+				AB1000030000000000000003 /* BremLogicWatchSnapshot.swift in Watch App Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AB3000050000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AB1000040000000000000004 /* BremLogicWatchWidgetBundle.swift in Sources */,
+				AB1000050000000000000005 /* BremLogicWatchWidget.swift in Sources */,
+				AB1000060000000000000006 /* BremLogicWatchSnapshot.swift in Widget Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -313,6 +495,16 @@
 			isa = PBXTargetDependency;
 			target = AA5000010000000000000001 /* BremLogicWidgetExtension */;
 			targetProxy = AA7000010000000000000001 /* PBXContainerItemProxy */;
+		};
+		AB6000010000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AB5000010000000000000001 /* BremLogicWatch */;
+			targetProxy = AB7000010000000000000001 /* PBXContainerItemProxy */;
+		};
+		AB6000020000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AB5000020000000000000002 /* BremLogicWatchWidgetExtension */;
+			targetProxy = AB7000020000000000000002 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -453,7 +645,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(APP_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -480,7 +672,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(APP_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				INFOPLIST_FILE = App/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
@@ -506,7 +698,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(WIDGET_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
@@ -534,7 +726,7 @@
 				CODE_SIGN_ENTITLEMENTS = "$(WIDGET_ENTITLEMENTS)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
@@ -551,6 +743,110 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		AB8000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BremLogic;
+				INFOPLIST_KEY_WKApplication = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bremlogic.signalsbot;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		AB8000020000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = BremLogic;
+				INFOPLIST_KEY_WKApplication = YES;
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.bremlogic.signalsbot;
+				INFOPLIST_KEY_WKRunsIndependentlyOfCompanionApp = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		AB8000030000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicWatchWidgetExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.watchkitapp.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		AB8000040000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicWatchWidgetExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.watchkitapp.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
 			};
 			name = Release;
 		};
@@ -580,6 +876,24 @@
 			buildConfigurations = (
 				AA8000010000000000000001 /* Debug */,
 				AA8000020000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB9000010000000000000001 /* Build configuration list for PBXNativeTarget "BremLogicWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AB8000010000000000000001 /* Debug */,
+				AB8000020000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AB9000020000000000000002 /* Build configuration list for PBXNativeTarget "BremLogicWatchWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AB8000030000000000000003 /* Debug */,
+				AB8000040000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
