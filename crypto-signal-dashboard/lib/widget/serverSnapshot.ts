@@ -20,6 +20,8 @@ export type WidgetServerSnapshot = {
   openPerpLiquidationPrice: number | null;
   openPerpTakeProfitPrice: number | null;
   openPerpStopLossPrice: number | null;
+  openPerpTakeProfitPnlUsd: number | null;
+  openPerpStopLossPnlUsd: number | null;
   walletBalanceUsd: number | null;
   mainWalletBalanceUsd: number | null;
   agentWalletBalanceUsd: number | null;
@@ -55,6 +57,18 @@ function formatUsd(value: number) {
 
 function getLivePositions(positions: JupiterPerpsPosition[]) {
   return positions.filter((position) => position.source !== "mock" && position.source !== "rpc-placeholder");
+}
+
+function calculateExpectedPnl(position: JupiterPerpsPosition | null, targetPrice: number | null | undefined) {
+  const entryPrice = finiteOrNull(position?.entryPrice);
+  const positionSize = finiteOrNull(position?.positionSize);
+  const target = finiteOrNull(targetPrice);
+  if (!position || entryPrice === null || positionSize === null || target === null || positionSize <= 0) {
+    return null;
+  }
+
+  const priceDelta = position.side === "long" ? target - entryPrice : entryPrice - target;
+  return Number((priceDelta * positionSize).toFixed(2));
 }
 
 function calculatePerpsWalletEquity(availableUsdc: number | null, positions: JupiterPerpsPosition[]) {
@@ -128,6 +142,8 @@ export function buildWidgetServerSnapshot({
     openPerpLiquidationPrice: finiteOrNull(position?.liquidationPrice),
     openPerpTakeProfitPrice: finiteOrNull(position?.takeProfit),
     openPerpStopLossPrice: finiteOrNull(position?.stopLoss),
+    openPerpTakeProfitPnlUsd: calculateExpectedPnl(position, position?.takeProfit),
+    openPerpStopLossPnlUsd: calculateExpectedPnl(position, position?.stopLoss),
     walletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
     mainWalletBalanceUsd: finiteOrNull(mainWalletBalanceUsd),
     agentWalletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),

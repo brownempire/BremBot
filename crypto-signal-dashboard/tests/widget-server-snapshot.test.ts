@@ -80,6 +80,8 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpLiquidationPrice, 120);
   assert.equal(snapshot.openPerpTakeProfitPrice, 175);
   assert.equal(snapshot.openPerpStopLossPrice, 135);
+  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 50);
+  assert.equal(snapshot.openPerpStopLossPnlUsd, -30);
   assert.equal(snapshot.walletBalanceUsd, 360);
   assert.equal(snapshot.mainWalletBalanceUsd, 75);
   assert.equal(snapshot.agentWalletBalanceUsd, 360);
@@ -109,11 +111,25 @@ test("widget summary provides a useful idle state without inventing a balance", 
   assert.equal(snapshot.openPerpPnlUsd, null);
   assert.equal(snapshot.openPerpMarket, null);
   assert.equal(snapshot.openPerpEntryPrice, null);
+  assert.equal(snapshot.openPerpTakeProfitPnlUsd, null);
+  assert.equal(snapshot.openPerpStopLossPnlUsd, null);
   assert.equal(snapshot.walletBalanceUsd, null);
   assert.equal(snapshot.mainWalletBalanceUsd, null);
   assert.equal(snapshot.agentWalletBalanceUsd, null);
   assert.equal(snapshot.perpsSessionState, "Clocked Out");
   assert.equal(snapshot.perpsMode, "Paper mode");
+});
+
+test("widget expected P/L reverses price direction for short positions", () => {
+  const snapshot = buildWidgetServerSnapshot({
+    agentPositions: [{ ...position, side: "short", takeProfit: 135, stopLoss: 175 }],
+    mainAvailableUsdc: 0,
+    agentAvailableUsdc: 100,
+    session: liveSession,
+  });
+
+  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 30);
+  assert.equal(snapshot.openPerpStopLossPnlUsd, -50);
 });
 
 test("mock positions are never exposed by the production widget summary", () => {

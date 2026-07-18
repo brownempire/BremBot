@@ -24,6 +24,8 @@ struct BremLogicWidgetSnapshot: Codable {
     var openPerpLiquidationPrice: Double?
     var openPerpTakeProfitPrice: Double?
     var openPerpStopLossPrice: Double?
+    var openPerpTakeProfitPnlUsd: Double?
+    var openPerpStopLossPnlUsd: Double?
     var walletBalanceUsd: Double?
     var mainWalletBalanceUsd: Double?
     var agentWalletBalanceUsd: Double?
@@ -55,6 +57,8 @@ struct BremLogicWidgetSnapshot: Codable {
         openPerpLiquidationPrice: nil,
         openPerpTakeProfitPrice: nil,
         openPerpStopLossPrice: nil,
+        openPerpTakeProfitPnlUsd: nil,
+        openPerpStopLossPnlUsd: nil,
         walletBalanceUsd: nil,
         mainWalletBalanceUsd: nil,
         agentWalletBalanceUsd: nil,

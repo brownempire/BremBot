@@ -79,6 +79,12 @@ struct BremLogicWidgetEntryView: View {
         return String(format: "%.1fx", leverage)
     }
 
+    private func expectedPnlLabel(_ pnl: Double?) -> String {
+        guard let pnl else { return "--" }
+        let prefix = pnl >= 0 ? "+" : "-"
+        return "\(prefix)$\(String(format: "%.2f", abs(pnl)))"
+    }
+
     private var pnlLabel: String? {
         guard let pnl = entry.snapshot.openPerpPnlUsd else { return nil }
         let prefix = pnl >= 0 ? "+" : "-"
@@ -323,6 +329,10 @@ struct BremLogicWidgetEntryView: View {
                     metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
                     metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
                     metricTile("Stop Loss", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: Color(red: 1, green: 0.55, blue: 0.55))
+                    Color.clear
+                    Color.clear
+                    metricTile("TP P/L", expectedPnlLabel(entry.snapshot.openPerpTakeProfitPnlUsd), accent: Color(red: 0.45, green: 0.92, blue: 0.62))
+                    metricTile("SL P/L", expectedPnlLabel(entry.snapshot.openPerpStopLossPnlUsd), accent: Color(red: 1, green: 0.45, blue: 0.45))
                 }
             } else {
                 VStack(alignment: .leading, spacing: 7) {
