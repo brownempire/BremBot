@@ -367,7 +367,7 @@ export function TradingViewChart({
           autosize: true,
           symbol,
           interval: storedInterval,
-          timezone: "exchange",
+          timezone: "America/New_York",
           theme: "dark",
           style: "1",
           locale: "en_US",

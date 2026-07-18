@@ -54,10 +54,10 @@ export type PerpsAutomationConfig = z.infer<typeof perpsAutomationConfigSchema>;
 export type AutomationToken = z.infer<typeof automationTokenSchema>;
 
 export const DEFAULT_SERVER_SIGNAL_PARAMS: UserParams = {
-  trendWindow: 5,
-  trendThreshold: 0.5,
-  breakoutPercent: 0.8,
-  cooldownSeconds: 60,
+  trendWindow: 15,
+  trendThreshold: 0.36,
+  breakoutPercent: 0.3,
+  cooldownSeconds: 180,
 };
 
 export function getActivePerpsAsset(config: PerpsAutomationConfig) {

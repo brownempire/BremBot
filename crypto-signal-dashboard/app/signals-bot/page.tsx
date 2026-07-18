@@ -93,10 +93,10 @@ const JupiterPerpsPositionWidget = dynamic(
 );
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 5,
-  trendThreshold: 0.5,
-  breakoutPercent: 0.8,
-  cooldownSeconds: 60,
+  trendWindow: 15,
+  trendThreshold: 0.36,
+  breakoutPercent: 0.3,
+  cooldownSeconds: 180,
 };
 
 type SignalsAppTab = "signals" | "perps" | "simulator" | "wallet";
@@ -156,14 +156,14 @@ type AutomationConfigSyncState = {
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
-  walletPercent: 25,
+  walletPercent: 80,
   walletAllocationMode: "percent",
-  perpsTakeProfitValue: 0,
+  perpsTakeProfitValue: 4,
   perpsTakeProfitMode: "percent",
   spotTakeProfitValue: 0,
   spotTakeProfitMode: "percent",
-  stopLossPercent: 0,
-  perpsLeverage: 10,
+  stopLossPercent: 2,
+  perpsLeverage: 50,
   perpsExecutionMode: "set-parameters",
   smartTradeProfile: "balanced",
   slots: [

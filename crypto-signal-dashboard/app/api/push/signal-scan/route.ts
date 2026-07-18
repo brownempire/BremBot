@@ -16,10 +16,10 @@ const MAX_POINTS = 5400;
 const MAX_SENT_IDS = 80;
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 5,
-  trendThreshold: 1.0,
-  breakoutPercent: 0.9,
-  cooldownSeconds: 120,
+  trendWindow: 15,
+  trendThreshold: 0.36,
+  breakoutPercent: 0.3,
+  cooldownSeconds: 180,
 };
 
 const TRACKED_MARKETS = [
