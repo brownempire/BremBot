@@ -9,6 +9,8 @@ import type {
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 
+const DECISION_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -66,7 +68,13 @@ export function buildTradeDecisionPayload(input: {
 }): TradeDecisionPayload {
   const { walletAddress, session, signal, existingExecutions } = input;
   const config = getTradeDecisionConfig();
-  const recentExecutions = existingExecutions.slice(0, 20);
+  const historyCutoff = Date.now() - DECISION_HISTORY_WINDOW_MS;
+  const recentExecutions = existingExecutions
+    .filter((execution) => {
+      const timestamp = Date.parse(execution.updatedAt ?? execution.createdAt);
+      return Number.isFinite(timestamp) && timestamp >= historyCutoff;
+    })
+    .slice(0, 20);
   const countByStatus = (status: PerpsUserExecution["status"]) => recentExecutions.filter((item) => item.status === status).length;
   const failedCount = countByStatus("failed");
   const blockedCount = countByStatus("blocked");
@@ -216,9 +224,8 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     }
   }
 
-  if (payload.historyContext.recentFailureRate >= 0.35) {
-    confidence -= 0.1;
-    tags.add("recent-failure-drag");
+  if (payload.historyContext.failedCount > 0) {
+    tags.add("recent-operational-failures-recorded");
   }
 
   if (payload.historyContext.recentBlockedRate >= 0.4) {

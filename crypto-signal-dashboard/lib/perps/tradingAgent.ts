@@ -198,8 +198,9 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
   });
   await appendTradeDecisionRecord(decision);
 
+  const learningControlsExecution = signal.executionStyle === "smart-trades";
   const resolvedSignal =
-    !decisionConfig.shadowMode && decisionConfig.allowExecutionOverrides
+    learningControlsExecution && !decisionConfig.shadowMode && decisionConfig.allowExecutionOverrides
       ? {
           ...signal,
           collateralUsd: decision.recommendation.recommendedCollateralUsd,
@@ -209,7 +210,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         }
       : signal;
 
-  if (!decisionConfig.shadowMode && !decision.recommendation.shouldTrade) {
+  if (learningControlsExecution && !decisionConfig.shadowMode && !decision.recommendation.shouldTrade) {
     const blockedExecution: PerpsUserExecution = {
       executionId: `pexec_${crypto.randomUUID()}`,
       sessionId: session.sessionId,

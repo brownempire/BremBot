@@ -20,6 +20,7 @@ let tradingAgent: typeof import("../lib/perps/tradingAgent");
 let sessionStore: typeof import("../lib/perps/sessionStore");
 let auditStore: typeof import("../lib/perps/userExecutionAudit");
 let sessionConfig: typeof import("../lib/perps/sessionConfig");
+let decisionEngine: typeof import("../lib/decision/engine");
 
 function cleanupStores() {
   for (const file of [
@@ -40,6 +41,11 @@ test.beforeEach(() => {
   process.env.PERPS_KILL_SWITCH = "false";
   process.env.PERPS_LIVE_ALLOWED_WALLETS = "";
   process.env.PERPS_SESSION_HEARTBEAT_TIMEOUT_MS = "60000";
+  process.env.PERPS_DECISION_SHADOW_MODE = "true";
+  delete process.env.PERPS_DECISION_ALLOW_OVERRIDES;
+  delete process.env.PERPS_MAX_LEVERAGE;
+  delete process.env.PERPS_MAX_TRADE_PCT;
+  delete process.env.PERPS_MAX_EXPOSURE_PCT;
   delete process.env.PERPS_AGENT_OWNER_WALLET;
   delete process.env.PERPS_AGENT_WALLET_PUBLIC_KEY;
   delete process.env.PERPS_AGENT_WALLET_PRIVATE_KEY;
@@ -51,6 +57,7 @@ test.before(async () => {
   sessionStore = await import("../lib/perps/sessionStore");
   auditStore = await import("../lib/perps/userExecutionAudit");
   sessionConfig = await import("../lib/perps/sessionConfig");
+  decisionEngine = await import("../lib/decision/engine");
 });
 
 test("clock in and clock out persists a wallet-scoped session", async () => {
@@ -158,6 +165,117 @@ test("paper mode routes a signal only to the clocked-in user session", async () 
   assert.match(journal, /BremLogic Trade Decision Journal/);
   assert.match(journal, /SOL\/USD/);
   assert.match(journal, /shadow mode on/);
+});
+
+test("set-parameter execution remains authoritative when the decision layer is active", async () => {
+  process.env.PERPS_DECISION_SHADOW_MODE = "false";
+  process.env.PERPS_DECISION_ALLOW_OVERRIDES = "true";
+  process.env.PERPS_MAX_LEVERAGE = "10";
+  process.env.PERPS_MAX_TRADE_PCT = "1";
+  process.env.PERPS_MAX_EXPOSURE_PCT = "1";
+  const wallet = "TestWalletSetParams33333333333333333333333333";
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "paper",
+    platform: "native",
+    walletProvider: "Jupiter Mobile",
+  });
+
+  const result = await tradingAgent.routePerpsSignalForUser(wallet, {
+    signalId: "sig-set-params-active-decision",
+    symbol: "SOL/USD",
+    summary: "Saved parameters remain authoritative",
+    direction: "bullish",
+    signalConfidence: 0.3,
+    asset: "SOL",
+    collateralUsd: 80,
+    leverage: 8,
+    maxSlippageBps: 100,
+    executionStyle: "set-parameters",
+    marketContext: {
+      spotPrice: 80,
+      volatilityPercent: 1,
+      trendBias: "sideways",
+      availableUsdc: 100,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 0.1,
+    },
+  });
+
+  assert.equal(result.decision?.shouldTrade, false);
+  assert.equal(result.ok, true);
+  assert.equal(result.execution.status, "paper_executed");
+  assert.equal(result.execution.collateralUsd, 80);
+  assert.equal(result.execution.leverage, 8);
+});
+
+test("stale operational failures remain auditable but leave recent decision history", () => {
+  const staleAt = new Date(Date.now() - 48 * 60 * 60 * 1_000).toISOString();
+  const session = {
+    sessionId: "session-stale-history",
+    walletAddress: "wallet-stale-history",
+    sessionState: "clocked_in" as const,
+    startedAt: staleAt,
+    lastHeartbeatAt: new Date().toISOString(),
+    inactiveSince: null,
+    endedAt: null,
+    mode: "live" as const,
+    executionModel: "delegated-ready" as const,
+    appOpen: false,
+    appForeground: false,
+    walletConnected: true,
+    walletWriteEnabled: true,
+    killSwitch: false,
+    unlimitedSession: true,
+    platform: "native" as const,
+    walletProvider: "Agent wallet",
+    warning: null,
+  };
+  const staleFailure = {
+    executionId: "old-failure",
+    sessionId: session.sessionId,
+    walletAddress: session.walletAddress,
+    signalId: "old-signal",
+    symbol: "SOL/USD",
+    summary: "Old collateral error",
+    side: "long" as const,
+    asset: "SOL" as const,
+    mode: "live" as const,
+    executionModel: "delegated-ready" as const,
+    status: "failed" as const,
+    reasonCode: "APPROVED",
+    reasonMessage: "Approved before the wallet was funded.",
+    collateralUsd: 4.8,
+    sizeUsd: 240,
+    leverage: 50,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    txid: null,
+    errorMessage: "Collateral size must be at least $10 for new positions",
+    positionPubkey: null,
+    createdAt: staleAt,
+    updatedAt: staleAt,
+  };
+  const payload = decisionEngine.buildTradeDecisionPayload({
+    walletAddress: session.walletAddress,
+    session,
+    existingExecutions: [staleFailure],
+    signal: {
+      signalId: "new-signal",
+      symbol: "SOL/USD",
+      summary: "Current funded-wallet signal",
+      direction: "bullish",
+      asset: "SOL",
+      collateralUsd: 65,
+      leverage: 50,
+      maxSlippageBps: 100,
+      executionStyle: "set-parameters",
+    },
+  });
+  const recommendation = decisionEngine.evaluateTradeDecision(payload);
+
+  assert.equal(payload.historyContext.recentExecutionCount, 0);
+  assert.equal(payload.historyContext.failedCount, 0);
+  assert.equal(recommendation.explanationTags.includes("recent-operational-failures-recorded"), false);
 });
 
 test("clearing the execution feed preserves wallet audit records and accepts later executions", async () => {

@@ -30,6 +30,7 @@ const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const MONITOR_LOCK_TTL_MS = 55_000;
+const MIN_PERPS_COLLATERAL_USD = 10;
 const MIN_TPSL_EXPECTED_PNL_USD = 1;
 
 type MonitorExecutionResult = {
@@ -250,11 +251,12 @@ export async function runAutonomousPerpsMonitor(
       const agentWallet = deps.getAgentWallet(config.walletAddress);
       if (!agentWallet) throw new Error("No autonomous wallet is associated with this primary wallet.");
       const learningProfile = await deps.getLearningProfile(config.walletAddress);
-      const learnedParams = getLearnedSignalParams(config, asset, learningProfile);
+      const executionProfile = config.settings.perpsExecutionMode === "smart-trades" ? learningProfile : null;
+      const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
       const [snapshot, availableUsdc, points] = await Promise.all([
         deps.fetchSnapshot(agentWallet),
         deps.getUsdcBalance(agentWallet),
-        deps.fetchCandles(`${asset}-USD`, Math.max(15, learnedParams.trendWindow + 5)),
+        deps.fetchCandles(`${asset}-USD`, Math.max(15, effectiveParams.trendWindow + 5)),
       ]);
       const reconciledOutcomeCount = await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       if (reconciledOutcomeCount > 0) {
@@ -272,7 +274,7 @@ export async function runAutonomousPerpsMonitor(
       }
 
       const latestTimestamp = points[points.length - 1]?.t ?? 0;
-      const windowStart = latestTimestamp - learnedParams.trendWindow * 60_000;
+      const windowStart = latestTimestamp - effectiveParams.trendWindow * 60_000;
       const windowPoints = points.filter((point) => point.t >= windowStart);
       if (windowPoints.length < 3) {
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
@@ -280,27 +282,27 @@ export async function runAutonomousPerpsMonitor(
       }
       const lastSignalAt = await deps.readLastSignal(config.walletAddress, asset);
       const volatilityPercent = computeVolatilityPercent(windowPoints);
-      if (learningProfile && volatilityPercent > learningProfile.volatilityCeilingPercent) {
-        results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${learningProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
+      if (executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
+        results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${executionProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
         continue;
       }
       const signalMetrics = computeSignalMetrics(windowPoints);
       const signal = detectSignals({
         symbol: `${asset}/USD`,
         points: windowPoints,
-        params: learnedParams,
+        params: effectiveParams,
         lastSignalAt: lastSignalAt ?? undefined,
       })[0];
       if (!signal) {
         results.push(skip(config, asset, "NO_SIGNAL", "No qualifying signal was detected in the latest candle window."));
         continue;
       }
-      if (learningProfile) {
-        const trendQualified = Math.abs(signalMetrics.trend.changePercent) >= learnedParams.trendThreshold;
-        const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= learnedParams.breakoutPercent
+      if (executionProfile) {
+        const trendQualified = Math.abs(signalMetrics.trend.changePercent) >= effectiveParams.trendThreshold;
+        const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= effectiveParams.breakoutPercent
           ? signalMetrics.breakoutChange
           : signalMetrics.shortMomentum;
-        const breakoutQualified = Math.abs(breakoutMetric) >= learnedParams.breakoutPercent * 0.6;
+        const breakoutQualified = Math.abs(breakoutMetric) >= effectiveParams.breakoutPercent * 0.6;
         const trendDirection = signalMetrics.trend.changePercent >= 0 ? "bullish" : "bearish";
         const breakoutDirection = breakoutMetric >= 0 ? "bullish" : "bearish";
         if (!trendQualified || !breakoutQualified || trendDirection !== breakoutDirection || signal.direction !== trendDirection) {
@@ -315,20 +317,30 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       if (
-        learningProfile
-        && learningProfile.preferredDirection !== "balanced"
-        && signal.direction !== learningProfile.preferredDirection
+        executionProfile
+        && executionProfile.preferredDirection !== "balanced"
+        && signal.direction !== executionProfile.preferredDirection
       ) {
         await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
-        results.push(skip(config, asset, "LEARNED_DIRECTION_SKIP", `The active trained profile currently prefers ${learningProfile.preferredDirection} setups.`));
+        results.push(skip(config, asset, "LEARNED_DIRECTION_SKIP", `The active trained profile currently prefers ${executionProfile.preferredDirection} setups.`));
         continue;
       }
 
       const basePlan = deriveTradePlan(config, windowPoints, signal, availableUsdc);
-      const plan = applyLearnedTradePlan({ basePlan, asset, points: windowPoints, profile: learningProfile });
+      const plan = applyLearnedTradePlan({ basePlan, asset, points: windowPoints, profile: executionProfile });
       const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
+        continue;
+      }
+      if (collateralUsd < MIN_PERPS_COLLATERAL_USD) {
+        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        results.push(skip(
+          config,
+          asset,
+          "COLLATERAL_BELOW_MINIMUM",
+          `The configured allocation produced $${collateralUsd.toFixed(2)} of collateral; Jupiter requires at least $${MIN_PERPS_COLLATERAL_USD.toFixed(2)}.`
+        ));
         continue;
       }
       const side = signal.direction === "bullish" ? "long" : "short";
@@ -360,10 +372,10 @@ export async function runAutonomousPerpsMonitor(
         executionStyle: config.settings.perpsExecutionMode,
         strategyContext: {
           signalType: signal.type,
-          trendWindow: learnedParams.trendWindow,
-          trendThreshold: learnedParams.trendThreshold,
-          breakoutPercent: learnedParams.breakoutPercent,
-          cooldownSeconds: learnedParams.cooldownSeconds,
+          trendWindow: effectiveParams.trendWindow,
+          trendThreshold: effectiveParams.trendThreshold,
+          breakoutPercent: effectiveParams.breakoutPercent,
+          cooldownSeconds: effectiveParams.cooldownSeconds,
           trendStrengthPercent: signalMetrics.trend.changePercent,
           breakoutStrengthPercent: signalMetrics.breakoutChange,
           atrPercent: plan.atrPercent,
