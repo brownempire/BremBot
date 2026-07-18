@@ -396,6 +396,149 @@ struct BremLogicWidget: Widget {
     }
 }
 
+@available(iOS 16.0, *)
+struct BremLogicLockScreenWidgetEntryView: View {
+    let entry: BremLogicWidgetEntry
+    @Environment(\.widgetFamily) private var widgetFamily
+
+    private var positionLabel: String {
+        let label = entry.snapshot.openPerpLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return label?.isEmpty == false ? label! : "No open perps"
+    }
+
+    private var marketLabel: String {
+        let market = entry.snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return market?.isEmpty == false ? market! : "PERPS"
+    }
+
+    private var pnlLabel: String {
+        guard let pnl = entry.snapshot.openPerpPnlUsd else { return "--" }
+        let prefix = pnl >= 0 ? "+" : "-"
+        return "\(prefix)$\(String(format: "%.2f", abs(pnl)))"
+    }
+
+    private var walletLabel: String {
+        let balance = entry.snapshot.agentWalletBalanceUsd
+            ?? entry.snapshot.walletBalanceUsd
+            ?? entry.snapshot.mainWalletBalanceUsd
+        guard let balance else { return "--" }
+        if abs(balance) >= 10_000 {
+            return String(format: "$%.0f", balance)
+        }
+        return String(format: "$%.2f", balance)
+    }
+
+    @ViewBuilder
+    private var lockScreenLogo: some View {
+        if let image = UIImage(named: "BremLogicLogo")
+            ?? BremLogicWidgetAssetLoader.logoImage() {
+            Image(uiImage: image)
+                .renderingMode(.template)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 68, height: 14, alignment: .leading)
+                .foregroundStyle(.primary)
+        } else {
+            Text("BremLogic")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+        }
+    }
+
+    @ViewBuilder
+    private var rectangularContent: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                lockScreenLogo
+                Spacer(minLength: 2)
+                if #available(iOS 17.0, *) {
+                    Button(intent: BremLogicWidgetRefreshIntent()) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Text(positionLabel)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            HStack(spacing: 5) {
+                Text("PnL \(pnlLabel)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                Text("Wallet \(walletLabel)")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var circularContent: some View {
+        ZStack {
+            AccessoryWidgetBackground()
+            VStack(spacing: 0) {
+                Text(marketLabel)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                Text(pnlLabel)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+            }
+            .padding(4)
+        }
+    }
+
+    private var inlineContent: some View {
+        Text("BremLogic · \(marketLabel) · \(pnlLabel)")
+    }
+
+    @ViewBuilder
+    private func applyAccessoryBackground<Content: View>(to content: Content) -> some View {
+        if #available(iOS 17.0, *) {
+            content.containerBackground(.clear, for: .widget)
+        } else {
+            content
+        }
+    }
+
+    var body: some View {
+        applyAccessoryBackground(
+            to: Group {
+                switch widgetFamily {
+                case .accessoryCircular:
+                    circularContent
+                case .accessoryInline:
+                    inlineContent
+                default:
+                    rectangularContent
+                }
+            }
+        )
+        .widgetURL(URL(string: entry.snapshot.targetURL))
+    }
+}
+
+@available(iOS 16.0, *)
+struct BremLogicLockScreenWidget: Widget {
+    let kind = "BremLogicLockScreenWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: BremLogicWidgetProvider()) { entry in
+            BremLogicLockScreenWidgetEntryView(entry: entry)
+        }
+        .configurationDisplayName("BremLogic Lock Screen")
+        .description("Shows your open Perps position, PnL, and wallet value on the Lock Screen.")
+        .supportedFamilies([.accessoryRectangular, .accessoryCircular, .accessoryInline])
+    }
+}
+
 enum BremLogicWidgetAssetLoader {
     static func logoImage() -> UIImage? {
         guard let path = Bundle.main.path(forResource: "BremLogicLogo", ofType: "png") else {
