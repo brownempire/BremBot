@@ -8,6 +8,14 @@ struct BremLogicWidgetEntry: TimelineEntry {
 }
 
 struct BremLogicWidgetProvider: TimelineProvider {
+    private func refreshInterval(for snapshot: BremLogicWidgetSnapshot) -> TimeInterval {
+        let market = snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasOpenPerp = market?.isEmpty == false
+            || snapshot.openPerpPositionValueUsd != nil
+            || snapshot.openPerpPnlUsd != nil
+        return hasOpenPerp ? 5 * 60 : 15 * 60
+    }
+
     func placeholder(in context: Context) -> BremLogicWidgetEntry {
         BremLogicWidgetEntry(date: Date(), snapshot: .fallback)
     }
@@ -33,18 +41,15 @@ struct BremLogicWidgetProvider: TimelineProvider {
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicWidgetEntry>) -> Void) {
         Task {
             let snapshot: BremLogicWidgetSnapshot
-            let refreshInterval: TimeInterval
             do {
                 snapshot = try await BremLogicWidgetServerClient.fetch()
                 try? BremLogicWidgetStore.save(snapshot)
-                refreshInterval = 15 * 60
             } catch {
                 snapshot = BremLogicWidgetStore.load()
-                refreshInterval = 5 * 60
             }
 
             let entry = BremLogicWidgetEntry(date: Date(), snapshot: snapshot)
-            let refreshDate = Date().addingTimeInterval(refreshInterval)
+            let refreshDate = Date().addingTimeInterval(refreshInterval(for: snapshot))
             completion(Timeline(entries: [entry], policy: .after(refreshDate)))
         }
     }
