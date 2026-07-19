@@ -271,6 +271,7 @@ type StoredPerpsApproval = {
 
 type PerpsExecutionSummary = {
   executionId: string;
+  decisionId?: string | null;
   signalId: string;
   symbol: string;
   summary: string;
@@ -2042,6 +2043,16 @@ function DashboardPage() {
   const legacyDecisionExecutions = useMemo(() => (
     decisionLogExecutionHistory.filter((execution) => !execution.decisionSummary)
   ), [decisionLogExecutionHistory]);
+
+  const decisionExecutionsById = useMemo(() => {
+    const byDecisionId = new Map<string, PerpsExecutionSummary>();
+    decisionLogExecutionHistory.forEach((execution) => {
+      if (execution.decisionId && !byDecisionId.has(execution.decisionId)) {
+        byDecisionId.set(execution.decisionId, execution);
+      }
+    });
+    return byDecisionId;
+  }, [decisionLogExecutionHistory]);
 
   const setAiPanelVisibility = useCallback((open: boolean) => {
     setAiPanelOpen(open);
@@ -5909,7 +5920,17 @@ function DashboardPage() {
               gap: 12,
               paddingRight: 2,
             }}>
-              {decisionLogEntries.length > 0 ? decisionLogEntries.map((entry) => (
+              {decisionLogEntries.length > 0 ? decisionLogEntries.map((entry) => {
+                const execution = decisionExecutionsById.get(entry.payload.decisionId);
+                const wasTaken = execution ? ["submitted", "confirmed", "paper_executed"].includes(execution.status) : false;
+                const wasAttempted = execution?.status === "failed";
+                const outcomeLabel = wasTaken
+                  ? (!entry.recommendation.shouldTrade && entry.recommendation.shadowMode ? "TAKEN · PARAMETER OVERRIDE" : "TAKEN")
+                  : wasAttempted ? "ATTEMPT FAILED"
+                    : execution?.status === "approval_required" ? "AWAITING APPROVAL"
+                      : "SKIPPED";
+                const outcomePositive = wasTaken;
+                return (
                 <article
                   key={entry.payload.decisionId}
                   style={{
@@ -5933,14 +5954,14 @@ function DashboardPage() {
                     <div style={{
                       padding: "6px 10px",
                       borderRadius: 999,
-                      border: `1px solid ${entry.recommendation.shouldTrade ? "rgba(74, 222, 128, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
-                      background: entry.recommendation.shouldTrade ? "rgba(22, 101, 52, 0.2)" : "rgba(127, 29, 29, 0.2)",
-                      color: entry.recommendation.shouldTrade ? "#86efac" : "#fca5a5",
+                      border: `1px solid ${outcomePositive ? "rgba(74, 222, 128, 0.45)" : "rgba(248, 113, 113, 0.45)"}`,
+                      background: outcomePositive ? "rgba(22, 101, 52, 0.2)" : "rgba(127, 29, 29, 0.2)",
+                      color: outcomePositive ? "#86efac" : "#fca5a5",
                       fontSize: 12,
                       fontWeight: 700,
                       letterSpacing: 0.3,
                     }}>
-                      {entry.recommendation.shouldTrade ? "TAKE" : "SKIP"} · {Math.round(entry.recommendation.confidenceScore * 100)}%
+                      {outcomeLabel} · {Math.round(entry.recommendation.confidenceScore * 100)}%
                     </div>
                   </div>
 
@@ -5973,6 +5994,15 @@ function DashboardPage() {
                   <div style={{ color: "var(--text)", fontSize: 13, lineHeight: 1.55 }}>
                     {entry.recommendation.explanationSummary}
                   </div>
+                  {wasTaken && !entry.recommendation.shouldTrade ? (
+                    <div style={{ color: "#fde68a", fontSize: 12 }}>
+                      The model would have skipped this setup, but Set Parameters is authoritative and the trade was submitted. The model result remains shadow-only for learning.
+                    </div>
+                  ) : execution ? (
+                    <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                      Execution: {execution.status.replace(/_/g, " ")} · {execution.reasonMessage}
+                    </div>
+                  ) : null}
 
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <span style={{
@@ -6023,7 +6053,8 @@ function DashboardPage() {
                     ))}
                   </div>
                 </article>
-              )) : (
+                );
+              }) : (
                 <div style={{
                   padding: 14,
                   borderRadius: 12,

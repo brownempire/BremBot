@@ -12,6 +12,7 @@ import type {
   LearningAsset,
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
+import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 
 const MIN_TRAINING_SAMPLE = 50;
 const MIN_VALIDATION_SAMPLE = 10;
@@ -90,6 +91,15 @@ function makeBaselineProfile(walletAddress: string, version: number, source: Dec
     atrLookback: 14,
     atrStopMultiplier: 1.5,
     volatilityCeilingPercent: 5,
+    indicatorSettings: {
+      longRsiMin: BASE_INDICATOR_SETTINGS.longRsiMin,
+      longRsiMax: BASE_INDICATOR_SETTINGS.longRsiMax,
+      shortRsiMin: BASE_INDICATOR_SETTINGS.shortRsiMin,
+      shortRsiMax: BASE_INDICATOR_SETTINGS.shortRsiMax,
+      minimumAdx: BASE_INDICATOR_SETTINGS.minimumAdx,
+      minimumVolumeRatio: BASE_INDICATOR_SETTINGS.minimumVolumeRatio,
+      minimumScore: BASE_INDICATOR_SETTINGS.minimumScore,
+    },
     assetAdjustments: {
       SOL: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
       ETH: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
@@ -142,6 +152,38 @@ function deriveAssetAdjustment(asset: LearningAsset, outcomes: TradeLearningOutc
   };
 }
 
+function deriveIndicatorSettings(outcomes: TradeLearningOutcome[]) {
+  const winners = outcomes.filter((outcome) => outcome.netPnlUsd > 0);
+  const longRsi = winners.filter((outcome) => outcome.side === "long").flatMap((outcome) => outcome.rsi == null ? [] : [outcome.rsi]);
+  const shortRsi = winners.filter((outcome) => outcome.side === "short").flatMap((outcome) => outcome.rsi == null ? [] : [outcome.rsi]);
+  const adx = winners.flatMap((outcome) => outcome.adx == null ? [] : [outcome.adx]);
+  const volume = winners.flatMap((outcome) => outcome.volumeRatio == null ? [] : [outcome.volumeRatio]);
+  const scores = winners.flatMap((outcome) => outcome.indicatorScore == null ? [] : [outcome.indicatorScore]);
+  return {
+    longRsiMin: Number(clamp(quantile(longRsi, 0.15) || BASE_INDICATOR_SETTINGS.longRsiMin, 45, 55).toFixed(1)),
+    longRsiMax: Number(clamp(quantile(longRsi, 0.85) || BASE_INDICATOR_SETTINGS.longRsiMax, 65, 74).toFixed(1)),
+    shortRsiMin: Number(clamp(quantile(shortRsi, 0.15) || BASE_INDICATOR_SETTINGS.shortRsiMin, 26, 35).toFixed(1)),
+    shortRsiMax: Number(clamp(quantile(shortRsi, 0.85) || BASE_INDICATOR_SETTINGS.shortRsiMax, 45, 55).toFixed(1)),
+    minimumAdx: Number(clamp(quantile(adx, 0.2) || BASE_INDICATOR_SETTINGS.minimumAdx, 18, 25).toFixed(1)),
+    minimumVolumeRatio: Number(clamp(quantile(volume, 0.2) || BASE_INDICATOR_SETTINGS.minimumVolumeRatio, 0.9, 1.25).toFixed(2)),
+    minimumScore: Number(clamp(quantile(scores, 0.2) || BASE_INDICATOR_SETTINGS.minimumScore, 2.5, 4).toFixed(1)),
+  };
+}
+
+function passesIndicatorSettings(outcome: TradeLearningOutcome, settings: ReturnType<typeof deriveIndicatorSettings>) {
+  const hasIndicatorHistory = outcome.indicatorScore != null || outcome.rsi != null || outcome.adx != null || outcome.volumeRatio != null;
+  if (!hasIndicatorHistory) return true;
+  if (outcome.indicatorScore != null && outcome.indicatorScore < settings.minimumScore) return false;
+  if (outcome.adx != null && outcome.adx < settings.minimumAdx) return false;
+  if (outcome.volumeRatio != null && outcome.volumeRatio < settings.minimumVolumeRatio) return false;
+  if (outcome.rsi != null) {
+    return outcome.side === "long"
+      ? outcome.rsi >= settings.longRsiMin && outcome.rsi <= settings.longRsiMax
+      : outcome.rsi >= settings.shortRsiMin && outcome.rsi <= settings.shortRsiMax;
+  }
+  return true;
+}
+
 function createLearnedCandidate(
   walletAddress: string,
   version: number,
@@ -175,11 +217,13 @@ function createLearnedCandidate(
   const trendWindow = Math.round(clamp(quantile(winners.flatMap((outcome) => outcome.trendWindow === null ? [] : [outcome.trendWindow]), 0.5) || 30, 15, 60));
   const cooldownSeconds = Math.round(clamp(quantile(winners.flatMap((outcome) => outcome.cooldownSeconds === null ? [] : [outcome.cooldownSeconds]), 0.5) || 600, 300, 900));
   const preferredDirection = derivePreferredDirection(training);
+  const indicatorSettings = deriveIndicatorSettings(training);
 
   const admittedValidation = validation.filter((outcome) => (
     (outcome.signalConfidence === null || outcome.signalConfidence >= minimumConfidence)
     && (outcome.volatilityPercent === null || outcome.volatilityPercent <= volatilityCeilingPercent)
     && (preferredDirection === "balanced" || (preferredDirection === "bullish" ? outcome.side === "long" : outcome.side === "short"))
+    && passesIndicatorSettings(outcome, indicatorSettings)
   ));
   const stats = calculateStats(admittedValidation);
   const baselineStats = calculateStats(validation);
@@ -213,6 +257,7 @@ function createLearnedCandidate(
     atrLookback: 14,
     atrStopMultiplier: 1.5,
     volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
+    indicatorSettings,
     assetAdjustments: {
       SOL: deriveAssetAdjustment("SOL", training, leverageCap),
       ETH: deriveAssetAdjustment("ETH", training, leverageCap),

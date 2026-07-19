@@ -317,3 +317,45 @@ test("server monitor skips allocations below Jupiter's collateral minimum", asyn
   assert.equal(result.results[0]?.code, "COLLATERAL_BELOW_MINIMUM");
   assert.equal(savedCursor, points[points.length - 1]?.t);
 });
+
+test("parameter candidates are skipped when the RSI indicator reaches the configured extreme", async () => {
+  let routeCalls = 0;
+  let savedCursor = 0;
+  const baseTime = 1_784_174_800_000;
+  const points = Array.from({ length: 70 }, (_, index) => {
+    const close = 100 + index * 0.2;
+    return {
+      t: baseTime + index * 60_000,
+      o: close - 0.1,
+      h: close + 0.2,
+      l: close - 0.2,
+      v: close,
+      volume: 100 + index,
+    };
+  });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => null,
+    reconcileLearningHistory: async () => 0,
+    autoTrain: async () => undefined,
+    readLastSignal: async () => null,
+    writeLastSignal: async (_wallet, _asset, timestamp) => { savedCursor = timestamp; },
+  });
+
+  assert.equal(routeCalls, 0);
+  assert.equal(result.results[0]?.code, "INDICATOR_RSI_VETO");
+  assert.equal(savedCursor, points[points.length - 1]?.t);
+});

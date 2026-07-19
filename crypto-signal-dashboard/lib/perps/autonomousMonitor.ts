@@ -18,6 +18,12 @@ import { fetchJupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
 import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
+import {
+  BASE_INDICATOR_SETTINGS,
+  computeIndicatorSnapshot,
+  scoreIndicatorSnapshot,
+  type IndicatorSettings,
+} from "@/lib/signal/indicators";
 import { getRedisClient } from "@/lib/server/redis";
 import { getActiveDecisionLearningProfile } from "@/lib/decision/learningStore";
 import { getLearnedSignalParams, applyLearnedTradePlan } from "@/lib/decision/learningRuntime";
@@ -127,6 +133,14 @@ function computeTrendBias(points: PricePoint[]): "bullish" | "bearish" | "sidewa
   if (change >= 1) return "bullish";
   if (change <= -1) return "bearish";
   return "sideways";
+}
+
+function getIndicatorSettings(profile: DecisionLearningProfile | null): IndicatorSettings {
+  const learned = profile?.indicatorSettings;
+  return learned ? {
+    ...BASE_INDICATOR_SETTINGS,
+    ...learned,
+  } : BASE_INDICATOR_SETTINGS;
 }
 
 function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: number) {
@@ -256,7 +270,7 @@ export async function runAutonomousPerpsMonitor(
       const [snapshot, availableUsdc, points] = await Promise.all([
         deps.fetchSnapshot(agentWallet),
         deps.getUsdcBalance(agentWallet),
-        deps.fetchCandles(`${asset}-USD`, Math.max(15, effectiveParams.trendWindow + 5)),
+        deps.fetchCandles(`${asset}-USD`, Math.max(60, effectiveParams.trendWindow + 35)),
       ]);
       const reconciledOutcomeCount = await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       if (reconciledOutcomeCount > 0) {
@@ -295,6 +309,26 @@ export async function runAutonomousPerpsMonitor(
       })[0];
       if (!signal) {
         results.push(skip(config, asset, "NO_SIGNAL", "No qualifying signal was detected in the latest candle window."));
+        continue;
+      }
+      const indicatorSettings = getIndicatorSettings(learningProfile);
+      const indicators = computeIndicatorSnapshot(points, indicatorSettings);
+      const indicatorScore = scoreIndicatorSnapshot(indicators, signal.direction, indicatorSettings);
+      const indicatorsReady = indicators.emaFast !== null
+        && indicators.emaSlow !== null
+        && indicators.rsi !== null
+        && indicators.macdHistogram !== null
+        && indicators.adx !== null;
+      if (indicatorsReady && !indicatorScore.qualified) {
+        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        results.push(skip(
+          config,
+          asset,
+          indicatorScore.vetoed ? "INDICATOR_RSI_VETO" : "INDICATOR_CONFIRMATION_SKIP",
+          indicatorScore.vetoed
+            ? `The ${signal.direction} candidate was skipped by the RSI extreme veto (${indicators.rsi?.toFixed(1)}).`
+            : `The ${signal.direction} candidate scored ${indicatorScore.score.toFixed(1)} of the required ${indicatorSettings.minimumScore.toFixed(1)} indicator points.`
+        ));
         continue;
       }
       if (executionProfile) {
@@ -379,6 +413,24 @@ export async function runAutonomousPerpsMonitor(
           trendStrengthPercent: signalMetrics.trend.changePercent,
           breakoutStrengthPercent: signalMetrics.breakoutChange,
           atrPercent: plan.atrPercent,
+          indicatorScore: indicatorScore.score,
+          indicatorQualified: indicatorsReady ? indicatorScore.qualified : false,
+          indicatorTags: indicatorsReady ? indicatorScore.tags : ["INDICATOR_HISTORY_INCOMPLETE"],
+          indicators: {
+            emaSpreadPercent: indicators.emaSpreadPercent,
+            emaSlopePercent: indicators.emaSlopePercent,
+            rsi: indicators.rsi,
+            macdLine: indicators.macdLine,
+            macdSignal: indicators.macdSignal,
+            macdHistogram: indicators.macdHistogram,
+            macdHistogramChange: indicators.macdHistogramChange,
+            adx: indicators.adx,
+            plusDi: indicators.plusDi,
+            minusDi: indicators.minusDi,
+            volumeRatio: indicators.volumeRatio,
+            bollingerBandwidthPercent: indicators.bollingerBandwidthPercent,
+            bollingerPosition: indicators.bollingerPosition,
+          },
           learningProfileId: plan.profileId,
         },
         marketContext: {

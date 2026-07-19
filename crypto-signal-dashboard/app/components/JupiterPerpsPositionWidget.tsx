@@ -657,7 +657,7 @@ function PositionCard({
             </span>
             {position.walletRole ? (
               <span className="perps-trigger-badge">
-                {position.walletRole === "agent" ? "Agent" : "Primary"}
+                {position.walletRole === "agent" ? "Agent" : "User"}
               </span>
             ) : null}
           </div>
@@ -787,6 +787,11 @@ function TradeCard({ trade }: { trade: JupiterPerpsTrade }) {
           <span className={`perps-side-badge ${trade.side === "long" ? "long" : "short"}`}>
             {trade.side === "long" ? "Long" : "Short"}
           </span>
+          {trade.walletRole ? (
+            <span className="perps-trigger-badge">
+              {trade.walletRole === "agent" ? "Agent" : "User"}
+            </span>
+          ) : null}
         </div>
         <strong>{trade.price === null ? "-" : formatUsd(trade.price)}</strong>
       </div>
