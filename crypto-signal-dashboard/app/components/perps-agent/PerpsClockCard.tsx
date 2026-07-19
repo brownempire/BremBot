@@ -6,7 +6,7 @@ type PerpsClockCardProps = {
   modeLabel: "Paper mode" | "Live mode";
   executionModelLabel: string;
   walletControlledLabel: string;
-  killSwitchOn: boolean;
+  decisionMode: "shadow" | "active";
   unlimitedSession: boolean;
   warning: string | null;
   canClockIn: boolean;
@@ -15,6 +15,7 @@ type PerpsClockCardProps = {
   onClockOut: () => void;
   onViewLog: () => void;
   onToggleMode: () => void;
+  onToggleDecisionMode: () => void;
   onToggleUnlimited: (enabled: boolean) => void;
 };
 
@@ -40,8 +41,16 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
           <strong>{props.executionModelLabel}</strong>
         </div>
         <div className="perps-agent-stat">
-          <span>Kill switch</span>
-          <strong>{props.killSwitchOn ? "On" : "Off"}</strong>
+          <span>Shadow Mode</span>
+          <button
+            type="button"
+            className={`perps-decision-mode ${props.decisionMode}`}
+            onClick={props.onToggleDecisionMode}
+            disabled={props.isBusy}
+            aria-pressed={props.decisionMode === "active"}
+          >
+            {props.decisionMode === "active" ? "Active Mode" : "Shadow Mode"}
+          </button>
         </div>
       </div>
       <div className="wallet-controls">

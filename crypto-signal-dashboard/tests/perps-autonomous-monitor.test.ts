@@ -24,6 +24,7 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
       stopLossPercent: 1,
       perpsLeverage: 2,
       perpsExecutionMode: "set-parameters",
+      decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [
         { id: "slot-sol", token: "SOL" },

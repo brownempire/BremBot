@@ -1603,6 +1603,29 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
+.perps-decision-mode {
+  width: fit-content;
+  min-height: 28px;
+  margin-top: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.perps-decision-mode.active {
+  border-color: rgba(105, 225, 183, 0.5);
+  background: rgba(42, 143, 111, 0.22);
+  color: #8cf0ce;
+}
+
+.perps-decision-mode.shadow {
+  border-color: rgba(189, 151, 243, 0.45);
+  background: rgba(121, 83, 166, 0.2);
+  color: #d7b8ff;
+}
+
 .perps-agent-pill.neutral {
   color: var(--accent);
   background: rgba(101, 217, 255, 0.12);

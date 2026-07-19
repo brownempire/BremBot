@@ -62,6 +62,66 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(plan.stopLossPercent, 2);
 });
 
+test("each newly closed trade incrementally updates the active wallet profile", async () => {
+  const walletAddress = "learning-wallet-online";
+  const baseline = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  await learningStore.saveTradeLearningOutcomes([learningTypes.tradeLearningOutcomeSchema.parse({
+    outcomeId: `${walletAddress}:1`,
+    walletAddress,
+    executionId: "execution-online-1",
+    decisionId: "decision-online-1",
+    signalId: "signal-online-1",
+    asset: "SOL",
+    side: "long",
+    openedAt: new Date(1_700_000_000_000).toISOString(),
+    closedAt: new Date(1_700_000_900_000).toISOString(),
+    positionPubkey: "position-online-1",
+    entryPrice: 100,
+    exitPrice: 99,
+    collateralUsd: 10,
+    sizeUsd: 500,
+    leverage: 50,
+    takeProfitPrice: 100.08,
+    stopLossPrice: 99.96,
+    grossPnlUsd: -5,
+    feesUsd: 0.2,
+    netPnlUsd: -5.2,
+    returnOnCollateralPercent: -52,
+    durationMinutes: 15,
+    exitReason: "stop-loss",
+    signalConfidence: 0.61,
+    signalType: "trend",
+    trendWindow: 15,
+    trendThreshold: 0.36,
+    breakoutPercent: 0.3,
+    cooldownSeconds: 180,
+    trendStrengthPercent: 0.4,
+    breakoutStrengthPercent: 0.31,
+    volatilityPercent: 2,
+    atrPercent: 0.4,
+    trendBias: "bullish",
+    createdAt: new Date().toISOString(),
+  })]);
+
+  const result = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+
+  assert.equal(result.activated, true);
+  assert.equal(result.incremental, true);
+  assert.equal(result.profile.learnedFromClosedTrades, 1);
+  assert.ok(result.profile.minimumConfidence > baseline.profile.minimumConfidence);
+  assert.ok(result.profile.assetAdjustments.SOL.leverageMultiplier < baseline.profile.assetAdjustments.SOL.leverageMultiplier);
+  assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
+});
+
 test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted reward risk", () => {
   const baseline = learningTypes.decisionLearningProfileSchema.parse({
     profileId: "profile-runtime",

@@ -22,8 +22,8 @@ export function getTradeDecisionConfig() {
     || path.join(process.cwd(), "logs", "decision-layer");
 
   return {
-    shadowMode: readBoolean(process.env.PERPS_DECISION_SHADOW_MODE, true),
-    allowExecutionOverrides: readBoolean(process.env.PERPS_DECISION_ALLOW_OVERRIDES, false),
+    shadowMode: readBoolean(process.env.PERPS_DECISION_SHADOW_MODE, false),
+    allowExecutionOverrides: readBoolean(process.env.PERPS_DECISION_ALLOW_OVERRIDES, true),
     confidenceThreshold: clamp(readNumber(process.env.PERPS_DECISION_CONFIDENCE_THRESHOLD, 0.58), 0, 1),
     journalFilePath: process.env.PERPS_DECISION_JOURNAL_FILE?.trim()
       || path.join(decisionLogDir, "trade-decision-journal.md"),

@@ -280,6 +280,80 @@ function createLearnedCandidate(
   } satisfies DecisionLearningProfile;
 }
 
+function createIncrementalProfile(
+  active: DecisionLearningProfile,
+  version: number,
+  source: "automatic" | "manual-training",
+  outcomes: TradeLearningOutcome[]
+) {
+  const newOutcomes = outcomes.slice(active.learnedFromClosedTrades);
+  let minimumConfidence = active.minimumConfidence;
+  let volatilityCeilingPercent = active.volatilityCeilingPercent;
+  const assetAdjustments = structuredClone(active.assetAdjustments);
+
+  for (const outcome of newOutcomes) {
+    const adjustment = assetAdjustments[outcome.asset];
+    if (outcome.netPnlUsd > 0) {
+      minimumConfidence = clamp(minimumConfidence - 0.0005, 0.55, 0.78);
+      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier + 0.005, 0.5, 1.25);
+      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier + 0.005, 0.5, 1.1);
+      if (outcome.trendStrengthPercent != null) {
+        const observed = Math.abs(outcome.trendStrengthPercent);
+        adjustment.trendThreshold += clamp(observed - adjustment.trendThreshold, -0.02, 0.02) * 0.1;
+      }
+      if (outcome.breakoutStrengthPercent != null) {
+        const observed = Math.abs(outcome.breakoutStrengthPercent);
+        adjustment.breakoutPercent += clamp(observed - adjustment.breakoutPercent, -0.02, 0.02) * 0.1;
+      }
+    } else {
+      minimumConfidence = clamp(minimumConfidence + 0.004, 0.55, 0.78);
+      adjustment.trendThreshold = clamp(adjustment.trendThreshold * 1.005, 0.01, 10);
+      adjustment.breakoutPercent = clamp(adjustment.breakoutPercent * 1.005, 0.01, 8);
+      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier - 0.015, 0.5, 1.25);
+      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier - 0.02, 0.5, 1.1);
+      if (outcome.volatilityPercent != null && outcome.volatilityPercent <= volatilityCeilingPercent) {
+        volatilityCeilingPercent = clamp(volatilityCeilingPercent - 0.02, 1.5, 10);
+      }
+    }
+  }
+
+  for (const adjustment of Object.values(assetAdjustments)) {
+    adjustment.trendThreshold = Number(adjustment.trendThreshold.toFixed(3));
+    adjustment.breakoutPercent = Number(adjustment.breakoutPercent.toFixed(3));
+    adjustment.leverageMultiplier = Number(adjustment.leverageMultiplier.toFixed(3));
+    adjustment.allocationMultiplier = Number(adjustment.allocationMultiplier.toFixed(3));
+  }
+
+  const stats = calculateStats(outcomes);
+  const now = new Date().toISOString();
+  return {
+    ...active,
+    profileId: `learn_${crypto.randomUUID()}`,
+    version,
+    status: "candidate" as const,
+    source,
+    createdAt: now,
+    promotedAt: null,
+    learnedFromClosedTrades: outcomes.length,
+    minimumConfidence: Number(minimumConfidence.toFixed(4)),
+    preferredDirection: derivePreferredDirection(outcomes),
+    volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
+    assetAdjustments,
+    validation: {
+      sampleSize: outcomes.length,
+      trainingSize: outcomes.length,
+      validationSize: 0,
+      winRate: Number(stats.winRate.toFixed(4)),
+      expectancyUsd: Number(stats.expectancyUsd.toFixed(4)),
+      profitFactor: Number(stats.profitFactor.toFixed(4)),
+      maxDrawdownUsd: Number(stats.maxDrawdownUsd.toFixed(4)),
+      passed: true,
+      reasons: [`Applied bounded online learning from ${newOutcomes.length} newly closed trade${newOutcomes.length === 1 ? "" : "s"}; full holdout validation remains scheduled separately.`],
+    },
+    summary: `Online profile update after ${outcomes.length} closed trades. Confidence and ${[...new Set(newOutcomes.map((outcome) => outcome.asset))].join("/")} risk multipliers were adjusted within safety bounds.`,
+  } satisfies DecisionLearningProfile;
+}
+
 export async function trainWalletDecisionProfile(input: {
   walletAddress: string;
   config: PerpsAutomationConfig | null;
@@ -291,17 +365,42 @@ export async function trainWalletDecisionProfile(input: {
     listDecisionLearningProfileHistory(input.walletAddress),
     listTradeLearningOutcomes(input.walletAddress),
   ]);
+  const version = Math.max(0, ...history.map((profile) => profile.version)) + 1;
+  if (!input.force && active && outcomes.length > active.learnedFromClosedTrades) {
+    const incremental = createIncrementalProfile(active, version, input.source, outcomes);
+    const profile = await saveDecisionLearningProfile(incremental, true);
+    return {
+      profile,
+      activated: true,
+      outcomeCount: outcomes.length,
+      skipped: false,
+      incremental: true,
+      activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+    };
+  }
   const latestAttempt = history[0] ?? active;
   if (!input.force && latestAttempt && Date.now() - Date.parse(latestAttempt.createdAt) < AUTO_RETRAIN_INTERVAL_MS) {
     return { profile: active ?? latestAttempt, activated: false, outcomeCount: outcomes.length, skipped: true };
   }
-  const version = Math.max(0, ...history.map((profile) => profile.version)) + 1;
   if (outcomes.length < MIN_TRAINING_SAMPLE) {
     if (active) {
       return { profile: active, activated: false, outcomeCount: outcomes.length, skipped: true };
     }
     const baseline = makeBaselineProfile(input.walletAddress, version, "operator-baseline");
-    const profile = await saveDecisionLearningProfile(baseline, true);
+    const savedBaseline = await saveDecisionLearningProfile(baseline, true);
+    if (outcomes.length > 0) {
+      const incremental = createIncrementalProfile(savedBaseline, version + 1, input.source, outcomes);
+      const profile = await saveDecisionLearningProfile(incremental, true);
+      return {
+        profile,
+        activated: true,
+        outcomeCount: outcomes.length,
+        skipped: false,
+        incremental: true,
+        activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+      };
+    }
+    const profile = savedBaseline;
     return { profile, activated: true, outcomeCount: outcomes.length, skipped: false };
   }
 

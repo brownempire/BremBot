@@ -65,6 +65,7 @@ export function buildTradeDecisionPayload(input: {
   session: PerpsAutomationSession;
   signal: PerpsAgentSignal;
   existingExecutions: PerpsUserExecution[];
+  shadowMode?: boolean;
 }): TradeDecisionPayload {
   const { walletAddress, session, signal, existingExecutions } = input;
   const config = getTradeDecisionConfig();
@@ -126,7 +127,7 @@ export function buildTradeDecisionPayload(input: {
       recentFailureRate: recentExecutions.length > 0 ? failedCount / recentExecutions.length : 0,
       recentBlockedRate: recentExecutions.length > 0 ? blockedCount / recentExecutions.length : 0,
     },
-    shadowMode: config.shadowMode,
+    shadowMode: input.shadowMode ?? config.shadowMode,
   };
 }
 
@@ -339,6 +340,7 @@ export function createTradeDecisionRecord(input: {
   signal: PerpsAgentSignal;
   existingExecutions: PerpsUserExecution[];
   learningProfile?: DecisionLearningProfile | null;
+  shadowMode?: boolean;
 }): TradeDecisionRecord {
   const payload = buildTradeDecisionPayload(input);
   const recommendation = evaluateTradeDecision(payload, input.learningProfile ?? null);

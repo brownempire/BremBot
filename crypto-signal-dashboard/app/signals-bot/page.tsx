@@ -112,6 +112,7 @@ type AutoTradeTokenOption = {
 
 type AutoTradeMode = "all" | "buy-only";
 type PerpsExecutionMode = "set-parameters" | "smart-trades";
+type DecisionMode = "shadow" | "active";
 type SmartTradeProfile = "conservative" | "balanced" | "aggressive";
 type WalletAllocationMode = "percent" | "usd";
 type TakeProfitMode = "percent" | "usd";
@@ -140,6 +141,7 @@ type AutoTradeSettings = {
   stopLossPercent: number;
   perpsLeverage: number;
   perpsExecutionMode: PerpsExecutionMode;
+  decisionMode: DecisionMode;
   smartTradeProfile: SmartTradeProfile;
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
@@ -166,6 +168,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   stopLossPercent: 2,
   perpsLeverage: 50,
   perpsExecutionMode: "set-parameters",
+  decisionMode: "active",
   smartTradeProfile: "balanced",
   slots: [
     { id: "auto-slot-1", token: "SOL" },
@@ -3481,6 +3484,7 @@ function DashboardPage() {
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
+      const decisionMode = parsed.decisionMode === "shadow" ? "shadow" : "active";
       const smartTradeProfile =
         parsed.smartTradeProfile === "conservative" || parsed.smartTradeProfile === "aggressive"
           ? parsed.smartTradeProfile
@@ -3526,6 +3530,7 @@ function DashboardPage() {
         stopLossPercent,
         perpsLeverage,
         perpsExecutionMode,
+        decisionMode,
         smartTradeProfile,
         slots: normalizedSlots,
         activeSlotId,
@@ -5340,7 +5345,7 @@ function DashboardPage() {
             modeLabel={perpsModeLabel}
             executionModelLabel={perpsAgentSession?.executionModel ?? "approval-assisted"}
             walletControlledLabel={perpsWalletControlNote}
-            killSwitchOn={perpsAgentSession?.killSwitch ?? false}
+            decisionMode={autoTradeSettings.decisionMode}
             unlimitedSession={perpsAgentSession?.unlimitedSession ?? perpsUnlimitedSession}
             warning={
               perpsAgentSession?.warning
@@ -5358,6 +5363,10 @@ function DashboardPage() {
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
             onViewLog={() => { void openDecisionLog(); }}
             onToggleMode={() => setPerpsSessionModePreference((current) => current === "paper" ? "live" : "paper")}
+            onToggleDecisionMode={() => setAutoTradeSettings((current) => ({
+              ...current,
+              decisionMode: current.decisionMode === "active" ? "shadow" : "active",
+            }))}
             onToggleUnlimited={setPerpsUnlimitedSession}
           />
           <PerpsSessionStatus

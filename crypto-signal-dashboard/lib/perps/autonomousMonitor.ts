@@ -153,7 +153,7 @@ function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: numb
 function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: Signal, availableUsdc: number) {
   const baseCollateralPercent = getCollateralPercent(config, availableUsdc);
   const volatilityPercent = computeVolatilityPercent(points);
-  if (config.settings.perpsExecutionMode !== "smart-trades") {
+  if (config.settings.perpsExecutionMode !== "smart-trades" || config.settings.decisionMode === "shadow") {
     return {
       collateralPercent: baseCollateralPercent,
       leverage: config.settings.perpsLeverage,
@@ -265,7 +265,10 @@ export async function runAutonomousPerpsMonitor(
       const agentWallet = deps.getAgentWallet(config.walletAddress);
       if (!agentWallet) throw new Error("No autonomous wallet is associated with this primary wallet.");
       const learningProfile = await deps.getLearningProfile(config.walletAddress);
-      const executionProfile = config.settings.perpsExecutionMode === "smart-trades" ? learningProfile : null;
+      const executionProfile = config.settings.perpsExecutionMode === "smart-trades"
+        && config.settings.decisionMode === "active"
+        ? learningProfile
+        : null;
       const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
       const [snapshot, availableUsdc, points] = await Promise.all([
         deps.fetchSnapshot(agentWallet),

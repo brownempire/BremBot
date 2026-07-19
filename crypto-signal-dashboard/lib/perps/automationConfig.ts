@@ -14,6 +14,7 @@ export const perpsAutomationSettingsSchema = z.object({
   stopLossPercent: z.number().finite().min(0),
   perpsLeverage: z.number().finite().min(1).max(250),
   perpsExecutionMode: z.enum(["set-parameters", "smart-trades"]),
+  decisionMode: z.enum(["shadow", "active"]).default("active"),
   smartTradeProfile: z.enum(["conservative", "balanced", "aggressive"]),
   slots: z.array(z.object({
     id: z.string().trim().min(1),

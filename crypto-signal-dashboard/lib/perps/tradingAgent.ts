@@ -5,6 +5,7 @@ import { createTradeDecisionRecord } from "@/lib/decision/engine";
 import { appendTradeDecisionRecord } from "@/lib/decision/logStore";
 import { getActiveDecisionLearningProfile } from "@/lib/decision/learningStore";
 import { getPerpsSessionConfig } from "@/lib/perps/sessionConfig";
+import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
 import { assertAgentWalletSigner } from "@/lib/perps/agentWallet";
 import { getPerpsDelegationCapability } from "@/lib/perps/delegationAdapter";
 import { resolvePerpsExecutionModel } from "@/lib/perps/executionModel";
@@ -185,22 +186,27 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     return { ok: false, code: "NO_SESSION", message: "Clock In before routing automated perps signals." } as const;
   }
 
-  const [existingExecutions, learningProfile] = await Promise.all([
+  const [existingExecutions, learningProfile, automationConfig] = await Promise.all([
     listUserPerpsExecutions(walletAddress),
     getActiveDecisionLearningProfile(walletAddress),
+    getPerpsAutomationConfig(walletAddress).catch(() => null),
   ]);
+  const shadowMode = automationConfig
+    ? automationConfig.settings.decisionMode === "shadow"
+    : decisionConfig.shadowMode;
   const decision = createTradeDecisionRecord({
     walletAddress,
     session,
     signal,
     existingExecutions,
     learningProfile,
+    shadowMode,
   });
   await appendTradeDecisionRecord(decision);
 
   const learningControlsExecution = signal.executionStyle === "smart-trades";
   const resolvedSignal =
-    learningControlsExecution && !decisionConfig.shadowMode && decisionConfig.allowExecutionOverrides
+    learningControlsExecution && !shadowMode && decisionConfig.allowExecutionOverrides
       ? {
           ...signal,
           collateralUsd: decision.recommendation.recommendedCollateralUsd,
@@ -210,7 +216,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         }
       : signal;
 
-  if (learningControlsExecution && !decisionConfig.shadowMode && !decision.recommendation.shouldTrade) {
+  if (learningControlsExecution && !shadowMode && !decision.recommendation.shouldTrade) {
     const blockedExecution: PerpsUserExecution = {
       executionId: `pexec_${crypto.randomUUID()}`,
       sessionId: session.sessionId,
