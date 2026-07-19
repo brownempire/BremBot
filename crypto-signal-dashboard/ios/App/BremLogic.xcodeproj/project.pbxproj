@@ -24,6 +24,7 @@
 		AB1000060000000000000006 /* BremLogicWatchSnapshot.swift in Widget Sources */ = {isa = PBXBuildFile; fileRef = AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */; };
 		AB1000070000000000000007 /* BremLogicWatchWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AB2000020000000000000002 /* BremLogicWatchWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		AB1000080000000000000008 /* BremLogicWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AB2000010000000000000001 /* BremLogicWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		AB1000090000000000000009 /* Assets.xcassets in Watch Resources */ = {isa = PBXBuildFile; fileRef = AB2000090000000000000009 /* Assets.xcassets */; };
 		AC1000010000000000000001 /* BremLogicMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000020000000000000002 /* BremLogicMacApp.swift */; };
 		AC1000020000000000000002 /* BremLogicMacContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000030000000000000003 /* BremLogicMacContentView.swift */; };
 		AC1000030000000000000003 /* BremLogicMacWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000040000000000000004 /* BremLogicMacWebView.swift */; };
@@ -146,6 +147,7 @@
 		AB2000060000000000000006 /* BremLogicWatchWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchWidget.swift; sourceTree = "<group>"; };
 		AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchSnapshot.swift; sourceTree = "<group>"; };
 		AB2000080000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AB2000090000000000000009 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		4D22ABEF2AF431CB00220026 /* brem_approval.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_approval.wav; sourceTree = "<group>"; };
 		4D22ABF02AF431CB00220026 /* brem_open.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = brem_open.wav; sourceTree = "<group>"; };
@@ -304,6 +306,7 @@
 			children = (
 				AB2000030000000000000003 /* BremLogicWatchApp.swift */,
 				AB2000040000000000000004 /* BremLogicWatchContentView.swift */,
+				AB2000090000000000000009 /* Assets.xcassets */,
 			);
 			path = BremLogicWatchApp;
 			sourceTree = "<group>";
@@ -563,6 +566,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB1000090000000000000009 /* Assets.xcassets in Watch Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -921,6 +925,7 @@
 		AB8000010000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
@@ -946,6 +951,7 @@
 		AB8000020000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 4;
