@@ -110,11 +110,17 @@ enum BremLogicWidgetServerError: Error {
 
 enum BremLogicWidgetServerClient {
     static func fetch() async throws -> BremLogicWidgetSnapshot {
-        var request = URLRequest(url: BremLogicWidgetServerURL)
+        var components = URLComponents(url: BremLogicWidgetServerURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "widgetRefresh", value: String(Int(Date().timeIntervalSince1970)))
+        ]
+        var request = URLRequest(url: components?.url ?? BremLogicWidgetServerURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
-        request.cachePolicy = .reloadRevalidatingCacheData
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {

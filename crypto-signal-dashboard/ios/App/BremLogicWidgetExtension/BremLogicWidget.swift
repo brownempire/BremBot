@@ -167,7 +167,7 @@ struct BremLogicWidgetEntryView: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: 96, height: 28, alignment: .leading)
+                .frame(width: widgetFamily == .systemSmall ? 66 : 96, height: 28, alignment: .leading)
         } else {
             Text("BremLogic")
                 .font(.system(size: 16, weight: .bold, design: .rounded))
@@ -180,12 +180,16 @@ struct BremLogicWidgetEntryView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: 6) {
                 brandLogo
-                Spacer()
+                    .layoutPriority(0)
+                Spacer(minLength: 4)
                 Text(updatedLabel)
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.58))
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
             }
+            .frame(maxWidth: .infinity)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Open Perps")
@@ -240,8 +244,12 @@ struct BremLogicWidgetEntryView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 12, weight: .bold, design: .rounded))
                             .foregroundStyle(brandPrimary)
+                            .frame(width: 32, height: 32)
+                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
             .padding(.top, 6)
@@ -367,10 +375,12 @@ struct BremLogicWidgetEntryView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(brandPrimary)
-                            .frame(width: 28, height: 42)
+                            .frame(width: 36, height: 42)
                             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
             .padding(.top, 8)
@@ -478,8 +488,10 @@ struct BremLogicWidgetEntryView: View {
                             .foregroundStyle(brandPrimary)
                             .frame(width: 34, height: 42)
                             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
             .padding(.top, 8)
@@ -583,8 +595,11 @@ struct BremLogicLockScreenWidgetEntryView: View {
                     Button(intent: BremLogicWidgetRefreshIntent()) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 10, weight: .bold))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
 

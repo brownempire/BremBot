@@ -54,8 +54,15 @@ struct BremLogicWatchWidgetView: View {
         switch family {
         case .accessoryCircular:
             VStack(spacing: 0) {
-                Text(market).font(.system(size: 9, weight: .bold, design: .rounded))
-                Text(pnl).font(.system(size: 12, weight: .bold, design: .rounded)).foregroundStyle(pnlColor)
+                Text(market)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                Text(pnl)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(pnlColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
             }
         case .accessoryCorner:
             Text(pnl)
@@ -69,10 +76,14 @@ struct BremLogicWatchWidgetView: View {
                 HStack {
                     Text("BREMLOGIC")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                     Spacer()
                     Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
                         .font(.system(size: 8, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 Text(entry.snapshot.hasOpenPerp ? (entry.snapshot.openPerpLabel ?? market) : "No open perps")
                     .font(.system(size: 13, weight: .bold, design: .rounded))
@@ -81,6 +92,8 @@ struct BremLogicWatchWidgetView: View {
                     Text("P/L \(pnl)").foregroundStyle(pnlColor)
                     Spacer()
                     Text(bremLogicWalletUsd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
                 }
                 .font(.system(size: 10, weight: .bold, design: .rounded))
             }

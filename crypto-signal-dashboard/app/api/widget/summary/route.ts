@@ -3,7 +3,8 @@ import { loadWidgetServerSnapshot } from "@/lib/widget/serverSnapshot";
 export const dynamic = "force-dynamic";
 
 const responseHeaders = {
-  "Cache-Control": "public, max-age=15, s-maxage=20, stale-while-revalidate=60",
+  "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+  "CDN-Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
 };
 

@@ -35,11 +35,17 @@ struct BremLogicWatchSnapshot: Codable {
 
 enum BremLogicWatchServerClient {
     static func fetch() async throws -> BremLogicWatchSnapshot {
-        var request = URLRequest(url: BremLogicWatchServerURL)
+        var components = URLComponents(url: BremLogicWatchServerURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "widgetRefresh", value: String(Int(Date().timeIntervalSince1970)))
+        ]
+        var request = URLRequest(url: components?.url ?? BremLogicWatchServerURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
-        request.cachePolicy = .reloadRevalidatingCacheData
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {

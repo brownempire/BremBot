@@ -1,4 +1,5 @@
 import AppIntents
+import Foundation
 import WidgetKit
 
 struct BremLogicMacWidgetRefreshIntent: AppIntent {
@@ -7,7 +8,11 @@ struct BremLogicMacWidgetRefreshIntent: AppIntent {
     static var openAppWhenRun = false
 
     func perform() async throws -> some IntentResult {
-        WidgetCenter.shared.reloadAllTimelines()
+        URLCache.shared.removeAllCachedResponses()
+        if let snapshot = try? await BremLogicWidgetServerClient.fetch() {
+            try? BremLogicWidgetStore.save(snapshot)
+        }
+        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicMacWidget")
         return .result()
     }
 }

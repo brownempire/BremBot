@@ -110,7 +110,7 @@ struct BremLogicMacWidgetEntryView: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: family == .systemSmall ? 92 : 112, height: 30, alignment: .leading)
+                .frame(width: family == .systemSmall ? 66 : family == .systemMedium ? 92 : 112, height: 30, alignment: .leading)
         } else {
             Text("BremLogic")
                 .font(.system(size: 17, weight: .bold, design: .rounded))
@@ -143,16 +143,23 @@ struct BremLogicMacWidgetEntryView: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             logo
-            Spacer()
+                .layoutPriority(0)
+            Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? mint : .white.opacity(0.65))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
                 Text("Updated \(updatedLabel)")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
+            .layoutPriority(2)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private var compactContent: some View {
@@ -248,8 +255,9 @@ struct BremLogicMacWidgetEntryView: View {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(mint)
-                .frame(width: 34, height: 42)
+                .frame(width: 40, height: 42)
                 .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Refresh BremLogic widget")
