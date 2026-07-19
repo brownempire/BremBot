@@ -1563,7 +1563,7 @@ function DashboardPage() {
         cache: "no-store",
         headers: { Authorization: `Bearer ${remoteAuthToken}` },
       }),
-      fetch("/api/perps/executions?limit=20", {
+      fetch("/api/perps/executions?limit=50", {
         cache: "no-store",
         headers: { Authorization: `Bearer ${remoteAuthToken}` },
       }),
@@ -1593,6 +1593,16 @@ function DashboardPage() {
       executions: executionsResponse.ok ? executionPayload?.executions ?? [] : [],
     };
   }, [jupiterPerpsController?.walletAddress, remoteAuthToken, remoteSyncWalletAddress, walletAddress]);
+
+  const refreshPerpsExecutionFeed = useCallback(async () => {
+    if (!remoteAuthToken) return;
+    const response = await fetch("/api/perps/executions?limit=50", {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${remoteAuthToken}` },
+    });
+    const payload = await response.json().catch(() => null) as { executions?: PerpsExecutionSummary[] } | null;
+    if (response.ok && Array.isArray(payload?.executions)) setPerpsAgentExecutions(payload.executions);
+  }, [remoteAuthToken]);
 
   const clearPerpsAgentExecutions = useCallback(async () => {
     if (!remoteAuthToken) {
@@ -2236,6 +2246,17 @@ function DashboardPage() {
   useEffect(() => {
     void refreshPerpsAgentState().catch(() => undefined);
   }, [refreshPerpsAgentState]);
+
+  useEffect(() => {
+    if (!remoteAuthToken) return;
+    let refreshing = false;
+    const intervalId = window.setInterval(() => {
+      if (refreshing || document.visibilityState !== "visible") return;
+      refreshing = true;
+      void refreshPerpsExecutionFeed().finally(() => { refreshing = false; });
+    }, 20_000);
+    return () => window.clearInterval(intervalId);
+  }, [refreshPerpsExecutionFeed, remoteAuthToken]);
 
   useEffect(() => {
     if (!perpsAgentSession || perpsAgentSession.sessionState !== "clocked_in") return;
@@ -5869,10 +5890,11 @@ function DashboardPage() {
             }}>
               {decisionLogEntries.length > 0 ? decisionLogEntries.map((entry) => {
                 const execution = decisionExecutionsById.get(entry.payload.decisionId);
-                const wasTaken = execution ? ["submitted", "confirmed", "paper_executed"].includes(execution.status) : false;
+                const wasTaken = execution ? ["submitted", "confirmed", "closed", "paper_executed"].includes(execution.status) : false;
                 const wasAttempted = execution?.status === "failed";
                 const outcomeLabel = wasTaken
-                  ? (!entry.recommendation.shouldTrade && entry.recommendation.shadowMode ? "TAKEN · PARAMETER OVERRIDE" : "TAKEN")
+                  ? execution?.status === "closed" ? "TAKEN · CLOSED"
+                    : (!entry.recommendation.shouldTrade && entry.recommendation.shadowMode ? "TAKEN · PARAMETER OVERRIDE" : "TAKEN")
                   : wasAttempted ? "ATTEMPT FAILED"
                     : execution?.status === "approval_required" ? "AWAITING APPROVAL"
                       : "SKIPPED";

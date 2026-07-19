@@ -21,6 +21,16 @@ type PerpsExecutionFeedProps = {
 
 const VISIBLE_EXECUTION_COUNT = 5;
 
+function executionStatusLabel(status: string) {
+  if (status === "submitted") return "Taken · Submitted";
+  if (status === "confirmed") return "Taken · Confirmed";
+  if (status === "closed") return "Taken · Closed";
+  if (status === "paper_executed") return "Taken · Paper";
+  if (status === "blocked") return "Skipped";
+  if (status === "approval_required") return "Awaiting approval";
+  return status.replace(/_/g, " ");
+}
+
 export function PerpsExecutionFeed({ executions, onClear }: PerpsExecutionFeedProps) {
   const feedRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
@@ -98,7 +108,7 @@ export function PerpsExecutionFeed({ executions, onClear }: PerpsExecutionFeedPr
                 <div className="subtext">{execution.reasonMessage}</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <div>{execution.mode === "live" ? "Live" : "Paper"} · {execution.status}</div>
+                <div>{execution.mode === "live" ? "Live" : "Paper"} · {executionStatusLabel(execution.status)}</div>
                 <div className="subtext">{new Date(execution.createdAt).toLocaleTimeString()}</div>
                 {execution.txid ? <div className="subtext">{execution.txid.slice(0, 12)}...</div> : null}
               </div>

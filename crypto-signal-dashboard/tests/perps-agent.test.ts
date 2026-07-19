@@ -356,6 +356,106 @@ test("durable execution history is not truncated at the former 100-record displa
   assert.equal((await auditStore.listUserPerpsExecutions(wallet)).length, 105);
 });
 
+test("completed on-chain executions remain visible as successful closed trades", async () => {
+  const wallet = "TestWalletClosed444444444444444444444444444";
+  const oldTimestamp = new Date(Date.now() - 5 * 60_000).toISOString();
+  await auditStore.createUserPerpsExecution({
+    executionId: "closed-success",
+    sessionId: "session-closed",
+    walletAddress: wallet,
+    signalId: "signal-closed",
+    symbol: "SOL/USD",
+    summary: "Successful live trade",
+    side: "long",
+    asset: "SOL",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "submitted",
+    reasonCode: "APPROVED",
+    reasonMessage: "Submitted successfully.",
+    collateralUsd: 10,
+    sizeUsd: 50,
+    leverage: 5,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    txid: "successful-tx",
+    positionPubkey: "successful-position",
+    createdAt: oldTimestamp,
+    updatedAt: oldTimestamp,
+  });
+
+  await auditStore.reconcileUserExecutionsWithoutOpenPosition(wallet);
+  const [execution] = await auditStore.listVisibleUserPerpsExecutions(wallet);
+  assert.equal(execution?.status, "closed");
+  assert.equal(execution?.txid, "successful-tx");
+  assert.match(execution?.reasonMessage ?? "", /Trade completed/);
+});
+
+test("legacy POSITION_CLOSED cancellations with transaction evidence are restored as closed trades", async () => {
+  const wallet = "TestWalletLegacyClosed5555555555555555555555555";
+  const timestamp = new Date(Date.now() - 5 * 60_000).toISOString();
+  await auditStore.createUserPerpsExecution({
+    executionId: "legacy-closed",
+    sessionId: "session-legacy",
+    walletAddress: wallet,
+    signalId: "signal-legacy",
+    symbol: "BTC/USD",
+    summary: "Legacy successful trade",
+    side: "short",
+    asset: "BTC",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "cancelled",
+    reasonCode: "POSITION_CLOSED",
+    reasonMessage: "No matching open agent position remains on Jupiter Perps.",
+    collateralUsd: 10,
+    sizeUsd: 30,
+    leverage: 3,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    txid: "legacy-successful-tx",
+    positionPubkey: "legacy-position",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  const [execution] = await auditStore.listUserPerpsExecutions(wallet);
+  assert.equal(execution?.status, "closed");
+});
+
+test("recent submissions receive a reconciliation grace window", async () => {
+  const wallet = "TestWalletGrace666666666666666666666666666";
+  const timestamp = new Date().toISOString();
+  await auditStore.createUserPerpsExecution({
+    executionId: "recent-submission",
+    sessionId: "session-recent",
+    walletAddress: wallet,
+    signalId: "signal-recent",
+    symbol: "ETH/USD",
+    summary: "Recent live trade",
+    side: "long",
+    asset: "ETH",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "submitted",
+    reasonCode: "APPROVED",
+    reasonMessage: "Submitted successfully.",
+    collateralUsd: 10,
+    sizeUsd: 20,
+    leverage: 2,
+    takeProfitPrice: null,
+    stopLossPrice: null,
+    txid: "recent-tx",
+    positionPubkey: "recent-position",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  await auditStore.reconcileUserExecutionsWithoutOpenPosition(wallet);
+  const [execution] = await auditStore.listUserPerpsExecutions(wallet);
+  assert.equal(execution?.status, "submitted");
+});
+
 test("duplicate signals are blocked within the same user scope", async () => {
   const wallet = "TestWallet4444444444444444444444444444444444";
   await tradingAgent.clockInPerpsSession(wallet, {

@@ -152,7 +152,19 @@ async function writeRedisRecords(records: PerpsUserExecution[]) {
 
 export async function listUserPerpsExecutions(walletAddress: string) {
   const store = await readStore();
-  return (store[walletAddress] ?? []).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return (store[walletAddress] ?? [])
+    .map((entry) => (
+      entry.status === "cancelled"
+      && entry.reasonCode === "POSITION_CLOSED"
+      && Boolean(entry.txid || entry.positionPubkey)
+        ? perpsUserExecutionSchema.parse({
+            ...entry,
+            status: "closed",
+            reasonMessage: "Trade completed and no matching open position remains on Jupiter Perps.",
+          })
+        : entry
+    ))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 }
 
 export async function listVisibleUserPerpsExecutions(walletAddress: string) {
@@ -217,14 +229,19 @@ export async function reconcileUserExecutionsWithoutOpenPosition(walletAddress: 
   const current = store[walletAddress] ?? [];
   let changed = false;
   const now = new Date().toISOString();
+  const nowMs = Date.parse(now);
   const next = current.map((entry) => {
     if (!["prepared", "submitted", "confirmed"].includes(entry.status)) return entry;
+    if (nowMs - Date.parse(entry.updatedAt) < 2 * 60_000) return entry;
     changed = true;
+    const completed = entry.status === "confirmed" || Boolean(entry.txid || entry.positionPubkey);
     return perpsUserExecutionSchema.parse({
       ...entry,
-      status: "cancelled",
+      status: completed ? "closed" : "cancelled",
       reasonCode: "POSITION_CLOSED",
-      reasonMessage: "No matching open agent position remains on Jupiter Perps.",
+      reasonMessage: completed
+        ? "Trade completed and no matching open position remains on Jupiter Perps."
+        : "The prepared order expired without a matching Jupiter Perps position.",
       updatedAt: now,
     });
   });

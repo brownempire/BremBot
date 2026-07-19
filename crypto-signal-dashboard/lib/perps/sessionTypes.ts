@@ -75,7 +75,7 @@ export const perpsAgentSignalSchema = z.object({
 
 export const perpsExecutionAckSchema = z.object({
   executionId: z.string().trim().min(1),
-  status: z.enum(["approval_required", "submitted", "confirmed", "failed", "paper_executed", "blocked", "cancelled"]),
+  status: z.enum(["approval_required", "submitted", "confirmed", "closed", "failed", "paper_executed", "blocked", "cancelled"]),
   txid: z.string().trim().nullable().optional(),
   errorMessage: z.string().trim().nullable().optional(),
   positionPubkey: z.string().trim().nullable().optional(),
@@ -113,7 +113,7 @@ export const perpsUserExecutionSchema = z.object({
   asset: z.enum(["SOL", "ETH", "BTC"]),
   mode: perpsSessionModeSchema,
   executionModel: perpsExecutionModelSchema,
-  status: z.enum(["prepared", "approval_required", "submitted", "confirmed", "failed", "paper_executed", "blocked", "cancelled"]),
+  status: z.enum(["prepared", "approval_required", "submitted", "confirmed", "closed", "failed", "paper_executed", "blocked", "cancelled"]),
   reasonCode: z.string(),
   reasonMessage: z.string(),
   collateralUsd: z.number().finite().positive(),

@@ -119,7 +119,7 @@ export function buildTradeDecisionPayload(input: {
       recentExecutionCount: recentExecutions.length,
       approvalRequiredCount: countByStatus("approval_required"),
       submittedCount: countByStatus("submitted"),
-      confirmedCount: countByStatus("confirmed"),
+      confirmedCount: countByStatus("confirmed") + countByStatus("closed"),
       paperExecutedCount: countByStatus("paper_executed"),
       blockedCount,
       failedCount,
