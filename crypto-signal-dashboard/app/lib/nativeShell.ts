@@ -61,6 +61,14 @@ export function isNativeIosRuntime() {
   return isNativeShellRuntime() && /iPhone|iPad|iPod/i.test(window.navigator.userAgent || "");
 }
 
+export function isNativeMacRuntime() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return /BremLogicMac\//i.test(window.navigator.userAgent || "");
+}
+
 export function isStandalonePwaRuntime() {
   if (typeof window === "undefined") {
     return false;

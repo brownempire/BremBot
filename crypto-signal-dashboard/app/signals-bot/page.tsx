@@ -11,7 +11,7 @@ import dynamic from "next/dynamic";
 import bs58 from "bs58";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
-import { isNativeIosRuntime, isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
+import { isNativeIosRuntime, isNativeMacRuntime, isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
 import { syncWidgetSnapshot } from "@/app/lib/widgetSync";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -1118,6 +1118,7 @@ function DashboardPage() {
   const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: 0, v: 0 }]);
   const [renderNow, setRenderNow] = useState(0);
   const [nativeShell, setNativeShell] = useState(false);
+  const [nativeMacShell, setNativeMacShell] = useState(false);
   const [standalonePwa, setStandalonePwa] = useState(false);
   const [localAutomationSettingsLoaded, setLocalAutomationSettingsLoaded] = useState(false);
   const [automationConfigSync, setAutomationConfigSync] = useState<AutomationConfigSyncState>({
@@ -1179,6 +1180,7 @@ function DashboardPage() {
   const latestSignal = signals[0] ?? null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
   const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
+  const nativeWalletShell = nativeShell || nativeMacShell;
   const remoteSyncWalletAddress =
     remoteAuthSource === "phantom"
       ? phantomAuthAddress ?? remoteAuthAddress
@@ -1224,13 +1226,13 @@ function DashboardPage() {
     perpsAgentSession?.walletProvider
       ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
   const activeWalletProviderLabel =
-    nativeShell && jupiterPerpsController?.connected
-      ? "Jupiter Mobile"
+    nativeWalletShell && jupiterPerpsController?.connected
+      ? "WalletConnect"
       : wallet.connected
         ? "In-app wallet"
         : "Disconnected";
   const activeWalletAddress =
-    (nativeShell ? jupiterPerpsController?.walletAddress : null) ?? wallet.publicKey?.toBase58() ?? null;
+    (nativeWalletShell ? jupiterPerpsController?.walletAddress : null) ?? wallet.publicKey?.toBase58() ?? null;
   const perpsLogWalletAddress =
     jupiterPerpsController?.walletAddress
     ?? wallet.publicKey?.toBase58()
@@ -1258,10 +1260,10 @@ function DashboardPage() {
       : "Live Perps automation is restricted to approved wallets only. This wallet can still use paper mode, spot auto-trade, and manual Perps."
     : "Paper automation simulates Perps decisions for your connected wallet session without moving funds.";
   const manualSwapPassthroughWalletContextState = useMemo<Record<string, unknown>>(() => {
-    if (nativeShell && jupiterPerpsController?.connected && jupiterPerpsController.walletAddress) {
+    if (nativeWalletShell && jupiterPerpsController?.connected && jupiterPerpsController.walletAddress) {
       const publicKey = new PublicKey(jupiterPerpsController.walletAddress);
       const adapter = {
-        name: "Jupiter Mobile",
+        name: "WalletConnect",
         url: "https://jup.ag",
         icon: "",
         publicKey,
@@ -1324,11 +1326,12 @@ function DashboardPage() {
     }
 
     return wallet.passthroughWalletContextState;
-  }, [jupiterPerpsController, nativeShell, wallet.passthroughWalletContextState]);
+  }, [jupiterPerpsController, nativeWalletShell, wallet.passthroughWalletContextState]);
 
   useEffect(() => {
     setRenderNow(Date.now());
     setNativeShell(isNativeShellApp());
+    setNativeMacShell(isNativeMacRuntime());
     setStandalonePwa(isStandalonePwaRuntime());
   }, []);
 
@@ -5276,7 +5279,7 @@ function DashboardPage() {
               integratedTargetId="bremlogic-manual-swap-widget"
               passthroughWalletContextState={manualSwapPassthroughWalletContextState}
               onRequestConnectWallet={
-                nativeShell
+                nativeWalletShell
                   ? jupiterPerpsController?.connect
                   : wallet.hasWallet && !wallet.connected
                     ? loginInAppWallet

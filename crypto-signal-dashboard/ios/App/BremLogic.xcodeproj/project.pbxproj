@@ -28,6 +28,12 @@
 		AC1000020000000000000002 /* BremLogicMacContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000030000000000000003 /* BremLogicMacContentView.swift */; };
 		AC1000030000000000000003 /* BremLogicMacWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000040000000000000004 /* BremLogicMacWebView.swift */; };
 		AC1000040000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AC2000060000000000000006 /* Assets.xcassets */; };
+		AD1000010000000000000001 /* BremLogicMacWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000020000000000000002 /* BremLogicMacWidget.swift */; };
+		AD1000020000000000000002 /* BremLogicMacWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000030000000000000003 /* BremLogicMacWidgetBundle.swift */; };
+		AD1000030000000000000003 /* BremLogicWidgetShared.swift in Mac Widget Sources */ = {isa = PBXBuildFile; fileRef = AA2000030000000000000003 /* BremLogicWidgetShared.swift */; };
+		AD1000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift */; };
+		AD1000050000000000000005 /* BremLogicLogo.png in Mac Widget Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
+		AD1000060000000000000006 /* BremLogicMacWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AD2000010000000000000001 /* BremLogicMacWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		4D22ABEA2AF431CB00220026 /* brem_approval.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4D22ABEF2AF431CB00220026 /* brem_approval.wav */; };
@@ -65,6 +71,13 @@
 			remoteGlobalIDString = AB5000020000000000000002;
 			remoteInfo = BremLogicWatchWidgetExtension;
 		};
+		AD7000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AD5000010000000000000001;
+			remoteInfo = BremLogicMacWidgetExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -99,6 +112,17 @@
 				AB1000080000000000000008 /* BremLogicWatch.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD3000040000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AD1000060000000000000006 /* BremLogicMacWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -138,6 +162,12 @@
 		AC2000040000000000000004 /* BremLogicMacWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWebView.swift; sourceTree = "<group>"; };
 		AC2000050000000000000005 /* BremLogicMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BremLogicMac.entitlements; sourceTree = "<group>"; };
 		AC2000060000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AD2000010000000000000001 /* BremLogicMacWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BremLogicMacWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AD2000020000000000000002 /* BremLogicMacWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidget.swift; sourceTree = "<group>"; };
+		AD2000030000000000000003 /* BremLogicMacWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidgetBundle.swift; sourceTree = "<group>"; };
+		AD2000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidgetRefreshIntent.swift; sourceTree = "<group>"; };
+		AD2000050000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AD2000060000000000000006 /* BremLogicMacWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BremLogicMacWidget.entitlements; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -184,6 +214,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AD3000020000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -199,6 +236,7 @@
 				AB4000020000000000000002 /* BremLogicWatchWidgetExtension */,
 				AB4000030000000000000003 /* BremLogicWatchShared */,
 				AC4000010000000000000001 /* BremLogicMacApp */,
+				AD4000010000000000000001 /* BremLogicMacWidgetExtension */,
 				504EC3051FED79650016851F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -211,6 +249,7 @@
 				AB2000010000000000000001 /* BremLogicWatch.app */,
 				AB2000020000000000000002 /* BremLogicWatchWidget.appex */,
 				AC2000010000000000000001 /* BremLogicMac.app */,
+				AD2000010000000000000001 /* BremLogicMacWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -297,6 +336,18 @@
 				AC2000060000000000000006 /* Assets.xcassets */,
 			);
 			path = BremLogicMacApp;
+			sourceTree = "<group>";
+		};
+		AD4000010000000000000001 /* BremLogicMacWidgetExtension */ = {
+			isa = PBXGroup;
+			children = (
+				AD2000020000000000000002 /* BremLogicMacWidget.swift */,
+				AD2000030000000000000003 /* BremLogicMacWidgetBundle.swift */,
+				AD2000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift */,
+				AD2000060000000000000006 /* BremLogicMacWidget.entitlements */,
+				AD2000050000000000000005 /* Info.plist */,
+			);
+			path = BremLogicMacWidgetExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -392,10 +443,12 @@
 				AC3000010000000000000001 /* Sources */,
 				AC3000020000000000000002 /* Frameworks */,
 				AC3000030000000000000003 /* Resources */,
+				AD3000040000000000000004 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				AD6000010000000000000001 /* PBXTargetDependency */,
 			);
 			name = BremLogicMac;
 			packageProductDependencies = (
@@ -403,6 +456,25 @@
 			productName = BremLogicMac;
 			productReference = AC2000010000000000000001 /* BremLogicMac.app */;
 			productType = "com.apple.product-type.application";
+		};
+		AD5000010000000000000001 /* BremLogicMacWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AD9000010000000000000001 /* Build configuration list for PBXNativeTarget "BremLogicMacWidgetExtension" */;
+			buildPhases = (
+				AD3000010000000000000001 /* Sources */,
+				AD3000020000000000000002 /* Frameworks */,
+				AD3000030000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = BremLogicMacWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = BremLogicMacWidgetExtension;
+			productReference = AD2000010000000000000001 /* BremLogicMacWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -429,6 +501,9 @@
 					AC5000010000000000000001 = {
 						CreatedOnToolsVersion = 26.0;
 					};
+					AD5000010000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
 				};
 			};
 			buildConfigurationList = 504EC2FF1FED79650016851F /* Build configuration list for PBXProject "BremLogic" */;
@@ -452,6 +527,7 @@
 				AB5000010000000000000001 /* BremLogicWatch */,
 				AB5000020000000000000002 /* BremLogicWatchWidgetExtension */,
 				AC5000010000000000000001 /* BremLogicMac */,
+				AD5000010000000000000001 /* BremLogicMacWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -502,6 +578,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				AC1000040000000000000004 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AD3000030000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AD1000050000000000000005 /* BremLogicLogo.png in Mac Widget Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -560,6 +644,17 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AD3000010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AD1000010000000000000001 /* BremLogicMacWidget.swift in Sources */,
+				AD1000020000000000000002 /* BremLogicMacWidgetBundle.swift in Sources */,
+				AD1000030000000000000003 /* BremLogicWidgetShared.swift in Mac Widget Sources */,
+				AD1000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -577,6 +672,11 @@
 			isa = PBXTargetDependency;
 			target = AB5000020000000000000002 /* BremLogicWatchWidgetExtension */;
 			targetProxy = AB7000020000000000000002 /* PBXContainerItemProxy */;
+		};
+		AD6000010000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AD5000010000000000000001 /* BremLogicMacWidgetExtension */;
+			targetProxy = AD7000010000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -978,6 +1078,60 @@
 			};
 			name = Release;
 		};
+		AD8000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget;
+				PRODUCT_NAME = BremLogicMacWidget;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AD8000020000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3T59LS48LZ;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget;
+				PRODUCT_NAME = BremLogicMacWidget;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1031,6 +1185,15 @@
 			buildConfigurations = (
 				AC8000010000000000000001 /* Debug */,
 				AC8000020000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AD9000010000000000000001 /* Build configuration list for PBXNativeTarget "BremLogicMacWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AD8000010000000000000001 /* Debug */,
+				AD8000020000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

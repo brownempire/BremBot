@@ -1,6 +1,7 @@
 "use client";
 
 import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
 import { WalletConnectWalletAdapter } from "@solana/wallet-adapter-walletconnect";
@@ -20,21 +21,20 @@ type NativeJupiterWalletState = {
 
 const PENDING_CONNECT_STORAGE_KEY = "bremlogic.native.jupiter.pending-connect.v1";
 const CONNECTED_SESSION_HINT_STORAGE_KEY = "bremlogic.native.jupiter.connected.v1";
-const CONNECT_STARTED_MESSAGE = "Opening Jupiter Mobile...";
 const CONNECT_RESUME_MESSAGE = "Return to BremLogic after approval so the wallet session can finish attaching here.";
-const CONNECT_TIMEOUT_MESSAGE = "Jupiter Mobile connection timed out after 20 seconds. Reopen Jupiter Mobile and try again.";
-const SIGN_TIMEOUT_MESSAGE = "Jupiter Mobile approval timed out after 20 seconds. Retry the request if you still want to continue.";
+const CONNECT_TIMEOUT_MESSAGE = "Wallet connection timed out. Reopen your wallet and try again.";
+const SIGN_TIMEOUT_MESSAGE = "Wallet approval timed out after 20 seconds. Retry the request if you still want to continue.";
 const STALE_PENDING_MS = 20 * 1000;
 const SIGN_TIMEOUT_MS = 20 * 1000;
 
 function getFriendlyErrorMessage(error: unknown) {
   if (error instanceof Error) {
     if (/window closed/i.test(error.message)) {
-      return "Jupiter Mobile connection was closed before approval finished.";
+      return "Wallet connection was closed before approval finished.";
     }
 
     if (/not ready/i.test(error.message)) {
-      return "Jupiter Mobile is not ready in this session yet. Close the wallet picker and try again.";
+      return "The wallet is not ready in this session yet. Close the wallet picker and try again.";
     }
 
     if (error.message.trim()) {
@@ -42,10 +42,10 @@ function getFriendlyErrorMessage(error: unknown) {
     }
   }
 
-  return "Jupiter Mobile connection was not completed.";
+  return "Wallet connection was not completed.";
 }
 
-function loadPendingConnectTimestamp() {
+function loadPendingConnectTimestamp(stalePendingMs = STALE_PENDING_MS) {
   if (typeof window === "undefined") return null;
 
   const rawValue = window.localStorage.getItem(PENDING_CONNECT_STORAGE_KEY);
@@ -57,7 +57,7 @@ function loadPendingConnectTimestamp() {
     return null;
   }
 
-  if (Date.now() - timestamp > STALE_PENDING_MS) {
+  if (Date.now() - timestamp > stalePendingMs) {
     window.localStorage.removeItem(PENDING_CONNECT_STORAGE_KEY);
     return null;
   }
@@ -90,7 +90,11 @@ function clearConnectedSessionHint() {
   window.localStorage.removeItem(CONNECTED_SESSION_HINT_STORAGE_KEY);
 }
 
-export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: string): NativeJupiterWalletState {
+export function useNativeJupiterWalletConnect(
+  enabled: boolean,
+  reownProjectId: string,
+  config?: { desktop?: boolean }
+): NativeJupiterWalletState {
   const adapterRef = useRef<WalletConnectWalletAdapter | null>(null);
   const connectPromiseRef = useRef<Promise<void> | null>(null);
   const pendingTimeoutRef = useRef<number | null>(null);
@@ -128,7 +132,8 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
   const schedulePendingTimeout = useCallback((timestamp: number) => {
     clearPendingTimeout();
 
-    const remainingMs = STALE_PENDING_MS - (Date.now() - timestamp);
+    const timeoutMs = config?.desktop ? 120 * 1000 : STALE_PENDING_MS;
+    const remainingMs = timeoutMs - (Date.now() - timestamp);
     if (remainingMs <= 0) {
       expirePendingConnect();
       return;
@@ -137,7 +142,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     pendingTimeoutRef.current = window.setTimeout(() => {
       expirePendingConnect();
     }, remainingMs);
-  }, [clearPendingTimeout, expirePendingConnect]);
+  }, [clearPendingTimeout, config?.desktop, expirePendingConnect]);
 
   const ensureAdapter = useCallback(() => {
     if (!enabled || !reownProjectId.trim()) return null;
@@ -191,7 +196,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
 
     if (setPendingState) {
       setIsConnecting(true);
-      setFeedback(CONNECT_STARTED_MESSAGE);
+      setFeedback(config?.desktop ? "Opening WalletConnect..." : "Opening Jupiter Mobile...");
       savePendingConnectTimestamp();
       schedulePendingTimeout(Date.now());
     } else if (isAutoReconnect) {
@@ -221,12 +226,12 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
 
     connectPromiseRef.current = connectPromise;
     await connectPromise;
-  }, [expirePendingConnect, schedulePendingTimeout, syncStateFromAdapter]);
+  }, [config?.desktop, expirePendingConnect, schedulePendingTimeout, syncStateFromAdapter]);
 
   const connect = useCallback(async () => {
     const nextAdapter = ensureAdapter();
     if (!nextAdapter) {
-      setFeedback("Jupiter Mobile adapter is not configured for the native app yet. Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable the native iOS flow.");
+      setFeedback("WalletConnect is not configured for this app yet. Add NEXT_PUBLIC_REOWN_PROJECT_ID to enable wallet connections.");
       return;
     }
 
@@ -269,11 +274,11 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
   const signTransaction = useCallback(async (transaction: VersionedTransaction) => {
     const adapter = adapterRef.current;
     if (!adapter || !adapter.connected || !adapter.publicKey) {
-      throw new Error("Jupiter Mobile is not connected.");
+      throw new Error("WalletConnect is not connected.");
     }
 
     if (typeof adapter.signTransaction !== "function") {
-      throw new Error("The connected Jupiter Mobile session does not expose transaction signing.");
+      throw new Error("The connected wallet session does not expose transaction signing.");
     }
 
     let timeoutId = 0;
@@ -313,7 +318,8 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
     const adapter = ensureAdapter();
     syncStateFromAdapter();
 
-    const pendingConnectTimestamp = loadPendingConnectTimestamp();
+    const stalePendingMs = config?.desktop ? 120 * 1000 : STALE_PENDING_MS;
+    const pendingConnectTimestamp = loadPendingConnectTimestamp(stalePendingMs);
     const hasConnectedSessionHint = loadConnectedSessionHint();
     if (pendingConnectTimestamp) {
       setFeedback(CONNECT_RESUME_MESSAGE);
@@ -348,40 +354,45 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
       adapter.on("disconnect", handleDisconnect);
       adapter.on("error", handleError);
 
-      const resumeHandle = await App.addListener("resume", () => {
-        if (cancelled) return;
-        syncStateFromAdapter();
+      let resumeHandle: Awaited<ReturnType<typeof App.addListener>> | undefined;
+      let appUrlOpenHandle: Awaited<ReturnType<typeof App.addListener>> | undefined;
 
-        const pendingTimestamp = loadPendingConnectTimestamp();
-        if (pendingTimestamp && !adapterRef.current?.publicKey) {
-          setFeedback(CONNECT_RESUME_MESSAGE);
-          setIsConnecting(true);
-          schedulePendingTimeout(pendingTimestamp);
-        } else if (!pendingTimestamp) {
-          clearPendingTimeout();
-          setIsConnecting(false);
-        }
-      });
+      if (Capacitor.isNativePlatform()) {
+        resumeHandle = await App.addListener("resume", () => {
+          if (cancelled) return;
+          syncStateFromAdapter();
 
-      const appUrlOpenHandle = await App.addListener("appUrlOpen", () => {
-        if (cancelled) return;
-        syncStateFromAdapter();
+          const pendingTimestamp = loadPendingConnectTimestamp(stalePendingMs);
+          if (pendingTimestamp && !adapterRef.current?.publicKey) {
+            setFeedback(CONNECT_RESUME_MESSAGE);
+            setIsConnecting(true);
+            schedulePendingTimeout(pendingTimestamp);
+          } else if (!pendingTimestamp) {
+            clearPendingTimeout();
+            setIsConnecting(false);
+          }
+        });
 
-        const pendingTimestamp = loadPendingConnectTimestamp();
-        if (pendingTimestamp && !adapterRef.current?.publicKey && !connectPromiseRef.current) {
-          void connectWithAdapter(adapter, {
-            isAutoReconnect: true,
-            setPendingState: false,
-          }).catch(() => undefined);
-        }
-      });
+        appUrlOpenHandle = await App.addListener("appUrlOpen", () => {
+          if (cancelled) return;
+          syncStateFromAdapter();
+
+          const pendingTimestamp = loadPendingConnectTimestamp(stalePendingMs);
+          if (pendingTimestamp && !adapterRef.current?.publicKey && !connectPromiseRef.current) {
+            void connectWithAdapter(adapter, {
+              isAutoReconnect: true,
+              setPendingState: false,
+            }).catch(() => undefined);
+          }
+        });
+      }
 
       removeResumeListener = () => {
         adapter.off("connect", handleConnect);
         adapter.off("disconnect", handleDisconnect);
         adapter.off("error", handleError);
-        void resumeHandle.remove();
-        void appUrlOpenHandle.remove();
+        void resumeHandle?.remove();
+        void appUrlOpenHandle?.remove();
       };
     }
 
@@ -400,7 +411,7 @@ export function useNativeJupiterWalletConnect(enabled: boolean, reownProjectId: 
       clearPendingTimeout();
       removeResumeListener?.();
     };
-  }, [clearPendingTimeout, connectWithAdapter, enabled, ensureAdapter, resetAdapter, schedulePendingTimeout, syncStateFromAdapter]);
+  }, [clearPendingTimeout, config?.desktop, connectWithAdapter, enabled, ensureAdapter, resetAdapter, schedulePendingTimeout, syncStateFromAdapter]);
 
   return {
     walletAddress,
