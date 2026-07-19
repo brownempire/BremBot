@@ -519,6 +519,8 @@ struct BremLogicWidget: Widget {
         .configurationDisplayName("BremLogic Signals")
         .description("Shows the latest BremLogic Perps position and wallet summary.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
+        // CarPlay and StandBy require the systemSmall background to be removable.
+        .containerBackgroundRemovable(true)
     }
 }
 

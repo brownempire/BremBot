@@ -774,7 +774,7 @@
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -802,7 +802,7 @@
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicWidgetExtension/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
