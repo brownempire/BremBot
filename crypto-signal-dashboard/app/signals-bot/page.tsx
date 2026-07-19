@@ -26,6 +26,7 @@ import type {
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaseline";
 import { calculatePnlSince } from "@/lib/perps/pnl";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -94,10 +95,7 @@ const JupiterPerpsPositionWidget = dynamic(
 );
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 15,
-  trendThreshold: 0.36,
-  breakoutPercent: 0.3,
-  cooldownSeconds: 180,
+  ...OPERATOR_TRAINING_BASELINE.signalParams,
 };
 
 type SignalsAppTab = "signals" | "perps" | "simulator" | "wallet";
@@ -159,14 +157,14 @@ type AutomationConfigSyncState = {
 };
 
 const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
-  walletPercent: 80,
+  walletPercent: OPERATOR_TRAINING_BASELINE.maximumAllocationPercent,
   walletAllocationMode: "percent",
-  perpsTakeProfitValue: 4,
+  perpsTakeProfitValue: OPERATOR_TRAINING_BASELINE.takeProfitRoePercent,
   perpsTakeProfitMode: "percent",
   spotTakeProfitValue: 0,
   spotTakeProfitMode: "percent",
-  stopLossPercent: 2,
-  perpsLeverage: 50,
+  stopLossPercent: OPERATOR_TRAINING_BASELINE.stopLossRoePercent,
+  perpsLeverage: OPERATOR_TRAINING_BASELINE.leverageCap,
   perpsExecutionMode: "set-parameters",
   decisionMode: "active",
   smartTradeProfile: "balanced",

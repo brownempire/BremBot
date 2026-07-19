@@ -43,23 +43,48 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(result.activated, true);
   assert.equal(result.profile.source, "operator-baseline");
   assert.equal(result.profile.trendWindow, 15);
-  assert.equal(result.profile.assetAdjustments.SOL.trendThreshold, 0.5);
-  assert.equal(result.profile.assetAdjustments.SOL.breakoutPercent, 0.3);
-  assert.equal(result.profile.cooldownSeconds, 300);
+  for (const asset of ["SOL", "ETH", "BTC"] as const) {
+    assert.equal(result.profile.assetAdjustments[asset].trendThreshold, 0.14);
+    assert.equal(result.profile.assetAdjustments[asset].breakoutPercent, 0.19);
+  }
+  assert.equal(result.profile.cooldownSeconds, 180);
   assert.equal(result.profile.leverageCap, 50);
   assert.equal(result.profile.maximumAllocationPercent, 80);
-  assert.equal(result.profile.takeProfitRoePercent, 4);
-  assert.equal(result.profile.stopLossRoePercent, 2);
+  assert.equal(result.profile.takeProfitRoePercent, 0);
+  assert.equal(result.profile.stopLossRoePercent, 0);
   const plan = runtime.applyLearnedTradePlan({
-    basePlan: { collateralPercent: 80, leverage: 50, stopLossPercent: 2, takeProfitPercent: 4, volatilityPercent: 2 },
+    basePlan: { collateralPercent: 80, leverage: 50, stopLossPercent: 0, takeProfitPercent: 0, volatilityPercent: 2 },
     asset: "SOL",
     points: Array.from({ length: 16 }, (_, index) => ({ t: index * 60_000, v: 100 + index * 0.1 })),
     profile: result.profile,
   });
   assert.equal(plan.collateralPercent, 80);
   assert.equal(plan.leverage, 50);
-  assert.equal(plan.takeProfitPercent, 4);
-  assert.equal(plan.stopLossPercent, 2);
+  assert.equal(plan.takeProfitPercent, 0);
+  assert.equal(plan.stopLossPercent, 0);
+});
+
+test("forced manual training replaces an existing pre-sample profile with the current baseline", async () => {
+  const walletAddress = "learning-wallet-baseline-reset";
+  const first = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  const reset = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+
+  assert.equal(reset.activated, true);
+  assert.equal(reset.skipped, false);
+  assert.equal(reset.profile.version, first.profile.version + 1);
+  assert.notEqual(reset.profile.profileId, first.profile.profileId);
+  assert.equal(reset.profile.assetAdjustments.SOL.trendThreshold, 0.14);
+  assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, reset.profile.profileId);
 });
 
 test("each newly closed trade incrementally updates the active wallet profile", async () => {

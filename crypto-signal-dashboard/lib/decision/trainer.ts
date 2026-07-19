@@ -12,6 +12,7 @@ import type {
   LearningAsset,
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
+import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 
 const MIN_TRAINING_SAMPLE = 50;
@@ -65,59 +66,6 @@ function calculateStats(outcomes: TradeLearningOutcome[]) {
 function plannedRoe(outcome: TradeLearningOutcome, trigger: number | null) {
   if (!trigger || !outcome.entryPrice) return null;
   return Math.abs(trigger - outcome.entryPrice) / outcome.entryPrice * 100 * outcome.leverage;
-}
-
-function makeBaselineProfile(walletAddress: string, version: number, source: DecisionLearningProfile["source"]): DecisionLearningProfile {
-  const now = new Date().toISOString();
-  return {
-    profileId: `learn_${crypto.randomUUID()}`,
-    walletAddress,
-    version,
-    status: "candidate",
-    source,
-    createdAt: now,
-    promotedAt: null,
-    learnedFromClosedTrades: 0,
-    minimumConfidence: 0.62,
-    leverageCap: 50,
-    maximumAllocationPercent: 80,
-    targetWalletRiskPercent: 1.6,
-    preferredDirection: "balanced",
-    trendWindow: 15,
-    cooldownSeconds: 300,
-    takeProfitRoePercent: 4,
-    stopLossRoePercent: 2,
-    minimumRewardRiskRatio: 2,
-    atrLookback: 14,
-    atrStopMultiplier: 1.5,
-    volatilityCeilingPercent: 5,
-    indicatorSettings: {
-      longRsiMin: BASE_INDICATOR_SETTINGS.longRsiMin,
-      longRsiMax: BASE_INDICATOR_SETTINGS.longRsiMax,
-      shortRsiMin: BASE_INDICATOR_SETTINGS.shortRsiMin,
-      shortRsiMax: BASE_INDICATOR_SETTINGS.shortRsiMax,
-      minimumAdx: BASE_INDICATOR_SETTINGS.minimumAdx,
-      minimumVolumeRatio: BASE_INDICATOR_SETTINGS.minimumVolumeRatio,
-      minimumScore: BASE_INDICATOR_SETTINGS.minimumScore,
-    },
-    assetAdjustments: {
-      SOL: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
-      ETH: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
-      BTC: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
-    },
-    validation: {
-      sampleSize: 0,
-      trainingSize: 0,
-      validationSize: 0,
-      winRate: 0,
-      expectancyUsd: 0,
-      profitFactor: 0,
-      maxDrawdownUsd: 0,
-      passed: true,
-      reasons: ["Operator-selected baseline activated while BremLogic collects enough closed trades for walk-forward training."],
-    },
-    summary: "Operator baseline: 15-minute window, 0.5% trend, 0.3% breakout, 300-second cooldown, 80% allocation cap, 4% TP, 2% SL, and 50x leverage cap.",
-  };
 }
 
 function derivePreferredDirection(outcomes: TradeLearningOutcome[]) {
@@ -383,10 +331,10 @@ export async function trainWalletDecisionProfile(input: {
     return { profile: active ?? latestAttempt, activated: false, outcomeCount: outcomes.length, skipped: true };
   }
   if (outcomes.length < MIN_TRAINING_SAMPLE) {
-    if (active) {
+    if (active && !input.force) {
       return { profile: active, activated: false, outcomeCount: outcomes.length, skipped: true };
     }
-    const baseline = makeBaselineProfile(input.walletAddress, version, "operator-baseline");
+    const baseline = makeOperatorTrainingBaselineProfile(input.walletAddress, version);
     const savedBaseline = await saveDecisionLearningProfile(baseline, true);
     if (outcomes.length > 0) {
       const incremental = createIncrementalProfile(savedBaseline, version + 1, input.source, outcomes);

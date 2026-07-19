@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_SERVER_SIGNAL_PARAMS,
   perpsAutomationConfigWriteSchema,
   type PerpsAutomationConfigInput,
 } from "../lib/perps/automationConfig";
+import { OPERATOR_TRAINING_BASELINE } from "../lib/decision/operatorTrainingBaseline";
 import { parsePerpsAutomationConfig } from "../lib/perps/automationConfigStore";
 
 const walletAddress = "WalletConfig11111111111111111111111111111111";
+
+test("server signal defaults match the operator training baseline", () => {
+  assert.deepEqual(DEFAULT_SERVER_SIGNAL_PARAMS, OPERATOR_TRAINING_BASELINE.signalParams);
+});
 
 function createInput(): PerpsAutomationConfigInput {
   return {
