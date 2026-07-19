@@ -16,6 +16,7 @@ import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { isNativeMacRuntime, isNativeShellRuntime } from "@/app/lib/nativeShell";
 import { formatUsd } from "@/lib/utils";
+import { validatePerpsTriggerPriceAgainstMark } from "@/lib/perps/triggerValidation";
 import {
   shortenWalletAddress,
   type JupiterPerpsTrade,
@@ -218,34 +219,30 @@ function doesTriggerBelongToPosition(position: JupiterPerpsPosition, trigger: Ju
 }
 
 function validatePerpsTriggerPrice(kind: "tp" | "sl", position: JupiterPerpsPosition, triggerPrice: number) {
-  const entryPrice = position.entryPrice;
-  if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) {
-    return "Enter a valid trigger price above 0.";
+  const validationError = validatePerpsTriggerPriceAgainstMark({
+    kind,
+    markPrice: position.markPrice,
+    side: position.side,
+    triggerPrice,
+  });
+  const markPriceLabel = typeof position.markPrice === "number"
+    ? formatUsd(position.markPrice)
+    : "the current market price";
+
+  switch (validationError) {
+    case "invalid-price":
+      return "Enter a valid trigger price above 0.";
+    case "tp-must-be-above-mark":
+      return `Take profit must be above the current mark price of ${markPriceLabel} for a long position.`;
+    case "tp-must-be-below-mark":
+      return `Take profit must be below the current mark price of ${markPriceLabel} for a short position.`;
+    case "sl-must-be-above-mark":
+      return `Stop loss must be above the current mark price of ${markPriceLabel} for a short position.`;
+    case "sl-must-be-below-mark":
+      return `Stop loss must be below the current mark price of ${markPriceLabel} for a long position.`;
+    default:
+      return null;
   }
-
-  if (typeof entryPrice !== "number" || !Number.isFinite(entryPrice) || entryPrice <= 0) {
-    return null;
-  }
-
-  if (position.side === "long") {
-    if (kind === "tp" && triggerPrice <= entryPrice) {
-      return `Take profit must be above the entry price of ${formatUsd(entryPrice)} for a long position.`;
-    }
-
-    if (kind === "sl" && triggerPrice >= entryPrice) {
-      return `Stop loss must be below the entry price of ${formatUsd(entryPrice)} for a long position.`;
-    }
-  } else {
-    if (kind === "tp" && triggerPrice >= entryPrice) {
-      return `Take profit must be below the entry price of ${formatUsd(entryPrice)} for a short position.`;
-    }
-
-    if (kind === "sl" && triggerPrice <= entryPrice) {
-      return `Stop loss must be above the entry price of ${formatUsd(entryPrice)} for a short position.`;
-    }
-  }
-
-  return null;
 }
 
 function NewPerpComposer({
