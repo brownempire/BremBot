@@ -101,6 +101,12 @@ type LivePerpsTradesResponse = {
   count?: number;
 };
 
+export type JupiterPerpsTradeHistory = {
+  trades: JupiterPerpsTrade[];
+  totalCount: number;
+  complete: boolean;
+};
+
 type LivePerpsPosition = {
   positionPubkey?: string;
   mint?: string;
@@ -787,7 +793,46 @@ function mapLivePerpsTrade(trade: LivePerpsTradeResponse): JupiterPerpsTrade {
   };
 }
 
-async function fetchLivePerpsSnapshot(walletAddress: string): Promise<JupiterPerpsAccountSnapshot> {
+export async function fetchJupiterPerpsTradeHistory(
+  walletAddress: string,
+  options: { batchSize?: number; maxTrades?: number } = {}
+): Promise<JupiterPerpsTradeHistory> {
+  const batchSize = Math.min(250, Math.max(10, options.batchSize ?? 100));
+  const maxTrades = Math.min(10_000, Math.max(batchSize, options.maxTrades ?? 5_000));
+  const trades: JupiterPerpsTrade[] = [];
+  let totalCount = 0;
+
+  let start = 0;
+  while (start < maxTrades) {
+    const end = Math.min(start + batchSize, maxTrades);
+    const response = await fetch(
+      `${JUPITER_PERPS_API_BASE}/trades?walletAddress=${encodeURIComponent(walletAddress)}&start=${start}&end=${end}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "x-perps-api-version": "v2",
+        },
+        cache: "no-store",
+      }
+    );
+    if (!response.ok) throw new Error(`Jupiter Perps trade history returned ${response.status}`);
+    const payload = (await response.json()) as LivePerpsTradesResponse;
+    const page = payload.dataList ?? [];
+    const reportedCount = Number(payload.count ?? page.length);
+    totalCount = Math.max(totalCount, Number.isFinite(reportedCount) && reportedCount >= 0 ? reportedCount : page.length);
+    trades.push(...page.map((item) => mapLivePerpsTrade(item)));
+    if (page.length === 0 || trades.length >= totalCount) break;
+    start += page.length;
+  }
+
+  return {
+    trades,
+    totalCount,
+    complete: totalCount <= trades.length,
+  };
+}
+
+async function fetchLivePerpsSnapshot(walletAddress: string, includeRecentTrades = true): Promise<JupiterPerpsAccountSnapshot> {
   const positionsResponse = await fetch(
     `${JUPITER_PERPS_API_BASE}/positions?walletAddress=${encodeURIComponent(walletAddress)}&includeClosedPositions=false`,
     {
@@ -806,24 +851,26 @@ async function fetchLivePerpsSnapshot(walletAddress: string): Promise<JupiterPer
   const positionsPayload = (await positionsResponse.json()) as LivePerpsPositionsResponse;
   let recentTrades: JupiterPerpsTrade[] = [];
 
-  try {
-    const tradesResponse = await fetch(
-      `${JUPITER_PERPS_API_BASE}/trades?walletAddress=${encodeURIComponent(walletAddress)}`,
-      {
-        headers: {
-          Accept: "application/json",
-          "x-perps-api-version": "v2",
-        },
-        cache: "no-store",
-      }
-    );
+  if (includeRecentTrades) {
+    try {
+      const tradesResponse = await fetch(
+        `${JUPITER_PERPS_API_BASE}/trades?walletAddress=${encodeURIComponent(walletAddress)}`,
+        {
+          headers: {
+            Accept: "application/json",
+            "x-perps-api-version": "v2",
+          },
+          cache: "no-store",
+        }
+      );
 
-    if (tradesResponse.ok) {
-      const tradesPayload = (await tradesResponse.json()) as LivePerpsTradesResponse;
-      recentTrades = (tradesPayload.dataList ?? []).map((item) => mapLivePerpsTrade(item));
+      if (tradesResponse.ok) {
+        const tradesPayload = (await tradesResponse.json()) as LivePerpsTradesResponse;
+        recentTrades = (tradesPayload.dataList ?? []).map((item) => mapLivePerpsTrade(item));
+      }
+    } catch {
+      // Recent trade history is supplementary. Keep open-position visibility available even if the trade feed hiccups.
     }
-  } catch {
-    // Recent trade history is supplementary. Keep open-position visibility available even if the trade feed hiccups.
   }
 
   const livePositionRecords = (positionsPayload.dataList ?? []).map((item) => mapLivePerpsPosition(item));
@@ -972,14 +1019,17 @@ function applyPendingTriggersToPositions(
   });
 }
 
-export async function fetchJupiterPerpsAccountSnapshot(walletAddress: string): Promise<JupiterPerpsAccountSnapshot> {
+export async function fetchJupiterPerpsAccountSnapshot(
+  walletAddress: string,
+  options: { includeRecentTrades?: boolean } = {}
+): Promise<JupiterPerpsAccountSnapshot> {
   const rpcUrl =
     process.env.SOLANA_RPC_URL?.trim() ||
     process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim() ||
     clusterApiUrl("mainnet-beta");
 
   try {
-    const liveSnapshot = await fetchLivePerpsSnapshot(walletAddress);
+    const liveSnapshot = await fetchLivePerpsSnapshot(walletAddress, options.includeRecentTrades ?? true);
     if (liveSnapshot.positions.length > 0 || liveSnapshot.pendingTriggers.length > 0) {
       return liveSnapshot;
     }

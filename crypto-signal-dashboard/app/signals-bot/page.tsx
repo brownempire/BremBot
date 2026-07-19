@@ -26,6 +26,7 @@ import type {
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
+import { calculatePnlSince } from "@/lib/perps/pnl";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -224,7 +225,21 @@ type StoredTradeRecord = {
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
 type WalletPnlPoint = { t: number; v: number };
-type PnlMode = "app" | "chain";
+type PnlMode = "primary" | "agent";
+type PerpsPnlPayload = {
+  available: boolean;
+  role: PnlMode;
+  walletAddress?: string;
+  historyComplete?: boolean;
+  historyTotalCount?: number;
+  points?: WalletPnlPoint[];
+  realizedPnlUsd?: number;
+  unrealizedPnlUsd?: number;
+  totalPnlUsd?: number;
+  tradeCount?: number;
+  updatedAt?: number;
+  message?: string;
+};
 type RemoteAuthSource = "in-app" | "phantom";
 type DashboardSectionId = "chart" | "wallet" | "perps" | "pnl" | "params" | "signals" | "trades";
 type DashboardSectionLayout = {
@@ -1022,16 +1037,6 @@ function isPerpsBuildFailureMessage(message: string) {
   );
 }
 
-const PNL_DEFAULT_MINT = SOL_MINT;
-const KNOWN_TOKEN_BY_MINT: Record<string, string> = {
-  [SOL_MINT]: "SOL",
-  [USDC_MINT]: "USDC",
-  [ETH_MINT]: "ETH",
-  [BTC_MINT]: "BTC",
-  JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN: "JUP",
-  DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263: "BONK",
-};
-
 function DashboardPage() {
   const router = useRouter();
   const { connection } = useConnection();
@@ -1107,16 +1112,15 @@ function DashboardPage() {
   const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
-  const [pnlMode, setPnlMode] = useState<PnlMode>("app");
-  const [pnlTokenMint, setPnlTokenMint] = useState<string>(PNL_DEFAULT_MINT);
-  const [pnlStatus, setPnlStatus] = useState("PnL tracking recent trades");
+  const [pnlMode, setPnlMode] = useState<PnlMode>("primary");
+  const [pnlStatus, setPnlStatus] = useState("Connect the primary wallet to load Perps PnL.");
   const [remoteAuthSource, setRemoteAuthSource] = useState<RemoteAuthSource | null>(null);
   const [remoteAuthStatus, setRemoteAuthStatus] = useState("Remote auth pending");
   const [remoteSyncStatus, setRemoteSyncStatus] = useState("Remote sync idle");
   const [remoteAuthToken, setRemoteAuthToken] = useState<string | null>(null);
   const [remoteAuthAddress, setRemoteAuthAddress] = useState<string | null>(null);
   const [phantomAuthAddress, setPhantomAuthAddress] = useState<string | null>(null);
-  const [remotePnlPoints, setRemotePnlPoints] = useState<WalletPnlPoint[]>([{ t: 0, v: 0 }]);
+  const [perpsPnlByRole, setPerpsPnlByRole] = useState<Record<PnlMode, PerpsPnlPayload | null>>({ primary: null, agent: null });
   const [renderNow, setRenderNow] = useState(0);
   const [nativeShell, setNativeShell] = useState(false);
   const [nativeMacShell, setNativeMacShell] = useState(false);
@@ -4414,116 +4418,71 @@ function DashboardPage() {
   });
   const selectedChartCard = cards.find((market) => market.id === selectedChartSlotId) ?? cards[0];
 
-  const pnlTokenOptions = useMemo(() => {
-    const byMint = new Map<string, string>();
-    byMint.set(SOL_MINT, "SOL");
-    walletTokens.forEach((token) => {
-      if (token.mint) {
-        byMint.set(token.mint, token.symbol ?? token.name ?? shortAddress(token.mint));
-      }
-    });
-    recentTrades.forEach((trade) => {
-      if (trade.inputMint) byMint.set(trade.inputMint, KNOWN_TOKEN_BY_MINT[trade.inputMint] ?? shortAddress(trade.inputMint));
-      if (trade.outputMint) byMint.set(trade.outputMint, KNOWN_TOKEN_BY_MINT[trade.outputMint] ?? shortAddress(trade.outputMint));
-    });
-    return [...byMint.entries()].map(([mint, label]) => ({ mint, label }));
-  }, [recentTrades, walletTokens]);
-
   useEffect(() => {
-    if (!pnlTokenOptions.some((option) => option.mint === pnlTokenMint)) {
-      setPnlTokenMint(pnlTokenOptions[0]?.mint ?? PNL_DEFAULT_MINT);
-    }
-  }, [pnlTokenMint, pnlTokenOptions]);
-
-  const selectedTokenUsdPrice = useMemo(() => {
-    if (pnlTokenMint === USDC_MINT) return 1;
-    if (pnlTokenMint === SOL_MINT) {
-      if (solValueUsd !== null && solBalance !== null && solBalance > 0) {
-        const derived = solValueUsd / solBalance;
-        if (Number.isFinite(derived) && derived > 0) return derived;
-      }
-    }
-    const token = walletTokens.find((item) => item.mint === pnlTokenMint);
-    const price = Number(token?.usdPrice ?? 0);
-    if (Number.isFinite(price) && price > 0) return price;
-    return pnlTokenMint === USDC_MINT ? 1 : 0;
-  }, [pnlTokenMint, solBalance, solValueUsd, walletTokens]);
-
-  const pnlTimeline = useMemo(() => {
-    const trades = [...recentTrades]
-      .filter((trade) => Number.isFinite(trade.timestamp))
-      .sort((a, b) => a.timestamp - b.timestamp);
-    let cumulative = 0;
-    const points: WalletPnlPoint[] = [];
-
-    trades.forEach((trade) => {
-      let delta = 0;
-      if (trade.inputMint === pnlTokenMint && Number.isFinite(trade.inputAmount)) {
-        delta -= Number(trade.inputAmount);
-      }
-      if (trade.outputMint === pnlTokenMint && Number.isFinite(trade.outputAmount)) {
-        delta += Number(trade.outputAmount);
-      }
-      cumulative += delta * selectedTokenUsdPrice;
-      points.push({ t: trade.timestamp, v: cumulative });
-    });
-
-    if (points.length > 0) return points;
-    return [{ t: renderNow, v: 0 }];
-  }, [pnlTokenMint, recentTrades, renderNow, selectedTokenUsdPrice]);
-
-  useEffect(() => {
-    if (!remoteSyncWalletAddress || !remoteAuthToken) {
-      setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
+    if (!remoteAuthToken) {
+      setPerpsPnlByRole({ primary: null, agent: null });
       return;
     }
+    let cancelled = false;
+    const role = pnlMode;
+    const load = async () => {
+      let payload: PerpsPnlPayload;
+      try {
+        const response = await fetch(`/api/perps/pnl?walletRole=${role}`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${remoteAuthToken}` },
+        });
+        const responsePayload = await response.json() as PerpsPnlPayload & { error?: string };
+        if (!response.ok) throw new Error(responsePayload.error ?? `Unable to load ${role} Perps PnL.`);
+        payload = responsePayload;
+      } catch (error) {
+        payload = {
+          available: false,
+          role,
+          message: error instanceof Error ? error.message : `Unable to load ${role} Perps PnL.`,
+        };
+      }
+      if (!cancelled) setPerpsPnlByRole((current) => ({ ...current, [role]: payload }));
+    };
+    void load();
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 20_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [pnlMode, remoteAuthToken]);
 
-    fetch(`/api/wallet/pnl?address=${remoteSyncWalletAddress}`, { cache: "no-store" })
-      .then((response) => response.json())
-      .then((payload) => {
-        const points = Array.isArray(payload?.points)
-          ? (payload.points as WalletPnlPoint[]).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v))
-          : [];
-        setRemotePnlPoints(points.length > 0 ? points : [{ t: Date.now(), v: 0 }]);
-      })
-      .catch(() => {
-        setRemotePnlPoints([{ t: Date.now(), v: 0 }]);
-      });
-  }, [remoteAuthToken, remoteSyncWalletAddress]);
+  const selectedPerpsPnl = perpsPnlByRole[pnlMode];
+  const displayedPnlTimeline = useMemo(() => {
+    const points = (selectedPerpsPnl?.points ?? []).filter((point) => Number.isFinite(point.t) && Number.isFinite(point.v));
+    return points.length > 0 ? points : [{ t: renderNow, v: 0 }];
+  }, [renderNow, selectedPerpsPnl?.points]);
 
   useEffect(() => {
-    const tokenLabel = pnlTokenOptions.find((option) => option.mint === pnlTokenMint)?.label ?? "token";
-    if (pnlMode === "chain") {
-      setPnlStatus("Tracking on-chain Jupiter swap PnL from remote wallet history (secondary mode).");
-      return;
+    if (!remoteAuthToken) {
+      setPnlStatus("Connect the primary wallet to load Perps PnL.");
+    } else if (!selectedPerpsPnl) {
+      setPnlStatus(`Loading ${pnlMode} wallet Perps history...`);
+    } else if (!selectedPerpsPnl.available) {
+      setPnlStatus(selectedPerpsPnl.message ?? `No ${pnlMode} wallet Perps history is available.`);
+    } else {
+      const coverage = selectedPerpsPnl.historyComplete ? "complete available history" : `latest ${selectedPerpsPnl.tradeCount ?? 0} records`;
+      setPnlStatus(`Tracking ${pnlMode} wallet Jupiter Perps PnL from ${coverage}.`);
     }
-    if (recentTrades.length === 0) {
-      setPnlStatus(`No recent trades. PnL reset for ${tokenLabel}.`);
-      return;
-    }
-    const priceHint = selectedTokenUsdPrice > 0 ? ` @ ${formatUsd(selectedTokenUsdPrice)}` : "";
-    setPnlStatus(`Tracking ${tokenLabel} PnL in USD from recent trades since last clear${priceHint}.`);
-  }, [pnlMode, pnlTokenMint, pnlTokenOptions, recentTrades.length, selectedTokenUsdPrice]);
-
-  const displayedPnlTimeline = pnlMode === "app" ? pnlTimeline : remotePnlPoints;
+  }, [pnlMode, remoteAuthToken, selectedPerpsPnl]);
 
   const pnlValues = useMemo(() => {
-    const latest = displayedPnlTimeline[displayedPnlTimeline.length - 1];
-    const latestValue = latest?.v ?? 0;
     const now = renderNow;
     const currentDate = renderNow > 0 ? new Date(renderNow) : new Date(0);
     const yearStart = new Date(currentDate.getFullYear(), 0, 1).getTime();
 
-    const calcSince = (cutoff: number) => {
-      const base = displayedPnlTimeline.find((point) => point.t >= cutoff) ?? displayedPnlTimeline[0];
-      return latestValue - (base?.v ?? 0);
-    };
-
     return {
-      d24: calcSince(now - 24 * 60 * 60 * 1000),
-      d7: calcSince(now - 7 * 24 * 60 * 60 * 1000),
-      d30: calcSince(now - 30 * 24 * 60 * 60 * 1000),
-      ytd: calcSince(yearStart),
+      d24: calculatePnlSince(displayedPnlTimeline, now - 24 * 60 * 60 * 1000),
+      d7: calculatePnlSince(displayedPnlTimeline, now - 7 * 24 * 60 * 60 * 1000),
+      d30: calculatePnlSince(displayedPnlTimeline, now - 30 * 24 * 60 * 60 * 1000),
+      ytd: calculatePnlSince(displayedPnlTimeline, yearStart),
     };
   }, [displayedPnlTimeline, renderNow]);
 
@@ -4922,7 +4881,6 @@ function DashboardPage() {
     setRecentTrades([]);
     setPendingTakeProfit(null);
     pendingTakeProfitRef.current = null;
-    setPnlStatus("No recent trades. PnL reset.");
     if (remoteAuthToken) {
       await fetch("/api/trades", {
         method: "DELETE",
@@ -5407,9 +5365,11 @@ function DashboardPage() {
       return (
         <>
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
-          <div className="subtext" style={{ marginBottom: 10 }}>
-            Remote status · auth: {remoteAuthStatus} · sync: {remoteSyncStatus}
-          </div>
+          {selectedPerpsPnl?.available ? (
+            <div className="subtext" style={{ marginBottom: 10 }}>
+              Total {formatUsd(selectedPerpsPnl.totalPnlUsd ?? 0)} · Realized {formatUsd(selectedPerpsPnl.realizedPnlUsd ?? 0)} · Open {formatUsd(selectedPerpsPnl.unrealizedPnlUsd ?? 0)} · {selectedPerpsPnl.tradeCount ?? 0} Perps records
+            </div>
+          ) : null}
           <div className="pnl-metrics">
             <div className="pnl-metric"><span>24hr</span><strong className={pnlValues.d24 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d24)}</strong></div>
             <div className="pnl-metric"><span>7-day</span><strong className={pnlValues.d7 >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.d7)}</strong></div>
@@ -5417,27 +5377,14 @@ function DashboardPage() {
             <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
-            <button type="button" className={pnlMode === "app" ? "" : "secondary"} onClick={() => setPnlMode("app")}>App Trades (Primary)</button>
-            <button type="button" className={pnlMode === "chain" ? "" : "secondary"} onClick={() => setPnlMode("chain")}>On-Chain (Secondary)</button>
+            <button type="button" className={pnlMode === "primary" ? "" : "secondary"} onClick={() => setPnlMode("primary")}>Primary</button>
+            <button type="button" className={pnlMode === "agent" ? "" : "secondary"} onClick={() => setPnlMode("agent")}>Agent</button>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
             <button type="button" className={pnlRange === "24h" ? "" : "secondary"} onClick={() => setPnlRange("24h")}>24H</button>
             <button type="button" className={pnlRange === "7d" ? "" : "secondary"} onClick={() => setPnlRange("7d")}>7D</button>
             <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
             <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
-            <select
-              value={pnlTokenMint}
-              onChange={(event) => setPnlTokenMint(event.target.value)}
-              style={{ maxWidth: 180 }}
-              disabled={pnlMode === "chain"}
-              aria-label="PnL token selection"
-            >
-              {pnlTokenOptions.map((option) => (
-                <option key={option.mint} value={option.mint}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
           </div>
           <div className="pnl-chart-wrap">
             <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
