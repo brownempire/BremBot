@@ -366,9 +366,6 @@ export async function runAutonomousPerpsMonitor(
         params: effectiveParams,
         lastSignalAt: lastSignalAt ?? undefined,
       })[0];
-      if (config.settings.scalpModeEnabled && smartSignalCandidate) {
-        await deps.disableScalpMode(config.walletAddress);
-      }
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
       const scalpSignal = !smartSignalCandidate && config.settings.scalpModeEnabled
@@ -388,7 +385,7 @@ export async function runAutonomousPerpsMonitor(
           asset,
           smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
           smartSignalCandidate
-            ? "A trend or breakout signal turned Scalp Mode off, but the shared signal cooldown is still active."
+            ? "A trend or breakout candidate was detected, but the shared signal cooldown is still active. Scalp Mode remains enabled until a smart trade is taken."
             : config.settings.scalpModeEnabled
               ? "No qualifying smart or sideways-market scalp signal was detected in the latest candle window."
               : "No qualifying signal was detected in the latest candle window."
@@ -547,6 +544,9 @@ export async function runAutonomousPerpsMonitor(
         },
       });
       await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+      if (routed.ok && strategyClass === "smart" && config.settings.scalpModeEnabled) {
+        await deps.disableScalpMode(config.walletAddress);
+      }
       results.push({
         walletAddress: config.walletAddress,
         asset,

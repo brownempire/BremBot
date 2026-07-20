@@ -101,7 +101,7 @@ test("scalp trigger pricing guarantees at least two dollars of target PnL with n
   assert.equal(triggers.stopLossPrice, null);
 });
 
-test("a trend or breakout candidate atomically turns Scalp Mode off before smart routing", async () => {
+test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {
   let disabledWallet: string | null = null;
   let routedStrategy: PerpsAgentSignal["strategyClass"] = undefined;
   const baseTime = 1_784_174_800_000;
@@ -137,6 +137,83 @@ test("a trend or breakout candidate atomically turns Scalp Mode off before smart
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(disabledWallet, walletAddress);
   assert.equal(routedStrategy, "smart");
+});
+
+test("a generated smart signal that is skipped leaves Scalp Mode enabled", async () => {
+  let disableCalls = 0;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({
+      ok: false,
+      code: "DECISION_LAYER_SKIP",
+      message: "The smart signal was skipped.",
+    })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    disableScalpMode: async () => {
+      disableCalls += 1;
+      return null;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "skipped");
+  assert.equal(result.results[0]?.code, "DECISION_LAYER_SKIP");
+  assert.equal(disableCalls, 0);
+});
+
+test("a smart candidate inside cooldown leaves Scalp Mode enabled", async () => {
+  let disableCalls = 0;
+  let routeCalls = 0;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    disableScalpMode: async () => {
+      disableCalls += 1;
+      return null;
+    },
+    readLastSignal: async () => points[points.length - 1]!.t,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.code, "SMART_SIGNAL_COOLDOWN");
+  assert.match(result.results[0]?.message ?? "", /remains enabled/i);
+  assert.equal(routeCalls, 0);
+  assert.equal(disableCalls, 0);
 });
 
 function createSession(): PerpsAutomationSession {
