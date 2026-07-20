@@ -56,6 +56,7 @@ export type JupiterPerpsWidgetController = {
   canWrite: boolean;
   connect: () => Promise<void>;
   connected: boolean;
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
   openMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<{ positionPubkey: string | null; txid: string }>;
   previewMarketPosition: (request: JupiterPerpsAutoTradeRequest) => Promise<PerpsOrderPreview>;
@@ -956,6 +957,7 @@ function JupiterPerpsPositionWidgetBody({
       canWrite: writeEnabled,
       connect: handleNativeJupiterConnect,
       connected: isConnected,
+      signMessage: nativeJupiterWallet.signMessage,
       signTransaction: nativeJupiterWallet.signTransaction,
       refresh: refetch,
       walletAddress,
@@ -1032,7 +1034,7 @@ function JupiterPerpsPositionWidgetBody({
         };
       },
     };
-  }, [attachTpsl, buildPreview, handleNativeJupiterConnect, isConnected, nativeJupiterAdapterEnabled, nativeJupiterWallet.signTransaction, openPosition, refetch, walletAddress, writeEnabled]);
+  }, [attachTpsl, buildPreview, handleNativeJupiterConnect, isConnected, nativeJupiterAdapterEnabled, nativeJupiterWallet.signMessage, nativeJupiterWallet.signTransaction, openPosition, refetch, walletAddress, writeEnabled]);
 
   useEffect(() => {
     onControllerChange?.(autoTradeController);
