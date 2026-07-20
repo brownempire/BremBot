@@ -18,6 +18,10 @@ import { isNativeMacRuntime, isNativeShellRuntime } from "@/app/lib/nativeShell"
 import { formatUsd } from "@/lib/utils";
 import { validatePerpsTriggerPriceAgainstMark } from "@/lib/perps/triggerValidation";
 import {
+  tpslPercentToTriggerPrice,
+  triggerPriceToTpslPercent,
+} from "@/lib/perps/tpslInput";
+import {
   shortenWalletAddress,
   type JupiterPerpsTrade,
   type JupiterPerpsPendingTrigger,
@@ -186,6 +190,11 @@ function formatPercentNumber(value: number | null, fractionDigits = 2, suffix = 
 function formatEditableUsdPrice(value: number | null) {
   if (value === null || !Number.isFinite(value)) return "";
   return value.toFixed(2);
+}
+
+function formatEditablePercent(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "";
+  return value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
 }
 
 function getPerpsTpslReceiveToken(position: JupiterPerpsPosition): "BTC" | "ETH" | "SOL" | "USDC" {
@@ -515,31 +524,67 @@ function EditableTpslMetric({
   requestPubkey: string | null;
   value: number | null;
 }) {
+  type InputMode = "price" | "percent";
+
   const [isEditing, setIsEditing] = useState(false);
+  const [inputMode, setInputMode] = useState<InputMode>("price");
   const [draftValue, setDraftValue] = useState(formatEditableUsdPrice(value));
   const [status, setStatus] = useState<string | null>(null);
-  const parsedDraftValue = Number(draftValue.trim());
-  const estimatedPnl = Number.isFinite(parsedDraftValue) && parsedDraftValue > 0
-    ? estimateTriggerPnl(position, parsedDraftValue)
+  const trimmedDraftValue = draftValue.trim();
+  const parsedDraftValue = Number(trimmedDraftValue);
+  const draftTriggerPrice: number | null = trimmedDraftValue !== "" && Number.isFinite(parsedDraftValue)
+    ? inputMode === "price"
+      ? parsedDraftValue
+      : tpslPercentToTriggerPrice(position, kind, parsedDraftValue)
+    : null;
+  const estimatedPnl = draftTriggerPrice !== null && draftTriggerPrice > 0
+    ? estimateTriggerPnl(position, draftTriggerPrice)
     : null;
   const estimatedPnlIsTooSmall = estimatedPnl !== null && Math.abs(estimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD;
 
+  function formatValueForMode(nextValue: number | null, mode: InputMode) {
+    if (mode === "price") return formatEditableUsdPrice(nextValue);
+    return formatEditablePercent(nextValue === null ? null : triggerPriceToTpslPercent(position, kind, nextValue));
+  }
+
   useEffect(() => {
     if (!isEditing) {
-      setDraftValue(formatEditableUsdPrice(value));
+      setDraftValue(formatValueForMode(value, inputMode));
     }
-  }, [isEditing, value]);
+  }, [inputMode, isEditing, position, value]);
 
-  async function handleSave() {
-    const trimmed = draftValue.trim();
-    const parsed = Number(trimmed);
-    const validationMessage = validatePerpsTriggerPrice(kind, position, parsed);
-    if (!trimmed || validationMessage) {
-      setStatus(validationMessage ?? "Enter a valid trigger price above 0.");
+  function changeInputMode(nextMode: InputMode) {
+    if (nextMode === inputMode) return;
+
+    const currentTriggerPrice = draftTriggerPrice !== null && draftTriggerPrice > 0
+      ? draftTriggerPrice
+      : value;
+    const nextDraftValue = formatValueForMode(currentTriggerPrice, nextMode);
+    if (nextMode === "percent" && !nextDraftValue) {
+      setStatus("Percentage editing requires a valid entry price and leverage.");
       return;
     }
 
-    const nextEstimatedPnl = estimateTriggerPnl(position, parsed);
+    setInputMode(nextMode);
+    setDraftValue(nextDraftValue);
+    setStatus(null);
+  }
+
+  async function handleSave() {
+    if (!trimmedDraftValue || !Number.isFinite(parsedDraftValue) || draftTriggerPrice === null) {
+      setStatus(inputMode === "percent"
+        ? "Enter a valid percentage. Percentage editing requires a valid entry price and leverage."
+        : "Enter a valid trigger price above 0.");
+      return;
+    }
+
+    const validationMessage = validatePerpsTriggerPrice(kind, position, draftTriggerPrice);
+    if (validationMessage) {
+      setStatus(validationMessage);
+      return;
+    }
+
+    const nextEstimatedPnl = estimateTriggerPnl(position, draftTriggerPrice);
     if (nextEstimatedPnl !== null && Math.abs(nextEstimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD) {
       setStatus(`Expected PnL is ${formatSignedUsd(nextEstimatedPnl)}. Move the trigger farther from entry so expected PnL is at least ${formatUsd(MIN_TPSL_EXPECTED_PNL_USD)}.`);
       return;
@@ -548,7 +593,7 @@ function EditableTpslMetric({
     setStatus(null);
 
     try {
-      await onSubmit(parsed.toFixed(2), requestPubkey);
+      await onSubmit(draftTriggerPrice.toFixed(2), requestPubkey);
       setIsEditing(false);
       setStatus(`${kind === "tp" ? "Take profit" : "Stop loss"} updated.`);
     } catch (error) {
@@ -570,16 +615,31 @@ function EditableTpslMetric({
         </>
       ) : (
         <>
+          <div className="perps-tpsl-unit-toggle" role="group" aria-label={`${kind === "tp" ? "Take profit" : "Stop loss"} input unit`}>
+            <button type="button" className={inputMode === "price" ? "active" : ""} aria-pressed={inputMode === "price"} onClick={() => changeInputMode("price")}>
+              $
+            </button>
+            <button type="button" className={inputMode === "percent" ? "active" : ""} aria-pressed={inputMode === "percent"} onClick={() => changeInputMode("percent")}>
+              %
+            </button>
+          </div>
           <label className="perps-inline-input-shell">
-            <span className="perps-inline-input-prefix">$</span>
+            {inputMode === "price" ? <span className="perps-inline-input-prefix">$</span> : null}
             <input
               className="perps-inline-input"
               inputMode="decimal"
               value={draftValue}
-              onChange={(event) => setDraftValue(event.target.value.replace(/[^0-9.]/g, ""))}
-              placeholder={kind === "tp" ? "84.00" : "81.00"}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                if (/^-?\d*\.?\d*$/.test(nextValue)) setDraftValue(nextValue);
+              }}
+              placeholder={inputMode === "price" ? (kind === "tp" ? "84.00" : "81.00") : (kind === "tp" ? "25" : "10")}
             />
+            {inputMode === "percent" ? <span className="perps-inline-input-prefix">%</span> : null}
           </label>
+          {inputMode === "percent" && draftTriggerPrice !== null ? (
+            <span className="perps-metric-status">Trigger price: {formatUsd(draftTriggerPrice)}</span>
+          ) : null}
           <span className={`perps-metric-status ${estimatedPnl !== null ? (estimatedPnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
             Expected PnL: {formatSignedUsd(estimatedPnl)}
           </span>
@@ -595,7 +655,7 @@ function EditableTpslMetric({
               className="secondary"
               disabled={isSaving}
               onClick={() => {
-                setDraftValue(formatEditableUsdPrice(value));
+                setDraftValue(formatValueForMode(value, inputMode));
                 setStatus(null);
                 setIsEditing(false);
               }}
