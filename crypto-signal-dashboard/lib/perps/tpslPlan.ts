@@ -4,8 +4,17 @@ type SignalTrigger = {
 };
 
 type SignalWithTpsl = {
+  side?: "long" | "short";
   takeProfit?: SignalTrigger;
   stopLoss?: SignalTrigger;
+};
+
+export type LivePositionForTpsl = {
+  side: "long" | "short";
+  entryPriceUsd: string;
+  markPriceUsd: string;
+  sizeUsd: string;
+  totalFeesUsd: string;
 };
 
 export type PlannedTpslRequest = {
@@ -19,25 +28,59 @@ function uiUsdPriceToRawUsdString(value: number) {
   return String(Math.max(1, Math.round(value * 1_000_000)));
 }
 
-function uiUsdPriceToDecimalString(value: number) {
-  return value.toFixed(6);
-}
-
 export function getInitialPositionTpsl(signal: SignalWithTpsl): PlannedTpslRequest[] {
   return [
     ...(signal.takeProfit?.enabled && signal.takeProfit.priceUsd
-      ? [{ receiveToken: "USDC" as const, requestType: "tp" as const, triggerPrice: uiUsdPriceToDecimalString(signal.takeProfit.priceUsd) }]
+      ? [{ receiveToken: "USDC" as const, requestType: "tp" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.takeProfit.priceUsd) }]
       : []),
     ...(signal.stopLoss?.enabled && signal.stopLoss.priceUsd
-      ? [{ receiveToken: "USDC" as const, requestType: "sl" as const, triggerPrice: uiUsdPriceToDecimalString(signal.stopLoss.priceUsd) }]
+      ? [{ receiveToken: "USDC" as const, requestType: "sl" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.stopLoss.priceUsd) }]
       : []),
   ];
 }
 
-export function getStandalonePositionTpsl(signal: SignalWithTpsl): PlannedTpslRequest[] {
+function rawUsdToNumber(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed / 1_000_000 : null;
+}
+
+/** Rebase a deferred TP against the actual fill, fees, and current mark. */
+export function rebaseTakeProfitForLivePosition(
+  signal: SignalWithTpsl,
+  position: LivePositionForTpsl,
+  minimumNetProfitUsd = 1
+) {
+  const requested = signal.takeProfit?.enabled ? signal.takeProfit.priceUsd : null;
+  const entryPrice = rawUsdToNumber(position.entryPriceUsd);
+  const markPrice = rawUsdToNumber(position.markPriceUsd);
+  const sizeUsd = rawUsdToNumber(position.sizeUsd);
+  const totalFeesUsd = rawUsdToNumber(position.totalFeesUsd) ?? 0;
+  const side = signal.side ?? position.side;
+
+  if (!requested || !entryPrice || !markPrice || !sizeUsd || sizeUsd <= 0) return requested;
+
+  const requestedGrossProfitUsd = Math.abs(requested - entryPrice) / entryPrice * sizeUsd;
+  const requiredGrossProfitUsd = totalFeesUsd + Math.max(1, minimumNetProfitUsd);
+  const targetGrossProfitUsd = Math.max(requestedGrossProfitUsd, requiredGrossProfitUsd);
+  const targetMove = entryPrice * targetGrossProfitUsd / sizeUsd;
+  const markBuffer = entryPrice / sizeUsd;
+
+  if (side === "long") {
+    return Math.max(entryPrice + targetMove, markPrice + markBuffer);
+  }
+  return Math.min(entryPrice - targetMove, markPrice - markBuffer);
+}
+
+export function getStandalonePositionTpsl(
+  signal: SignalWithTpsl,
+  livePosition?: LivePositionForTpsl | null
+): PlannedTpslRequest[] {
+  const takeProfitPrice = livePosition
+    ? rebaseTakeProfitForLivePosition(signal, livePosition)
+    : signal.takeProfit?.priceUsd;
   return [
-    ...(signal.takeProfit?.enabled && signal.takeProfit.priceUsd
-      ? [{ entirePosition: true, receiveToken: "USDC" as const, requestType: "tp" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.takeProfit.priceUsd) }]
+    ...(signal.takeProfit?.enabled && takeProfitPrice
+      ? [{ entirePosition: true, receiveToken: "USDC" as const, requestType: "tp" as const, triggerPrice: uiUsdPriceToRawUsdString(takeProfitPrice) }]
       : []),
     ...(signal.stopLoss?.enabled && signal.stopLoss.priceUsd
       ? [{ entirePosition: true, receiveToken: "USDC" as const, requestType: "sl" as const, triggerPrice: uiUsdPriceToRawUsdString(signal.stopLoss.priceUsd) }]

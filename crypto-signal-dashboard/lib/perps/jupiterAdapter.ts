@@ -34,6 +34,7 @@ function usdToAtomicUsdcString(value: number) {
 }
 
 type PerpsTradingClient = Pick<typeof perps.trading, "increasePosition" | "createTpsl">;
+type PerpsPositionsClient = Pick<typeof perps.positions, "get">;
 
 function getAssetForMarket(market: string): Asset {
   const asset = MARKET_TO_ASSET[market.toUpperCase()];
@@ -92,9 +93,18 @@ export async function buildPerpsTpslTransactionForSignal(
   signal: PerpsSignalPayload,
   walletAddress: string,
   positionPubkey: string,
-  tradingClient: PerpsTradingClient = perps.trading
+  tradingClient: PerpsTradingClient = perps.trading,
+  positionsClient: PerpsPositionsClient = perps.positions
 ) {
-  const tpsl = getStandalonePositionTpsl(signal);
+  let livePosition = null;
+  try {
+    const positions = await positionsClient.get({ walletAddress, includeClosedPositions: false });
+    livePosition = positions.dataList.find((position) => position.positionPubkey === positionPubkey) ?? null;
+  } catch {
+    // A transient read failure should not prevent Jupiter from accepting the
+    // original protection request. A later retry will refresh the fill again.
+  }
+  const tpsl = getStandalonePositionTpsl(signal, livePosition);
   if (tpsl.length === 0) return null;
   return tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
 }

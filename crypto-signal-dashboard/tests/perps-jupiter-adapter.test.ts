@@ -5,6 +5,7 @@ import {
   buildEntryWithTpslFallback,
   getInitialPositionTpsl,
   getStandalonePositionTpsl,
+  rebaseTakeProfitForLivePosition,
 } from "../lib/perps/tpslPlan";
 import type { PerpsSignalPayload } from "../lib/perps/types";
 
@@ -29,15 +30,50 @@ function signal(): PerpsSignalPayload {
   };
 }
 
-test("nested initial TP/SL uses Jupiter decimal prices while standalone requests use raw USD", () => {
+test("nested and standalone TP/SL requests use Jupiter raw USD prices", () => {
   assert.deepEqual(getInitialPositionTpsl(signal()), [
-    { receiveToken: "USDC", requestType: "tp", triggerPrice: "77.250000" },
-    { receiveToken: "USDC", requestType: "sl", triggerPrice: "75.500000" },
+    { receiveToken: "USDC", requestType: "tp", triggerPrice: "77250000" },
+    { receiveToken: "USDC", requestType: "sl", triggerPrice: "75500000" },
   ]);
   assert.deepEqual(getStandalonePositionTpsl(signal()), [
     { entirePosition: true, receiveToken: "USDC", requestType: "tp", triggerPrice: "77250000" },
     { entirePosition: true, receiveToken: "USDC", requestType: "sl", triggerPrice: "75500000" },
   ]);
+});
+
+test("a deferred scalp TP is rebased to one dollar net above filled-position break even", () => {
+  const rebased = rebaseTakeProfitForLivePosition(
+    { side: "short", takeProfit: { enabled: true, priceUsd: 77.44154323703374 } },
+    {
+      side: "short",
+      entryPriceUsd: "77458395",
+      markPriceUsd: "77495000",
+      sizeUsd: "5253436400",
+      totalFeesUsd: "6309618",
+    }
+  );
+
+  assert.equal(typeof rebased, "number");
+  if (typeof rebased !== "number") return;
+  assert.ok(rebased < 77.36);
+  assert.ok(rebased < 77.458395);
+});
+
+test("a deferred scalp TP moves beyond the live mark after crossing the old target", () => {
+  const rebased = rebaseTakeProfitForLivePosition(
+    { side: "long", takeProfit: { enabled: true, priceUsd: 100.02 } },
+    {
+      side: "long",
+      entryPriceUsd: "100000000",
+      markPriceUsd: "100200000",
+      sizeUsd: "5000000000",
+      totalFeesUsd: "6000000",
+    }
+  );
+
+  assert.equal(typeof rebased, "number");
+  if (typeof rebased !== "number") return;
+  assert.ok(rebased > 100.2);
 });
 
 test("a nested TP/SL builder failure falls back to an entry transaction and defers protection", async () => {

@@ -64,7 +64,7 @@ test("legacy wallet automation configs migrate to revision one", () => {
   assert.equal(parsed?.revision, 1);
   assert.equal(parsed?.settings.decisionMode, "active");
   assert.equal(parsed?.settings.scalpModeEnabled, false);
-  assert.equal(parsed?.settings.scalpTakeProfitUsd, 2);
+  assert.equal(parsed?.settings.scalpTakeProfitUsd, 1);
   assert.equal(parsed?.walletAddress, walletAddress);
 });
 
@@ -77,5 +77,19 @@ test("wallet automation writes require a non-negative expected revision", () => 
   assert.equal(perpsAutomationConfigWriteSchema.safeParse({
     ...createInput(),
     expectedRevision: -1,
+  }).success, false);
+});
+
+test("scalp net-profit target is adjustable with a one-dollar floor", () => {
+  const input = createInput();
+  assert.equal(perpsAutomationConfigWriteSchema.safeParse({
+    ...input,
+    settings: { ...input.settings, scalpTakeProfitUsd: 1 },
+    expectedRevision: 0,
+  }).success, true);
+  assert.equal(perpsAutomationConfigWriteSchema.safeParse({
+    ...input,
+    settings: { ...input.settings, scalpTakeProfitUsd: 0.99 },
+    expectedRevision: 0,
   }).success, false);
 });

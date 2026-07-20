@@ -176,7 +176,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   perpsLeverage: OPERATOR_TRAINING_BASELINE.leverageCap,
   perpsExecutionMode: "set-parameters",
   scalpModeEnabled: false,
-  scalpTakeProfitUsd: 2,
+  scalpTakeProfitUsd: 1,
   decisionMode: "active",
   smartTradeProfile: "balanced",
   slots: [
@@ -3528,7 +3528,7 @@ function DashboardPage() {
       const scalpModeEnabled = Boolean(parsed.scalpModeEnabled);
       const parsedScalpTakeProfitUsd = Number(parsed.scalpTakeProfitUsd);
       const scalpTakeProfitUsd = Number.isFinite(parsedScalpTakeProfitUsd)
-        ? Math.max(2, parsedScalpTakeProfitUsd)
+        ? Math.max(1, parsedScalpTakeProfitUsd)
         : DEFAULT_AUTO_TRADE_SETTINGS.scalpTakeProfitUsd;
       const decisionMode = parsed.decisionMode === "shadow" ? "shadow" : "active";
       const smartTradeProfile =

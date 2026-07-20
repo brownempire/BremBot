@@ -83,7 +83,7 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
   assert.equal(signal?.direction, "bullish");
 });
 
-test("scalp trigger pricing guarantees at least two dollars of target PnL with no stop loss", () => {
+test("scalp trigger pricing covers estimated fees plus the adjustable net target", () => {
   const config = createConfig();
   const triggers = computeTriggerPrices({
     config,
@@ -97,7 +97,7 @@ test("scalp trigger pricing guarantees at least two dollars of target PnL with n
   });
   const targetPnl = (((triggers.takeProfitPrice ?? 0) - 100) / 100) * 50;
 
-  assert.ok(targetPnl >= 2);
+  assert.ok(targetPnl - 50 * 0.0012 >= 1.999999);
   assert.equal(triggers.stopLossPrice, null);
 });
 

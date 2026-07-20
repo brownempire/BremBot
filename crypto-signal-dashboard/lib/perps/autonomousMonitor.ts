@@ -39,6 +39,7 @@ const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const MIN_TPSL_EXPECTED_PNL_USD = 1;
+const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = 0.0012;
 
 type AutonomousSignal = Omit<Signal, "type"> & { type: Signal["type"] | "scalp" };
 
@@ -259,7 +260,9 @@ export function computeTriggerPrices(options: {
   const direction = options.side === "long" ? 1 : -1;
   const positionSizeUsd = options.collateralUsd * options.leverage;
   const requestedTakeProfitMove = typeof options.takeProfitUsd === "number"
-    ? (positionSizeUsd > 0 ? Math.max(2, options.takeProfitUsd) / positionSizeUsd : 0)
+    ? (positionSizeUsd > 0
+      ? (Math.max(1, options.takeProfitUsd) + positionSizeUsd * ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE) / positionSizeUsd
+      : 0)
     : options.config.settings.perpsTakeProfitMode === "usd"
     ? (positionSizeUsd > 0 ? options.config.settings.perpsTakeProfitValue / positionSizeUsd : 0)
     : options.takeProfitPercent > 0 ? options.takeProfitPercent / 100 / options.leverage : 0;
