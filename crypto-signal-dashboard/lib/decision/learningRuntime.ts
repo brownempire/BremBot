@@ -50,25 +50,6 @@ export function applyLearnedTradePlan(input: {
     return { ...input.basePlan, atrPercent: computeAtrPercent(input.points), profileId: null };
   }
   const adjustment = input.profile.assetAdjustments[input.asset];
-  if (input.profile.source === "operator-baseline" && input.profile.learnedFromClosedTrades === 0) {
-    return {
-      collateralPercent: Number(clamp(
-        Math.min(input.basePlan.collateralPercent, input.profile.maximumAllocationPercent) * adjustment.allocationMultiplier,
-        1,
-        input.profile.maximumAllocationPercent
-      ).toFixed(2)),
-      leverage: Number(clamp(
-        input.basePlan.leverage * adjustment.leverageMultiplier,
-        1,
-        input.profile.leverageCap
-      ).toFixed(2)),
-      stopLossPercent: input.profile.stopLossRoePercent,
-      takeProfitPercent: input.profile.takeProfitRoePercent,
-      volatilityPercent: input.basePlan.volatilityPercent,
-      atrPercent: Number(computeAtrPercent(input.points, input.profile.atrLookback).toFixed(4)),
-      profileId: input.profile.profileId,
-    };
-  }
   const leverage = clamp(
     input.basePlan.leverage * adjustment.leverageMultiplier,
     1,
@@ -88,8 +69,23 @@ export function applyLearnedTradePlan(input: {
   const takeProfitPercent = clamp(
     Math.max(input.profile.takeProfitRoePercent, feeAdjustedRewardTarget),
     1,
-    12
+    50
   );
+  if (input.profile.source === "operator-baseline" && input.profile.learnedFromClosedTrades === 0) {
+    return {
+      collateralPercent: Number(clamp(
+        Math.min(input.basePlan.collateralPercent, input.profile.maximumAllocationPercent) * adjustment.allocationMultiplier,
+        1,
+        input.profile.maximumAllocationPercent
+      ).toFixed(2)),
+      leverage: Number(leverage.toFixed(2)),
+      stopLossPercent: Number(stopLossPercent.toFixed(2)),
+      takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
+      volatilityPercent: input.basePlan.volatilityPercent,
+      atrPercent: Number(atrPercent.toFixed(4)),
+      profileId: input.profile.profileId,
+    };
+  }
   const riskSizedAllocation = input.profile.targetWalletRiskPercent / stopLossPercent * 100;
   const collateralPercent = clamp(
     Math.min(
