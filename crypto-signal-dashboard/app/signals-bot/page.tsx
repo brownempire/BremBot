@@ -26,7 +26,7 @@ import type {
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
-import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaseline";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince } from "@/lib/perps/pnl";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";

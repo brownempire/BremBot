@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { UserParams } from "@/lib/signal/engine";
-import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaseline";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 
 export const automationTokenSchema = z.enum(["SOL", "ETH", "BTC", "USDC", "JUP", "BONK"]);
 
