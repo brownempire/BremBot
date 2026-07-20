@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildEntryWithTpslFallback,
-  getInitialPositionTpsl,
+  calculateActualPositionProtection,
+  getEntryPositionTpsl,
   getStandalonePositionTpsl,
+  parseActualPositionForProtection,
 } from "../lib/perps/tpslPlan";
 import type { PerpsSignalPayload } from "../lib/perps/types";
 
@@ -29,33 +30,86 @@ function signal(): PerpsSignalPayload {
   };
 }
 
-test("nested initial TP/SL uses Jupiter decimal prices while standalone requests use raw USD", () => {
-  assert.deepEqual(getInitialPositionTpsl(signal()), [
-    { receiveToken: "USDC", requestType: "tp", triggerPrice: "77.250000" },
-    { receiveToken: "USDC", requestType: "sl", triggerPrice: "75.500000" },
-  ]);
+test("standalone TP/SL requests use Jupiter raw USD prices", () => {
   assert.deepEqual(getStandalonePositionTpsl(signal()), [
     { entirePosition: true, receiveToken: "USDC", requestType: "tp", triggerPrice: "77250000" },
     { entirePosition: true, receiveToken: "USDC", requestType: "sl", triggerPrice: "75500000" },
   ]);
 });
 
-test("a nested TP/SL builder failure falls back to an entry transaction and defers protection", async () => {
-  const requests: unknown[] = [];
-  const built = await buildEntryWithTpslFallback(getInitialPositionTpsl(signal()), async (tpsl) => {
-    requests.push(tpsl);
-    if (tpsl.length) throw new Error("500 Internal Server Error");
-    return { serializedTxBase64: "entry-transaction", tpsl: [] };
+test("actual position TP uses the fill, live size, fees, and Jupiter market side", () => {
+  const protection = calculateActualPositionProtection({
+    position: {
+      side: "long",
+      entryPriceUsd: 77.492,
+      markPriceUsd: 77.455397,
+      sizeUsd: 4_451.98045,
+      totalFeesUsd: 5.366203,
+    },
+    referencePriceUsd: 77.51,
+    referenceSizeUsd: 4_619.22,
+    requestedTakeProfitPrice: 77.54355974325433,
+    requestedStopLossPrice: null,
+    minimumTakeProfitUsd: 2,
   });
-  assert.equal(requests.length, 2);
-  assert.equal(built.response.serializedTxBase64, "entry-transaction");
-  assert.equal(built.tpslMode, "deferred");
+  assert.ok(protection.takeProfitPrice > 77.492);
+  assert.equal(protection.takeProfitPrice, 77.620217);
+  assert.equal(protection.targetNetProfitUsd, 2);
+  assert.equal(protection.stopLossPrice, null);
 });
 
-test("a successful nested builder reports bundled TP/SL protection", async () => {
-  const built = await buildEntryWithTpslFallback(getInitialPositionTpsl(signal()), async () => ({
-    serializedTxBase64: "bundled-transaction",
-    tpsl: [{ requestType: "tp" }, { requestType: "sl" }],
-  }));
-  assert.equal(built.tpslMode, "bundled");
+test("actual position TP stays beyond a fast-moving mark price", () => {
+  const protection = calculateActualPositionProtection({
+    position: {
+      side: "long",
+      entryPriceUsd: 77.492,
+      markPriceUsd: 78,
+      sizeUsd: 4_451.98045,
+      totalFeesUsd: 5.366203,
+    },
+    referencePriceUsd: 77.51,
+    referenceSizeUsd: 4_619.22,
+    requestedTakeProfitPrice: 77.54355974325433,
+    minimumTakeProfitUsd: 2,
+  });
+  assert.equal(protection.takeProfitPrice, 78.078);
+});
+
+test("scalp protection preserves a $3.50 minimum net target after fees", () => {
+  const protection = calculateActualPositionProtection({
+    position: {
+      side: "long",
+      entryPriceUsd: 77.492,
+      markPriceUsd: 77.455397,
+      sizeUsd: 4_451.98045,
+      totalFeesUsd: 5.366203,
+    },
+    referencePriceUsd: 77.51,
+    referenceSizeUsd: 4_619.22,
+    requestedTakeProfitPrice: 77.54355974325433,
+    minimumTakeProfitUsd: 3.5,
+  });
+  assert.equal(protection.targetNetProfitUsd, 3.5);
+  assert.ok(protection.takeProfitPrice > 77.620217);
+});
+
+test("agent entries are always built without bundled TP/SL", () => {
+  assert.deepEqual(getEntryPositionTpsl(), []);
+});
+
+test("live position lookup converts Jupiter raw USD values", () => {
+  const position = parseActualPositionForProtection({
+    side: "long",
+    entryPriceUsd: "77492000",
+    markPriceUsd: "77455397",
+    sizeUsd: "4451980450",
+    totalFeesUsd: "5366203",
+  });
+  assert.deepEqual(position, {
+    side: "long",
+    entryPriceUsd: 77.492,
+    markPriceUsd: 77.455397,
+    sizeUsd: 4_451.98045,
+    totalFeesUsd: 5.366203,
+  });
 });
