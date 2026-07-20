@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaseline";
 import { detectSignals, type UserParams } from "@/lib/signal/engine";
 import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
 import { getRedisClient } from "@/lib/server/redis";
@@ -16,10 +17,7 @@ const MAX_POINTS = 5400;
 const MAX_SENT_IDS = 80;
 
 const DEFAULT_PARAMS: UserParams = {
-  trendWindow: 15,
-  trendThreshold: 0.36,
-  breakoutPercent: 0.3,
-  cooldownSeconds: 180,
+  ...OPERATOR_TRAINING_BASELINE.signalParams,
 };
 
 const TRACKED_MARKETS = [

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { UserParams } from "@/lib/signal/engine";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaseline";
 
 export const automationTokenSchema = z.enum(["SOL", "ETH", "BTC", "USDC", "JUP", "BONK"]);
 
@@ -55,10 +56,7 @@ export type PerpsAutomationConfig = z.infer<typeof perpsAutomationConfigSchema>;
 export type AutomationToken = z.infer<typeof automationTokenSchema>;
 
 export const DEFAULT_SERVER_SIGNAL_PARAMS: UserParams = {
-  trendWindow: 15,
-  trendThreshold: 0.36,
-  breakoutPercent: 0.3,
-  cooldownSeconds: 180,
+  ...OPERATOR_TRAINING_BASELINE.signalParams,
 };
 
 export function getActivePerpsAsset(config: PerpsAutomationConfig) {
