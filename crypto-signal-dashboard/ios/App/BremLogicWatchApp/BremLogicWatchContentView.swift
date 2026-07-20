@@ -1,8 +1,34 @@
 import SwiftUI
+import ImageIO
+
+private struct BremLogicOfficialLogo: View {
+    let width: CGFloat
+    let height: CGFloat
+
+    private static let image: CGImage? = {
+        guard let url = Bundle.main.url(forResource: "BremLogicLogo", withExtension: "png"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }()
+
+    var body: some View {
+        if let image = Self.image {
+            Image(decorative: image, scale: 1)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: width, height: height, alignment: .leading)
+        }
+    }
+}
 
 struct BremLogicWatchContentView: View {
     @State private var snapshot = BremLogicWatchSnapshot.fallback
     @State private var isLoading = true
+
+    private let metricColumns = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
 
     private var pnlColor: Color {
         guard let pnl = snapshot.openPerpPnlUsd else { return .secondary }
@@ -11,76 +37,99 @@ struct BremLogicWatchContentView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("B")
-                        .font(.system(size: 21, weight: .black, design: .rounded))
-                        .foregroundStyle(Color(red: 0.57, green: 0.94, blue: 0.78))
-                    Text("BREMLOGIC")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                    Spacer()
-                    if isLoading {
-                        ProgressView().controlSize(.mini)
-                    }
-                }
-
-                Text(snapshot.hasOpenPerp ? (snapshot.openPerpLabel ?? "Open Perp") : "No open perps")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .lineLimit(2)
+            VStack(alignment: .leading, spacing: 8) {
+                brandedHeader
+                positionHero
 
                 if snapshot.hasOpenPerp {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("UNREALIZED P/L")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                        Text(bremLogicSignedUsd(snapshot.openPerpPnlUsd))
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(pnlColor)
-                    }
-
-                    HStack(spacing: 8) {
-                        watchMetric("TP P/L", bremLogicSignedUsd(snapshot.openPerpTakeProfitPnlUsd), .green)
-                        watchMetric("SL P/L", bremLogicSignedUsd(snapshot.openPerpStopLossPnlUsd), .red)
+                    LazyVGrid(columns: metricColumns, spacing: 6) {
+                        metric("ENTRY", bremLogicPrice(snapshot.openPerpEntryPrice))
+                        metric("MARK", bremLogicPrice(snapshot.openPerpMarkPrice))
+                        metric("LEVERAGE", bremLogicLeverage(snapshot.openPerpLeverage))
+                        metric("LIQUIDATION", bremLogicPrice(snapshot.openPerpLiquidationPrice), .orange)
+                        metric("TAKE PROFIT", bremLogicPrice(snapshot.openPerpTakeProfitPrice), .green)
+                        metric("TP P/L", bremLogicSignedUsd(snapshot.openPerpTakeProfitPnlUsd), .green)
+                        metric("POSITION", bremLogicWalletUsd(snapshot.openPerpPositionValueUsd))
+                        metric("COLLATERAL", bremLogicWalletUsd(snapshot.openPerpCollateralUsd))
                     }
                 } else {
-                    Text("The agent is monitoring for the next setup.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                    Text(snapshot.openPerpDetail ?? "The agent is monitoring for the next setup.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .padding(.vertical, 5)
                 }
 
-                watchMetric(
-                    "AGENT WALLET",
-                    bremLogicWalletUsd(snapshot.agentWalletBalanceUsd ?? snapshot.walletBalanceUsd),
-                    .primary
-                )
+                HStack(spacing: 6) {
+                    metric("AGENT WALLET", bremLogicWalletUsd(snapshot.agentWalletBalanceUsd ?? snapshot.walletBalanceUsd))
+                    metric("UPDATED", Date(timeIntervalSince1970: snapshot.updatedAt).formatted(date: .omitted, time: .shortened))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+            .padding(.horizontal, 3)
+            .padding(.bottom, 6)
         }
         .task { await reload() }
         .refreshable { await reload() }
     }
 
-    private func watchMetric(_ title: String, _ value: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 8, weight: .semibold, design: .rounded))
+    private var brandedHeader: some View {
+        HStack(spacing: 4) {
+            BremLogicOfficialLogo(width: 78, height: 25)
+            Spacer()
+            Circle()
+                .fill(snapshot.perpsSessionState == "Clocked In" ? Color.green : Color.secondary)
+                .frame(width: 6, height: 6)
+            Text(snapshot.perpsSessionState == "Clocked In" ? "LIVE" : "IDLE")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
                 .foregroundStyle(.secondary)
+            if isLoading { ProgressView().controlSize(.mini) }
+        }
+    }
+
+    private var positionHero: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(snapshot.hasOpenPerp ? (snapshot.openPerpLabel ?? "OPEN PERP") : "NO OPEN PERPS")
+                .font(.system(size: 16, weight: .black, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(bremLogicSignedUsd(snapshot.openPerpPnlUsd))
+                    .font(.system(size: 25, weight: .black, design: .rounded))
+                    .foregroundStyle(pnlColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                Text(bremLogicPercent(snapshot.openPerpPnlPercent))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(pnlColor)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private func metric(_ title: String, _ value: String, _ color: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             Text(value)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(.system(size: 11, weight: .black, design: .rounded))
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(8)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .background(.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     @MainActor
     private func reload() async {
         isLoading = true
-        if let next = try? await BremLogicWatchServerClient.fetch() {
+        if ProcessInfo.processInfo.arguments.contains("-BremLogicPreview") {
+            snapshot = .previewPosition
+        } else if let next = try? await BremLogicWatchServerClient.fetch() {
             snapshot = next
         }
         isLoading = false

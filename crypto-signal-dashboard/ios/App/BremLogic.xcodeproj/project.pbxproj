@@ -25,6 +25,8 @@
 		AB1000070000000000000007 /* BremLogicWatchWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AB2000020000000000000002 /* BremLogicWatchWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		AB1000080000000000000008 /* BremLogicWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = AB2000010000000000000001 /* BremLogicWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
 		AB1000090000000000000009 /* Assets.xcassets in Watch Resources */ = {isa = PBXBuildFile; fileRef = AB2000090000000000000009 /* Assets.xcassets */; };
+		AB1000100000000000000010 /* BremLogicLogo.png in Watch Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
+		AB1000110000000000000011 /* BremLogicLogo.png in Watch Widget Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
 		AC1000010000000000000001 /* BremLogicMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000020000000000000002 /* BremLogicMacApp.swift */; };
 		AC1000020000000000000002 /* BremLogicMacContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000030000000000000003 /* BremLogicMacContentView.swift */; };
 		AC1000030000000000000003 /* BremLogicMacWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC2000040000000000000004 /* BremLogicMacWebView.swift */; };
@@ -571,6 +573,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AB1000090000000000000009 /* Assets.xcassets in Watch Resources */,
+				AB1000100000000000000010 /* BremLogicLogo.png in Watch Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -578,6 +581,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AB1000110000000000000011 /* BremLogicLogo.png in Watch Widget Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

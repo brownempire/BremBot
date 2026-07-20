@@ -4,9 +4,19 @@ let BremLogicWatchServerURL = URL(string: "https://app.bremlogic.com/api/widget/
 
 struct BremLogicWatchSnapshot: Codable {
     var openPerpLabel: String?
+    var openPerpDetail: String?
     var openPerpPnlUsd: Double?
     var openPerpPnlPercent: Double?
     var openPerpMarket: String?
+    var openPerpSide: String?
+    var openPerpPositionValueUsd: Double?
+    var openPerpCollateralUsd: Double?
+    var openPerpEntryPrice: Double?
+    var openPerpMarkPrice: Double?
+    var openPerpLeverage: Double?
+    var openPerpLiquidationPrice: Double?
+    var openPerpTakeProfitPrice: Double?
+    var openPerpStopLossPrice: Double?
     var openPerpTakeProfitPnlUsd: Double?
     var openPerpStopLossPnlUsd: Double?
     var agentWalletBalanceUsd: Double?
@@ -16,14 +26,47 @@ struct BremLogicWatchSnapshot: Codable {
 
     static let fallback = BremLogicWatchSnapshot(
         openPerpLabel: "No open perps",
+        openPerpDetail: "Agent is monitoring for the next setup.",
         openPerpPnlUsd: nil,
         openPerpPnlPercent: nil,
         openPerpMarket: nil,
+        openPerpSide: nil,
+        openPerpPositionValueUsd: nil,
+        openPerpCollateralUsd: nil,
+        openPerpEntryPrice: nil,
+        openPerpMarkPrice: nil,
+        openPerpLeverage: nil,
+        openPerpLiquidationPrice: nil,
+        openPerpTakeProfitPrice: nil,
+        openPerpStopLossPrice: nil,
         openPerpTakeProfitPnlUsd: nil,
         openPerpStopLossPnlUsd: nil,
         agentWalletBalanceUsd: nil,
         walletBalanceUsd: nil,
         perpsSessionState: "Clocked Out",
+        updatedAt: Date().timeIntervalSince1970
+    )
+
+    static let previewPosition = BremLogicWatchSnapshot(
+        openPerpLabel: "SOL SHORT",
+        openPerpDetail: "$1,151.28 position • $25.61 collateral • 45x leverage",
+        openPerpPnlUsd: 4.76,
+        openPerpPnlPercent: 18.57,
+        openPerpMarket: "SOL",
+        openPerpSide: "short",
+        openPerpPositionValueUsd: 1_151.28,
+        openPerpCollateralUsd: 25.61,
+        openPerpEntryPrice: 76.85,
+        openPerpMarkPrice: 76.44,
+        openPerpLeverage: 45,
+        openPerpLiquidationPrice: 78.35,
+        openPerpTakeProfitPrice: 76.43,
+        openPerpStopLossPrice: nil,
+        openPerpTakeProfitPnlUsd: 6.34,
+        openPerpStopLossPnlUsd: nil,
+        agentWalletBalanceUsd: 132.84,
+        walletBalanceUsd: 132.84,
+        perpsSessionState: "Clocked In",
         updatedAt: Date().timeIntervalSince1970
     )
 
@@ -64,4 +107,21 @@ func bremLogicSignedUsd(_ value: Double?) -> String {
 func bremLogicWalletUsd(_ value: Double?) -> String {
     guard let value else { return "--" }
     return String(format: "$%.2f", value)
+}
+
+func bremLogicPercent(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return String(format: "%+.2f%%", value)
+}
+
+func bremLogicPrice(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    if abs(value) >= 1_000 { return String(format: "$%.0f", value) }
+    if abs(value) >= 100 { return String(format: "$%.1f", value) }
+    return String(format: "$%.2f", value)
+}
+
+func bremLogicLeverage(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return value.rounded() == value ? String(format: "%.0fx", value) : String(format: "%.1fx", value)
 }

@@ -5,5 +5,7 @@ import WidgetKit
 struct BremLogicWatchWidgetBundle: WidgetBundle {
     var body: some Widget {
         BremLogicWatchWidget()
+        BremLogicWalletWatchWidget()
+        BremLogicAgentWatchWidget()
     }
 }
