@@ -43,7 +43,7 @@ test("client baseline constants do not import server-only runtime modules", () =
   assert.doesNotMatch(source, /^import (?!type\b)/m);
 });
 
-test("a zero-history baseline adapts its 25% TP and calculates an ATR-based SL", () => {
+test("a zero-history baseline adapts its 25% TP without generating an SL", () => {
   const profile = decisionLearningProfileSchema.parse(
     makeOperatorTrainingBaselineProfile("adaptive-exit-wallet", 1)
   );
@@ -68,11 +68,11 @@ test("a zero-history baseline adapts its 25% TP and calculates an ATR-based SL",
   assert.equal(profile.stopLossRoePercent, 0);
   assert.ok(plan.takeProfitPercent >= 25 && plan.takeProfitPercent <= 50);
   assert.ok(plan.takeProfitPercent > profile.takeProfitRoePercent);
-  assert.ok(plan.stopLossPercent >= 0.5 && plan.stopLossPercent <= 5.5);
+  assert.equal(plan.stopLossPercent, 0);
   assert.ok(plan.takeProfitPercent > plan.stopLossPercent);
 });
 
-test("an existing learned profile with zero stored exits still receives adaptive protection", () => {
+test("an existing learned profile with zero stored exits receives adaptive TP only", () => {
   const profile = decisionLearningProfileSchema.parse({
     ...makeOperatorTrainingBaselineProfile("existing-zero-exit-wallet", 2),
     source: "manual-training",
@@ -97,5 +97,23 @@ test("an existing learned profile with zero stored exits still receives adaptive
   });
 
   assert.ok(plan.takeProfitPercent > 0);
-  assert.ok(plan.stopLossPercent > 0);
+  assert.equal(plan.stopLossPercent, 0);
+});
+
+test("agent runtime suppresses a configured SL even before a learning profile exists", () => {
+  const plan = applyLearnedTradePlan({
+    basePlan: {
+      collateralPercent: 25,
+      leverage: 10,
+      stopLossPercent: 4,
+      takeProfitPercent: 25,
+      volatilityPercent: 2,
+    },
+    asset: "SOL",
+    points: [],
+    profile: null,
+  });
+
+  assert.equal(plan.takeProfitPercent, 25);
+  assert.equal(plan.stopLossPercent, 0);
 });

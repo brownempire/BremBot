@@ -57,6 +57,6 @@ export function makeOperatorTrainingBaselineProfile(
       passed: true,
       reasons: ["Operator-selected baseline activated while BremLogic collects enough closed trades for walk-forward training."],
     },
-    summary: "Operator baseline: 15-minute window, 0.14% trend, 0.19% breakout, 180-second cooldown, 80% allocation cap, 25% starting TP with adaptive risk protection, and 50x leverage cap.",
+    summary: "Operator baseline: 15-minute window, 0.14% trend, 0.19% breakout, 180-second cooldown, 80% allocation cap, 25% starting adaptive TP, no agent-generated SL, and 50x leverage cap.",
   };
 }
