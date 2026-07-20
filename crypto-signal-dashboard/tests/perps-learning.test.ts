@@ -61,7 +61,7 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(plan.collateralPercent, 80);
   assert.equal(plan.leverage, 50);
   assert.ok(plan.takeProfitPercent >= 25 && plan.takeProfitPercent <= 50);
-  assert.ok(plan.stopLossPercent >= 0.5 && plan.stopLossPercent <= 5.5);
+  assert.equal(plan.stopLossPercent, 0);
   assert.ok(plan.takeProfitPercent > plan.stopLossPercent);
 });
 
@@ -195,8 +195,8 @@ test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted r
 
   assert.equal(plan.leverage, 3);
   assert.ok(plan.collateralPercent <= 10);
-  assert.ok(plan.stopLossPercent >= 2.5);
-  assert.ok(plan.takeProfitPercent > plan.stopLossPercent * 2);
+  assert.equal(plan.stopLossPercent, 0);
+  assert.ok(plan.takeProfitPercent > 0);
 });
 
 test("profitable chronological holdout history promotes a versioned learned profile", async () => {

@@ -47,7 +47,12 @@ export function applyLearnedTradePlan(input: {
   profile: DecisionLearningProfile | null;
 }) {
   if (!input.profile) {
-    return { ...input.basePlan, atrPercent: computeAtrPercent(input.points), profileId: null };
+    return {
+      ...input.basePlan,
+      stopLossPercent: 0,
+      atrPercent: computeAtrPercent(input.points),
+      profileId: null,
+    };
   }
   const adjustment = input.profile.assetAdjustments[input.asset];
   const leverage = clamp(
@@ -57,14 +62,14 @@ export function applyLearnedTradePlan(input: {
   );
   const atrPercent = computeAtrPercent(input.points, input.profile.atrLookback);
   const atrStopRoe = atrPercent * input.profile.atrStopMultiplier * leverage;
-  const stopLossPercent = clamp(
+  const riskReferencePercent = clamp(
     Math.max(input.profile.stopLossRoePercent, atrStopRoe),
     0.5,
     5.5
   );
   const estimatedRoundTripFeeRoe = 0.12 * leverage;
   const feeAdjustedRewardTarget = input.profile.minimumRewardRiskRatio
-    * (stopLossPercent + estimatedRoundTripFeeRoe)
+    * (riskReferencePercent + estimatedRoundTripFeeRoe)
     + estimatedRoundTripFeeRoe;
   const takeProfitPercent = clamp(
     Math.max(input.profile.takeProfitRoePercent, feeAdjustedRewardTarget),
@@ -79,14 +84,14 @@ export function applyLearnedTradePlan(input: {
         input.profile.maximumAllocationPercent
       ).toFixed(2)),
       leverage: Number(leverage.toFixed(2)),
-      stopLossPercent: Number(stopLossPercent.toFixed(2)),
+      stopLossPercent: 0,
       takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
       volatilityPercent: input.basePlan.volatilityPercent,
       atrPercent: Number(atrPercent.toFixed(4)),
       profileId: input.profile.profileId,
     };
   }
-  const riskSizedAllocation = input.profile.targetWalletRiskPercent / stopLossPercent * 100;
+  const riskSizedAllocation = input.profile.targetWalletRiskPercent / riskReferencePercent * 100;
   const collateralPercent = clamp(
     Math.min(
       input.basePlan.collateralPercent,
@@ -99,7 +104,7 @@ export function applyLearnedTradePlan(input: {
   return {
     collateralPercent: Number(collateralPercent.toFixed(2)),
     leverage: Number(leverage.toFixed(2)),
-    stopLossPercent: Number(stopLossPercent.toFixed(2)),
+    stopLossPercent: 0,
     takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
     volatilityPercent: input.basePlan.volatilityPercent,
     atrPercent: Number(atrPercent.toFixed(4)),
