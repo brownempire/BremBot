@@ -182,7 +182,11 @@ struct BremLogicWidgetEntryView: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: widgetFamily == .systemSmall ? 66 : 96, height: 28, alignment: .leading)
+                .frame(
+                    width: widgetFamily == .systemSmall ? 54 : widgetFamily == .systemMedium ? 72 : 84,
+                    height: widgetFamily == .systemSmall ? 18 : 22,
+                    alignment: .leading
+                )
         } else {
             Text("BremLogic")
                 .font(.system(size: 16, weight: .bold, design: .rounded))
@@ -192,13 +196,13 @@ struct BremLogicWidgetEntryView: View {
 
     @ViewBuilder
     private var compactContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .top, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .top, spacing: 4) {
                 brandLogo
                     .layoutPriority(0)
                 Spacer(minLength: 4)
                 Text(updatedLabel)
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.58))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -207,30 +211,30 @@ struct BremLogicWidgetEntryView: View {
             .frame(maxWidth: .infinity)
 
             if hasOpenPerp {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(openPerpLabel)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                     Spacer(minLength: 2)
                     Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .font(.system(size: 6, weight: .bold, design: .rounded))
                         .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.52))
                         .lineLimit(1)
                 }
 
                 Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  ·  "))
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(pnlColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
 
-                HStack(spacing: 5) {
+                HStack(spacing: 3) {
                     smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
                     smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
                 }
-                HStack(spacing: 5) {
+                HStack(spacing: 3) {
                     smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
                     smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
                 }
@@ -252,9 +256,9 @@ struct BremLogicWidgetEntryView: View {
 
             Spacer(minLength: 0)
 
-            HStack(alignment: .center, spacing: 5) {
+            HStack(alignment: .center, spacing: 3) {
                 Text(entry.snapshot.perpsAutoTradeStatus ?? "Agent status unavailable")
-                    .font(.system(size: 7, weight: .semibold, design: .rounded))
+                    .font(.system(size: 6, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.56))
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
@@ -262,9 +266,9 @@ struct BremLogicWidgetEntryView: View {
                 if #available(iOS 17.0, *) {
                     Button(intent: BremLogicWidgetRefreshIntent()) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
                             .foregroundStyle(brandPrimary)
-                            .frame(width: 24, height: 22)
+                            .frame(width: 20, height: 18)
                             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
                             .contentShape(Rectangle())
                     }
@@ -278,45 +282,45 @@ struct BremLogicWidgetEntryView: View {
     private func smallMetric(_ title: String, _ value: String, accent: Color = .white) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
-                .font(.system(size: 6, weight: .semibold, design: .rounded))
+                .font(.system(size: 5.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.46))
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     @ViewBuilder
     private var mediumContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
                 brandLogo
                 VStack(alignment: .leading, spacing: 1) {
                     Text(openPerpLabel)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  ·  "))
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(pnlColor)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 4)
                 Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
                     .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.55))
             }
 
             if hasOpenPerp {
-                chart(height: 74)
-                HStack(spacing: 5) {
+                chart(height: 50)
+                HStack(spacing: 3) {
                     smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
                     smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
                     smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
@@ -332,39 +336,39 @@ struct BremLogicWidgetEntryView: View {
     }
 
     private func metricTile(_ title: String, _ value: String, accent: Color = .white) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(title.uppercased())
-                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                .font(.system(size: 7, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(Color.white.opacity(0.065), lineWidth: 1)
         }
     }
 
     @ViewBuilder
     private var largeContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 brandLogo
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
                     Text("Updated \(updatedLabel)")
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                 }
             }
@@ -373,15 +377,15 @@ struct BremLogicWidgetEntryView: View {
                 HStack(alignment: .bottom, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("OPEN PERPS")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(brandPrimary)
                         Text(openPerpLabel)
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
                         Text(openPerpDetail)
-                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(0.68))
                             .lineLimit(1)
                     }
@@ -389,23 +393,23 @@ struct BremLogicWidgetEntryView: View {
                     if let pnlLabel {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text("UNREALIZED PNL")
-                                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                .font(.system(size: 7, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white.opacity(0.5))
                             Text(pnlLabel)
-                                .font(.system(size: 19, weight: .bold, design: .rounded))
+                                .font(.system(size: 17, weight: .bold, design: .rounded))
                                 .foregroundStyle(pnlColor)
                             if let pnlPercentLabel {
                                 Text(pnlPercentLabel)
-                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
                                     .foregroundStyle(pnlColor.opacity(0.9))
                             }
                         }
                     }
                 }
 
-                chart(height: 82)
+                chart(height: 64)
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
                     metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
                     metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
                     metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
@@ -433,7 +437,7 @@ struct BremLogicWidgetEntryView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 7) {
+            HStack(spacing: 4) {
                 metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
                 metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
                 metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
@@ -443,7 +447,7 @@ struct BremLogicWidgetEntryView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(brandPrimary)
-                            .frame(width: 36, height: 42)
+                            .frame(width: 30, height: 32)
                             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .contentShape(Rectangle())
                     }
@@ -451,7 +455,7 @@ struct BremLogicWidgetEntryView: View {
                     .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(Color.white.opacity(0.08))
@@ -462,57 +466,56 @@ struct BremLogicWidgetEntryView: View {
 
     @ViewBuilder
     private var extraLargeContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 brandLogo
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
                     Text("Updated \(updatedLabel)")
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                        .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                 }
             }
 
             if hasOpenPerp {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 7) {
+                HStack(alignment: .top, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
                         Text("OPEN PERPS")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundStyle(brandPrimary)
                         Text(openPerpLabel)
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
                             .foregroundStyle(.white)
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
                         Text(openPerpDetail)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
                             .foregroundStyle(.white.opacity(0.68))
-                            .lineLimit(2)
-                        Spacer(minLength: 4)
+                            .lineLimit(1)
                         if let pnlLabel {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text("UNREALIZED PNL")
-                                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                    .font(.system(size: 7, weight: .semibold, design: .rounded))
                                     .foregroundStyle(.white.opacity(0.5))
                                 Text(pnlLabel)
-                                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                                    .font(.system(size: 19, weight: .bold, design: .rounded))
                                     .foregroundStyle(pnlColor)
                                 if let pnlPercentLabel {
                                     Text(pnlPercentLabel)
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .font(.system(size: 9, weight: .bold, design: .rounded))
                                         .foregroundStyle(pnlColor.opacity(0.9))
                                 }
                             }
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(12)
-                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(8)
+                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4), spacing: 7) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
                         metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
                         metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
                         metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
@@ -525,7 +528,7 @@ struct BremLogicWidgetEntryView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
 
-                chart(height: 94)
+                chart(height: 66)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("OPEN PERPS")
@@ -542,7 +545,7 @@ struct BremLogicWidgetEntryView: View {
                 .padding(.top, 16)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
                 metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
                 metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
@@ -552,7 +555,7 @@ struct BremLogicWidgetEntryView: View {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundStyle(brandPrimary)
-                            .frame(width: 34, height: 42)
+                            .frame(width: 30, height: 32)
                             .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                             .contentShape(Rectangle())
                     }
@@ -560,7 +563,7 @@ struct BremLogicWidgetEntryView: View {
                     .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
             .overlay(alignment: .top) {
                 Rectangle()
                     .fill(Color.white.opacity(0.08))
@@ -583,8 +586,8 @@ struct BremLogicWidgetEntryView: View {
                 }
             }
         )
-        .padding(.horizontal, widgetFamily == .systemLarge ? 12 : 10)
-        .padding(.vertical, widgetFamily == .systemLarge ? 10 : 8)
+        .padding(.horizontal, widgetFamily == .systemSmall ? 5 : widgetFamily == .systemMedium ? 6 : 8)
+        .padding(.vertical, widgetFamily == .systemSmall ? 4 : widgetFamily == .systemMedium ? 6 : 8)
         .widgetURL(URL(string: entry.snapshot.targetURL))
     }
 }
