@@ -141,13 +141,17 @@ struct BremLogicWidgetEntryView: View {
     }
 
     private func chart(height: CGFloat) -> some View {
-        BremLogicCandlestickChart(
-            candles: chartCandles,
-            symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
-            entryPrice: entry.snapshot.openPerpEntryPrice,
-            markPrice: entry.snapshot.openPerpMarkPrice,
-            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
-        )
+        GeometryReader { geometry in
+            BremLogicCandlestickChart(
+                candles: chartCandles,
+                symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
+                entryPrice: entry.snapshot.openPerpEntryPrice,
+                markPrice: entry.snapshot.openPerpMarkPrice,
+                takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
+            )
+            .frame(width: max(1, geometry.size.width * 0.5), height: height)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        }
         .frame(height: height)
     }
 
