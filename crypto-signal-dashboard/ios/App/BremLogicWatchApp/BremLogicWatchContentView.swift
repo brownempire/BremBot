@@ -69,21 +69,44 @@ struct BremLogicWatchContentView: View {
             .padding(.horizontal, 3)
             .padding(.bottom, 6)
         }
-        .task { await reload() }
+        .task { await runRefreshLoop() }
         .refreshable { await reload() }
     }
 
     private var brandedHeader: some View {
-        HStack(spacing: 4) {
+        HStack(alignment: .top, spacing: 4) {
             BremLogicOfficialLogo(width: 78, height: 25)
             Spacer()
-            Circle()
-                .fill(snapshot.perpsSessionState == "Clocked In" ? Color.green : Color.secondary)
-                .frame(width: 6, height: 6)
-            Text(snapshot.perpsSessionState == "Clocked In" ? "LIVE" : "IDLE")
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                .foregroundStyle(.secondary)
-            if isLoading { ProgressView().controlSize(.mini) }
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 3) {
+                    Circle()
+                        .fill(snapshot.perpsSessionState == "Clocked In" ? Color.green : Color.secondary)
+                        .frame(width: 6, height: 6)
+                    Text(snapshot.perpsSessionState == "Clocked In" ? "LIVE" : "IDLE")
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Group {
+                        if isLoading {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                    }
+                    .frame(width: 24, height: 20)
+                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoading)
+                .accessibilityLabel("Refresh BremLogic")
+                .accessibilityHint("Fetches the latest position and wallet information")
+            }
         }
     }
 
@@ -135,5 +158,20 @@ struct BremLogicWatchContentView: View {
             WidgetCenter.shared.reloadAllTimelines()
         }
         isLoading = false
+    }
+
+    @MainActor
+    private func runRefreshLoop() async {
+        await reload()
+
+        while !Task.isCancelled {
+            let interval = BremLogicWatchRefreshPolicy.interval(for: snapshot)
+            do {
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            } catch {
+                return
+            }
+            await reload()
+        }
     }
 }

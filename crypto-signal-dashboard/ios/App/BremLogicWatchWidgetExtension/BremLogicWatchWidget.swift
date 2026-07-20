@@ -8,6 +8,7 @@ struct BremLogicWatchEntry: TimelineEntry {
 
 struct BremLogicWatchProvider: TimelineProvider {
     private static let cacheKey = "BremLogicWatchWidgetSnapshot"
+    private static let lastRefreshReloadKey = "BremLogicWatchWidgetLastRefreshReload"
 
     private func cachedSnapshot() -> BremLogicWatchSnapshot? {
         guard let data = UserDefaults.standard.data(forKey: Self.cacheKey) else { return nil }
@@ -21,9 +22,22 @@ struct BremLogicWatchProvider: TimelineProvider {
 
     private func refreshCache() {
         Task {
-            if let snapshot = try? await BremLogicWatchServerClient.fetch(timeoutInterval: 8) {
-                cache(snapshot)
-            }
+            guard let snapshot = try? await BremLogicWatchServerClient.fetch(timeoutInterval: 8) else { return }
+            cache(snapshot)
+
+            // The first timeline must remain synchronous so watchOS always has
+            // a complication to draw. Request one follow-up timeline after the
+            // network value arrives, then throttle it to avoid a reload loop.
+            let now = Date()
+            let interval = BremLogicWatchRefreshPolicy.interval(for: snapshot)
+            let minimumReloadInterval = max(30, interval * 0.8)
+            let lastReload = UserDefaults.standard.object(forKey: Self.lastRefreshReloadKey) as? Date
+            if let lastReload, now.timeIntervalSince(lastReload) < minimumReloadInterval { return }
+
+            UserDefaults.standard.set(now, forKey: Self.lastRefreshReloadKey)
+            WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicWatchWidget")
+            WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicWalletWatchWidget")
+            WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicAgentWatchWidget")
         }
     }
 
@@ -41,11 +55,8 @@ struct BremLogicWatchProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicWatchEntry>) -> Void) {
-        // Hand WidgetKit an entry synchronously. A complication extension can
-        // be suspended before an initial network request finishes, which leaves
-        // the face with an empty slot and no timeline to render.
         let snapshot = cachedSnapshot() ?? .fallback
-        let refreshInterval: TimeInterval = snapshot.hasOpenPerp ? 60 : 5 * 60
+        let refreshInterval = BremLogicWatchRefreshPolicy.interval(for: snapshot)
         completion(Timeline(
             entries: [BremLogicWatchEntry(date: Date(), snapshot: snapshot)],
             policy: .after(Date().addingTimeInterval(refreshInterval))

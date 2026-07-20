@@ -2,6 +2,15 @@ import Foundation
 
 let BremLogicWatchServerURL = URL(string: "https://app.bremlogic.com/api/widget/summary")!
 
+enum BremLogicWatchRefreshPolicy {
+    static let openPositionInterval: TimeInterval = 60
+    static let monitoringInterval: TimeInterval = 5 * 60
+
+    static func interval(for snapshot: BremLogicWatchSnapshot) -> TimeInterval {
+        snapshot.hasOpenPerp ? openPositionInterval : monitoringInterval
+    }
+}
+
 struct BremLogicWatchSnapshot: Codable {
     var openPerpLabel: String?
     var openPerpDetail: String?
