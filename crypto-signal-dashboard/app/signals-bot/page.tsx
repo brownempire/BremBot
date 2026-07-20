@@ -37,6 +37,7 @@ import { calculatePnlSince } from "@/lib/perps/pnl";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
+import { MAX_SIGNAL_HISTORY, normalizeSignalHistory, VISIBLE_SIGNAL_ROWS } from "@/lib/signal/history";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -958,6 +959,10 @@ function tradesStorageKey(walletAddress: string) {
   return `brembot.recent-trades.${walletAddress}`;
 }
 
+function signalsStorageKey(walletAddress: string) {
+  return `brembot.recent-signals.${walletAddress}`;
+}
+
 function remoteTradesAuthStorageKey(walletAddress: string) {
   return `${REMOTE_AUTH_TOKEN_STORAGE_KEY}.${walletAddress}`;
 }
@@ -1211,6 +1216,7 @@ function DashboardPage() {
       : remoteAuthSource === "phantom"
         ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
         : walletAddress ?? "paper-auto";
+  const signalStorageAddress = remoteSyncWalletAddress ?? tradeStorageAddress;
   const automationConfigSyncLabel = automationConfigSync.walletAddress
     ? `${automationConfigSync.message} · ${shortAddress(automationConfigSync.walletAddress)}${automationConfigSync.revision > 0 ? ` · revision ${automationConfigSync.revision}` : ""}${automationConfigSync.updatedAt ? ` · ${new Date(automationConfigSync.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
     : automationConfigSync.message;
@@ -2568,6 +2574,24 @@ function DashboardPage() {
     }).catch(() => undefined);
   }, [remoteAuthAddress, remoteAuthToken, tradeStorageAddress]);
 
+  const syncSignalToRemote = useCallback(async (signal: Signal) => {
+    if (!remoteAuthToken || !remoteAuthAddress || remoteAuthAddress !== signalStorageAddress) return;
+    await fetch("/api/signals", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${remoteAuthToken}`,
+      },
+      body: JSON.stringify({ signal }),
+    }).then((response) => {
+      if (response.status === 401) {
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+        setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+      }
+    }).catch(() => undefined);
+  }, [remoteAuthAddress, remoteAuthToken, signalStorageAddress]);
+
   useEffect(() => {
     let cancelled = false;
     let simulateInterval: ReturnType<typeof setInterval> | null = null;
@@ -2737,7 +2761,8 @@ function DashboardPage() {
 
           newSignals.forEach((signal) => {
             if (next.some((existing) => existing.id === signal.id)) return;
-            next = [signal, ...next].slice(0, 12);
+            next = normalizeSignalHistory([signal, ...next]);
+            void syncSignalToRemote(signal);
 
             void sendSignalNotification(`Signal: ${signal.symbol}`, signal.summary, undefined, NATIVE_NOTIFICATION_SOUNDS.signal);
 
@@ -3197,6 +3222,11 @@ function DashboardPage() {
         }
       });
 
+      try {
+        window.localStorage.setItem(signalsStorageKey(signalStorageAddress), JSON.stringify(next));
+      } catch {
+        // The in-memory feed still works if device storage is unavailable.
+      }
       return next;
     });
   }, [
@@ -3231,6 +3261,8 @@ function DashboardPage() {
     wallet.publicKey,
     walletTokens,
     solBalance,
+    signalStorageAddress,
+    syncSignalToRemote,
   ]);
 
   useEffect(() => {
@@ -4199,6 +4231,16 @@ function DashboardPage() {
   }, [tradeStorageAddress]);
 
   useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(signalsStorageKey(signalStorageAddress));
+      const parsed = raw ? JSON.parse(raw) : [];
+      setSignals(normalizeSignalHistory(Array.isArray(parsed) ? parsed : []));
+    } catch {
+      setSignals([]);
+    }
+  }, [signalStorageAddress]);
+
+  useEffect(() => {
     if (!remoteAuthSource || !remoteSyncWalletAddress) {
       setRemoteAuthToken(null);
       setRemoteAuthAddress(null);
@@ -4303,6 +4345,53 @@ function DashboardPage() {
       cancelled = true;
     };
   }, [remoteAuthToken, remoteSyncWalletAddress, tradeStorageAddress]);
+
+  useEffect(() => {
+    if (!remoteSyncWalletAddress || !remoteAuthToken || remoteSyncWalletAddress !== signalStorageAddress) return;
+    let cancelled = false;
+    fetch(`/api/signals?address=${encodeURIComponent(remoteSyncWalletAddress)}`, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${remoteAuthToken}` },
+    }).then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (cancelled) return;
+      if (!response.ok) {
+        if (response.status === 401) {
+          setRemoteAuthToken(null);
+          setRemoteAuthAddress(null);
+          setRemoteAuthStatus("Remote auth expired. Re-sign to continue syncing.");
+        }
+        return;
+      }
+      let localSignals: unknown[] = [];
+      try {
+        const localRaw = window.localStorage.getItem(signalsStorageKey(signalStorageAddress));
+        const parsedLocal = localRaw ? JSON.parse(localRaw) : [];
+        localSignals = Array.isArray(parsedLocal) ? parsedLocal : [];
+      } catch {
+        localSignals = [];
+      }
+      const merged = normalizeSignalHistory([
+        ...localSignals,
+        ...(Array.isArray(payload?.signals) ? payload.signals : []),
+      ]);
+      setSignals(merged);
+      window.localStorage.setItem(signalsStorageKey(signalStorageAddress), JSON.stringify(merged));
+      if (merged.length > 0) {
+        await fetch("/api/signals", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${remoteAuthToken}`,
+          },
+          body: JSON.stringify({ signals: merged }),
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteAuthToken, remoteSyncWalletAddress, signalStorageAddress]);
 
   const refreshWalletPortfolio = useCallback(async () => {
     const portfolioPublicKey = portfolioWalletAddress ? new PublicKey(portfolioWalletAddress) : null;
@@ -4593,8 +4682,6 @@ function DashboardPage() {
   function updateTrackedMarket(slotId: string, nextProduct: string) {
     const option = marketOptions.find((item) => item.coinbaseProduct === nextProduct);
     if (!option) return;
-    const previousPair = trackedMarkets.find((market) => market.id === slotId)?.pair;
-
     setTrackedMarkets((prev) =>
       prev.map((market) => (market.id === slotId ? { ...market, ...option } : market))
     );
@@ -4605,9 +4692,6 @@ function DashboardPage() {
       delete next[slotId];
       return next;
     });
-    if (previousPair) {
-      setSignals((prev) => prev.filter((signal) => signal.symbol !== previousPair));
-    }
     setSelectedChartSlotId(slotId);
     setReceiveSignalsForSlotId(slotId);
   }
@@ -4977,9 +5061,20 @@ function DashboardPage() {
     }
   }
 
-  function clearRecentSignals() {
+  async function clearRecentSignals() {
     setSignals([]);
     setLastSignalAt({});
+    try {
+      window.localStorage.removeItem(signalsStorageKey(signalStorageAddress));
+    } catch {
+      // ignore storage errors
+    }
+    if (remoteAuthToken && remoteAuthAddress === signalStorageAddress) {
+      await fetch("/api/signals", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${remoteAuthToken}` },
+      }).catch(() => undefined);
+    }
   }
 
   async function handleManualSwapSuccess(result: JupiterTradeRecord) {
@@ -5734,13 +5829,14 @@ function DashboardPage() {
             <button type="button" className="secondary" onClick={clearRecentSignals}>Clear Signals</button>
           </div>
           {signals.length === 0 && <div className="subtext">Waiting for signal triggers.</div>}
-          <div className="signals-scroll">
+          {signals.length > 0 && <div className="subtext">Showing the newest signals for this wallet · {signals.length}/{MAX_SIGNAL_HISTORY}</div>}
+          <div className="signals-scroll" style={{ maxHeight: VISIBLE_SIGNAL_ROWS * 80 }}>
             {signals.map((signal) => (
               <div key={signal.id} className={`signal ${signal.direction === "bearish" ? "negative" : ""}`}>
                 <div>
                   <div>{signal.symbol} · {signal.type.toUpperCase()}</div>
                   <div className="signal-meta">{signal.summary}</div>
-                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleTimeString()}</div>
+                  <div className="subtext">Signal time: {new Date(signal.timestamp).toLocaleString()}</div>
                 </div>
                 <div>{Math.round(signal.confidence * 100)}%</div>
               </div>

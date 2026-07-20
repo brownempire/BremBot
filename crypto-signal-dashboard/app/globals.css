@@ -1393,6 +1393,10 @@ button:disabled {
   padding-right: 4px;
 }
 
+.signals-scroll .signal {
+  min-height: 72px;
+}
+
 .wallet-adapter-button {
   background: rgba(101, 217, 255, 0.15) !important;
   border: 1px solid rgba(101, 217, 255, 0.25) !important;
