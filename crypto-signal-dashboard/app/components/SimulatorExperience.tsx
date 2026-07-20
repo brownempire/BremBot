@@ -643,8 +643,14 @@ export function SimulatorExperience() {
         logNote,
       });
       const date = new Date().toISOString().slice(0, 10);
-      pdf.save(`bremlogic-${monteCarloMode ? "monte-carlo" : "simple"}-results-${date}.pdf`);
-      setPdfStatus("PDF saved with the graph and complete results.");
+      const filename = `bremlogic-${monteCarloMode ? "monte-carlo" : "simple"}-results-${date}.pdf`;
+      const { saveSimulatorPdf } = await import("@/app/lib/simulatorPdfStorage");
+      const status = await saveSimulatorPdf({
+        dataUri: pdf.output("datauristring"),
+        filename,
+        webSave: () => pdf.save(filename),
+      });
+      setPdfStatus(status);
     } catch (error) {
       setPdfStatus(error instanceof Error ? error.message : "Unable to save the simulator PDF.");
     } finally {

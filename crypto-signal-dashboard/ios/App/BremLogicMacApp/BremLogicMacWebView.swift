@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 @MainActor
@@ -23,6 +24,7 @@ final class BremLogicMacBrowser: NSObject, ObservableObject {
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
 
+        webView.configuration.userContentController.add(self, name: "bremLogicFiles")
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsMagnification = true
@@ -53,6 +55,69 @@ final class BremLogicMacBrowser: NSObject, ObservableObject {
         isLoading = false
         guard webView.url == nil else { return }
         blockingError = error.localizedDescription
+    }
+}
+
+extension BremLogicMacBrowser: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "bremLogicFiles",
+              let payload = message.body as? [String: Any],
+              payload["action"] as? String == "savePdf",
+              let requestId = payload["requestId"] as? String,
+              let filename = payload["filename"] as? String,
+              let base64Data = payload["base64Data"] as? String,
+              let pdfData = Data(base64Encoded: base64Data) else { return }
+
+        let panel = NSSavePanel()
+        panel.title = "Save BremLogic Simulator Results"
+        panel.nameFieldStringValue = filename
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.pdf]
+
+        let complete: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            if response != .OK {
+                self.sendFileResult(requestId: requestId, ok: false, cancelled: true)
+                return
+            }
+            guard let destination = panel.url else {
+                self.sendFileResult(requestId: requestId, ok: false, error: "No save location was selected.")
+                return
+            }
+            do {
+                try pdfData.write(to: destination, options: .atomic)
+                self.sendFileResult(requestId: requestId, ok: true, path: destination.path)
+            } catch {
+                self.sendFileResult(requestId: requestId, ok: false, error: error.localizedDescription)
+            }
+        }
+
+        if let window = webView.window {
+            panel.beginSheetModal(for: window, completionHandler: complete)
+        } else {
+            complete(panel.runModal())
+        }
+    }
+
+    private func sendFileResult(
+        requestId: String,
+        ok: Bool,
+        path: String? = nil,
+        cancelled: Bool = false,
+        error: String? = nil
+    ) {
+        let payload: [String: Any?] = [
+            "requestId": requestId,
+            "ok": ok,
+            "path": path,
+            "cancelled": cancelled,
+            "error": error,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload.compactMapValues { $0 }),
+              let json = String(data: data, encoding: .utf8) else { return }
+        webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('bremlogic:native-file-result', { detail: \(json) }));"
+        )
     }
 }
 
