@@ -28,6 +28,29 @@ redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return {1, encoded}
 `;
 
+const DISABLE_SCALP_MODE_SCRIPT = `
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+if not current then
+  return ''
+end
+
+local ok, decoded = pcall(cjson.decode, current)
+if not ok or not decoded.settings then
+  return ''
+end
+
+if decoded.settings.scalpModeEnabled ~= true then
+  return current
+end
+
+decoded.settings.scalpModeEnabled = false
+decoded.revision = (tonumber(decoded.revision) or 1) + 1
+decoded.updatedAt = ARGV[2]
+local encoded = cjson.encode(decoded)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
 export class PerpsAutomationConfigConflictError extends Error {
   current: PerpsAutomationConfig | null;
 
@@ -93,4 +116,14 @@ export async function savePerpsAutomationConfig(
 export async function deletePerpsAutomationConfig(walletAddress: string) {
   const redis = await requireRedis();
   await redis.hDel(REDIS_KEY, walletAddress);
+}
+
+export async function disablePerpsScalpMode(walletAddress: string) {
+  const redis = await requireRedis();
+  const result = await redis.eval(DISABLE_SCALP_MODE_SCRIPT, {
+    keys: [REDIS_KEY],
+    arguments: [walletAddress, new Date().toISOString()],
+  });
+  const serialized = typeof result === "string" ? result : Buffer.isBuffer(result) ? result.toString("utf8") : "";
+  return parsePerpsAutomationConfig(serialized);
 }

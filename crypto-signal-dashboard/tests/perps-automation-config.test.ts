@@ -27,6 +27,8 @@ function createInput(): PerpsAutomationConfigInput {
       stopLossPercent: 1,
       perpsLeverage: 25,
       perpsExecutionMode: "set-parameters",
+      scalpModeEnabled: false,
+      scalpTakeProfitUsd: 2,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [{ id: "slot-sol", token: "SOL" }],
@@ -46,7 +48,12 @@ function createInput(): PerpsAutomationConfigInput {
 
 test("legacy wallet automation configs migrate to revision one", () => {
   const input = createInput();
-  const { decisionMode: _decisionMode, ...legacySettings } = input.settings;
+  const {
+    decisionMode: _decisionMode,
+    scalpModeEnabled: _scalpModeEnabled,
+    scalpTakeProfitUsd: _scalpTakeProfitUsd,
+    ...legacySettings
+  } = input.settings;
   const parsed = parsePerpsAutomationConfig(JSON.stringify({
     walletAddress,
     ...input,
@@ -56,6 +63,8 @@ test("legacy wallet automation configs migrate to revision one", () => {
 
   assert.equal(parsed?.revision, 1);
   assert.equal(parsed?.settings.decisionMode, "active");
+  assert.equal(parsed?.settings.scalpModeEnabled, false);
+  assert.equal(parsed?.settings.scalpTakeProfitUsd, 2);
   assert.equal(parsed?.walletAddress, walletAddress);
 });
 

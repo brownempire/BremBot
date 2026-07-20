@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
+import { computeTriggerPrices, detectScalpSignal, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
 
@@ -24,6 +24,8 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
       stopLossPercent: 1,
       perpsLeverage: 2,
       perpsExecutionMode: "set-parameters",
+      scalpModeEnabled: false,
+      scalpTakeProfitUsd: 2,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [
@@ -46,6 +48,96 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
     ...overrides,
   };
 }
+
+test("scalp detection only creates a range-edge signal in a sideways market", () => {
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.1, 100.05, 99.95, 99.9].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const signal = detectScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    cooldownSeconds: 180,
+    indicators: {
+      emaFast: 99.98,
+      emaSlow: 100,
+      emaSpreadPercent: -0.02,
+      emaSlopePercent: -0.01,
+      rsi: 39,
+      macdLine: -0.01,
+      macdSignal: -0.01,
+      macdHistogram: 0,
+      macdHistogramChange: 0,
+      adx: 14,
+      plusDi: 18,
+      minusDi: 20,
+      atrPercent: 0.08,
+      volumeRatio: 1,
+      bollingerBandwidthPercent: 0.6,
+      bollingerPosition: 0.12,
+    },
+  });
+
+  assert.equal(signal?.type, "scalp");
+  assert.equal(signal?.direction, "bullish");
+});
+
+test("scalp trigger pricing guarantees at least two dollars of target PnL with no stop loss", () => {
+  const config = createConfig();
+  const triggers = computeTriggerPrices({
+    config,
+    entryPrice: 100,
+    collateralUsd: 25,
+    leverage: 2,
+    side: "long",
+    stopLossPercent: 0,
+    takeProfitPercent: 0,
+    takeProfitUsd: 2,
+  });
+  const targetPnl = (((triggers.takeProfitPrice ?? 0) - 100) / 100) * 50;
+
+  assert.ok(targetPnl >= 2);
+  assert.equal(triggers.stopLossPrice, null);
+});
+
+test("a trend or breakout candidate atomically turns Scalp Mode off before smart routing", async () => {
+  let disabledWallet: string | null = null;
+  let routedStrategy: PerpsAgentSignal["strategyClass"] = undefined;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedStrategy = signal.strategyClass;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    disableScalpMode: async (address) => {
+      disabledWallet = address;
+      return null;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(disabledWallet, walletAddress);
+  assert.equal(routedStrategy, "smart");
+});
 
 function createSession(): PerpsAutomationSession {
   return {

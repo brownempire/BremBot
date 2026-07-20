@@ -14,6 +14,9 @@ type PerpsClockCardProps = {
   onClockIn: () => void;
   onClockOut: () => void;
   onViewLog: () => void;
+  scalpModeEnabled: boolean;
+  scalpTakeProfitUsd: number;
+  onToggleScalpMode: (enabled: boolean) => void;
   onToggleMode: () => void;
   onToggleDecisionMode: () => void;
   onToggleUnlimited: (enabled: boolean) => void;
@@ -69,6 +72,31 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
         <button type="button" className="secondary" onClick={props.onViewLog} disabled={props.isBusy}>
           Log
         </button>
+        <details className="perps-scalp-menu">
+          <summary className={`secondary ${props.scalpModeEnabled ? "is-enabled" : ""}`}>
+            Scalp {props.scalpModeEnabled ? "On" : "Off"}
+          </summary>
+          <div className="perps-scalp-dropdown">
+            <div>
+              <strong>Scalp Mode</strong>
+              <div className="subtext">Sideways-market strategy</div>
+            </div>
+            <label className="perps-scalp-switch">
+              <input
+                type="checkbox"
+                checked={props.scalpModeEnabled}
+                onChange={(event) => props.onToggleScalpMode(event.target.checked)}
+                disabled={props.isBusy}
+                aria-label={`Turn Scalp Mode ${props.scalpModeEnabled ? "off" : "on"}`}
+              />
+              <span aria-hidden="true" />
+            </label>
+            <div className="perps-scalp-rule">
+              Minimum take profit <strong>${props.scalpTakeProfitUsd.toFixed(2)}</strong>
+            </div>
+            <div className="subtext">Automatically turns off when a trend or breakout signal appears.</div>
+          </div>
+        </details>
       </div>
       <label className="auto-trade-checkbox-row">
         <input

@@ -12,6 +12,7 @@ type ExecutionItem = {
   reasonMessage: string;
   createdAt: string;
   txid?: string | null;
+  strategyClass?: "smart" | "scalp";
 };
 
 type PerpsExecutionFeedProps = {
@@ -104,7 +105,7 @@ export function PerpsExecutionFeed({ executions, onClear }: PerpsExecutionFeedPr
               className="perps-agent-feed-row"
             >
               <div>
-                <strong>{execution.symbol} {execution.side === "long" ? "long" : "short"}</strong>
+                <strong>{execution.strategyClass === "scalp" ? "Scalp" : "Smart"} · {execution.symbol} {execution.side === "long" ? "long" : "short"}</strong>
                 <div className="subtext">{execution.reasonMessage}</div>
               </div>
               <div style={{ textAlign: "right" }}>

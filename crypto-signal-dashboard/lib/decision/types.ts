@@ -47,10 +47,11 @@ export const tradeDecisionPayloadSchema = z.object({
   direction: z.enum(["bullish", "bearish"]),
   signalConfidence: z.number().finite().min(0).max(1).nullable(),
   asset: z.enum(["SOL", "ETH", "BTC"]),
+  strategyClass: z.enum(["smart", "scalp"]).optional(),
   requestedTrade: tradeDecisionRequestedTradeSchema,
   marketContext: tradeDecisionMarketContextSchema,
   strategyContext: z.object({
-    signalType: z.enum(["trend", "breakout"]),
+    signalType: z.enum(["trend", "breakout", "scalp"]),
     trendWindow: z.number().finite().min(1),
     trendThreshold: z.number().finite().min(0),
     breakoutPercent: z.number().finite().min(0),

@@ -27,7 +27,7 @@ export const tradeLearningOutcomeSchema = z.object({
   durationMinutes: z.number().finite().min(0),
   exitReason: z.enum(["take-profit", "stop-loss", "liquidation", "manual", "unknown"]),
   signalConfidence: z.number().finite().min(0).max(1).nullable(),
-  signalType: z.enum(["trend", "breakout"]).nullable(),
+  signalType: z.enum(["trend", "breakout", "scalp"]).nullable(),
   trendWindow: z.number().finite().min(1).nullable(),
   trendThreshold: z.number().finite().min(0).nullable(),
   breakoutPercent: z.number().finite().min(0).nullable(),

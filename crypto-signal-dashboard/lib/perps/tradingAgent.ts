@@ -244,6 +244,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       decisionSummary: decision.recommendation.explanationSummary,
       decisionTags: decision.recommendation.explanationTags,
       decisionShadowMode: decision.recommendation.shadowMode,
+      strategyClass: signal.strategyClass ?? "smart",
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -300,6 +301,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     decisionSummary: decision.recommendation.explanationSummary,
     decisionTags: decision.recommendation.explanationTags,
     decisionShadowMode: decision.recommendation.shadowMode,
+    strategyClass: signal.strategyClass ?? "smart",
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };

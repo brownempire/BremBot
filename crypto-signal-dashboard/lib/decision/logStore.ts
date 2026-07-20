@@ -29,7 +29,7 @@ function formatDecisionMarkdown(record: TradeDecisionRecord) {
   const history = payload.historyContext;
 
   return [
-    `## ${payload.createdAt} · ${payload.symbol} · ${payload.direction.toUpperCase()} · ${payload.sessionMode.toUpperCase()}`,
+    `## ${payload.createdAt} · ${(payload.strategyClass ?? "smart").toUpperCase()} · ${payload.symbol} · ${payload.direction.toUpperCase()} · ${payload.sessionMode.toUpperCase()}`,
     `- Wallet: ${shortenWalletAddress(payload.walletAddress)}`,
     `- Session: ${payload.sessionId} · ${payload.executionModel} · shadow mode ${recommendation.shadowMode ? "on" : "off"}`,
     `- Decision: ${recommendation.shouldTrade ? "TAKE" : "SKIP"} · confidence ${formatNumber(recommendation.confidenceScore, 3)} · risk ${recommendation.riskGrade}`,

@@ -6,7 +6,7 @@ import {
   isPerpsAutomationEnabled,
   type PerpsAutomationConfig,
 } from "@/lib/perps/automationConfig";
-import { listPerpsAutomationConfigs } from "@/lib/perps/automationConfigStore";
+import { disablePerpsScalpMode, listPerpsAutomationConfigs } from "@/lib/perps/automationConfigStore";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
 import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
 import { listPerpsSessions } from "@/lib/perps/sessionStore";
@@ -22,6 +22,7 @@ import {
   BASE_INDICATOR_SETTINGS,
   computeIndicatorSnapshot,
   scoreIndicatorSnapshot,
+  type IndicatorSnapshot,
   type IndicatorSettings,
 } from "@/lib/signal/indicators";
 import { getRedisClient } from "@/lib/server/redis";
@@ -38,6 +39,8 @@ const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const MIN_TPSL_EXPECTED_PNL_USD = 1;
+
+type AutonomousSignal = Omit<Signal, "type"> & { type: Signal["type"] | "scalp" };
 
 type MonitorExecutionResult = {
   walletAddress: string;
@@ -72,6 +75,7 @@ type MonitorDependencies = {
   getLearningProfile: (walletAddress: string) => Promise<DecisionLearningProfile | null>;
   reconcileLearningHistory: (walletAddress: string, snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>) => Promise<number>;
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
+  disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
   readLastSignal: (walletAddress: string, asset: string) => Promise<number | null>;
   writeLastSignal: (walletAddress: string, asset: string, timestamp: number) => Promise<void>;
 };
@@ -99,6 +103,7 @@ const defaultDependencies: MonitorDependencies = {
   autoTrain: async (walletAddress, config) => {
     await trainWalletDecisionProfile({ walletAddress, config, source: "automatic" });
   },
+  disableScalpMode: disablePerpsScalpMode,
   readLastSignal: async (walletAddress, asset) => {
     const redis = await getRedisClient();
     if (!redis) return null;
@@ -135,6 +140,53 @@ function computeTrendBias(points: PricePoint[]): "bullish" | "bearish" | "sidewa
   return "sideways";
 }
 
+export function detectScalpSignal(options: {
+  symbol: string;
+  points: PricePoint[];
+  indicators: IndicatorSnapshot;
+  cooldownSeconds: number;
+  lastSignalAt?: number | null;
+}): AutonomousSignal | null {
+  const { points, indicators } = options;
+  const latest = points[points.length - 1];
+  if (!latest || points.length < 3) return null;
+  if (options.lastSignalAt && latest.t - options.lastSignalAt < options.cooldownSeconds * 1_000) return null;
+  if (computeTrendBias(points) !== "sideways") return null;
+  if (
+    indicators.adx === null
+    || indicators.adx > 20
+    || indicators.emaSpreadPercent === null
+    || Math.abs(indicators.emaSpreadPercent) > 0.35
+    || indicators.atrPercent === null
+    || indicators.atrPercent < 0.02
+    || indicators.bollingerBandwidthPercent === null
+    || indicators.bollingerBandwidthPercent < 0.1
+    || indicators.bollingerPosition === null
+    || indicators.rsi === null
+  ) return null;
+
+  const longSetup = indicators.bollingerPosition <= 0.2 && indicators.rsi <= 45;
+  const shortSetup = indicators.bollingerPosition >= 0.8 && indicators.rsi >= 55;
+  if (!longSetup && !shortSetup) return null;
+  const direction = longSetup ? "bullish" : "bearish";
+  const bandExtremity = longSetup
+    ? clamp((0.2 - indicators.bollingerPosition) / 0.2, 0, 1)
+    : clamp((indicators.bollingerPosition - 0.8) / 0.2, 0, 1);
+  const rsiExtremity = longSetup
+    ? clamp((45 - indicators.rsi) / 20, 0, 1)
+    : clamp((indicators.rsi - 55) / 20, 0, 1);
+  const confidence = Number(clamp(0.6 + bandExtremity * 0.12 + rsiExtremity * 0.08, 0.6, 0.8).toFixed(3));
+  return {
+    id: `${options.symbol}-scalp-${latest.t}`,
+    symbol: options.symbol,
+    type: "scalp",
+    direction,
+    confidence,
+    summary: `${direction === "bullish" ? "Range-low" : "Range-high"} scalp setup at Bollinger position ${indicators.bollingerPosition.toFixed(2)} with RSI ${indicators.rsi.toFixed(1)}.`,
+    timestamp: latest.t,
+  };
+}
+
 function getIndicatorSettings(profile: DecisionLearningProfile | null): IndicatorSettings {
   const learned = profile?.indicatorSettings;
   return learned ? {
@@ -150,7 +202,7 @@ function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: numb
     : clamp(config.settings.walletPercent, 1, 100);
 }
 
-function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: Signal, availableUsdc: number) {
+function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: AutonomousSignal, availableUsdc: number) {
   const baseCollateralPercent = getCollateralPercent(config, availableUsdc);
   const volatilityPercent = computeVolatilityPercent(points);
   if (config.settings.perpsExecutionMode !== "smart-trades" || config.settings.decisionMode === "shadow") {
@@ -194,7 +246,7 @@ function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], si
   };
 }
 
-function computeTriggerPrices(options: {
+export function computeTriggerPrices(options: {
   config: PerpsAutomationConfig;
   entryPrice: number;
   collateralUsd: number;
@@ -202,10 +254,13 @@ function computeTriggerPrices(options: {
   side: "long" | "short";
   stopLossPercent: number;
   takeProfitPercent: number;
+  takeProfitUsd?: number;
 }) {
   const direction = options.side === "long" ? 1 : -1;
   const positionSizeUsd = options.collateralUsd * options.leverage;
-  const requestedTakeProfitMove = options.config.settings.perpsTakeProfitMode === "usd"
+  const requestedTakeProfitMove = typeof options.takeProfitUsd === "number"
+    ? (positionSizeUsd > 0 ? Math.max(2, options.takeProfitUsd) / positionSizeUsd : 0)
+    : options.config.settings.perpsTakeProfitMode === "usd"
     ? (positionSizeUsd > 0 ? options.config.settings.perpsTakeProfitValue / positionSizeUsd : 0)
     : options.takeProfitPercent > 0 ? options.takeProfitPercent / 100 / options.leverage : 0;
   const requestedStopLossMove = options.stopLossPercent > 0 ? options.stopLossPercent / 100 / options.leverage : 0;
@@ -299,30 +354,65 @@ export async function runAutonomousPerpsMonitor(
       }
       const lastSignalAt = await deps.readLastSignal(config.walletAddress, asset);
       const volatilityPercent = computeVolatilityPercent(windowPoints);
-      if (executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
-        results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${executionProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
-        continue;
-      }
       const signalMetrics = computeSignalMetrics(windowPoints);
-      const signal = detectSignals({
+      const smartSignalCandidate = detectSignals({
+        symbol: `${asset}/USD`,
+        points: windowPoints,
+        params: effectiveParams,
+      })[0];
+      const smartSignal = detectSignals({
         symbol: `${asset}/USD`,
         points: windowPoints,
         params: effectiveParams,
         lastSignalAt: lastSignalAt ?? undefined,
       })[0];
-      if (!signal) {
-        results.push(skip(config, asset, "NO_SIGNAL", "No qualifying signal was detected in the latest candle window."));
-        continue;
+      if (config.settings.scalpModeEnabled && smartSignalCandidate) {
+        await deps.disableScalpMode(config.walletAddress);
       }
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
-      const indicatorScore = scoreIndicatorSnapshot(indicators, signal.direction, indicatorSettings);
+      const scalpSignal = !smartSignalCandidate && config.settings.scalpModeEnabled
+        ? detectScalpSignal({
+            symbol: `${asset}/USD`,
+            points: windowPoints,
+            indicators,
+            cooldownSeconds: effectiveParams.cooldownSeconds,
+            lastSignalAt,
+          })
+        : null;
+      const signal = smartSignal ?? scalpSignal;
+      const strategyClass = scalpSignal ? "scalp" as const : "smart" as const;
+      if (!signal) {
+        results.push(skip(
+          config,
+          asset,
+          smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
+          smartSignalCandidate
+            ? "A trend or breakout signal turned Scalp Mode off, but the shared signal cooldown is still active."
+            : config.settings.scalpModeEnabled
+              ? "No qualifying smart or sideways-market scalp signal was detected in the latest candle window."
+              : "No qualifying signal was detected in the latest candle window."
+        ));
+        continue;
+      }
+      if (executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
+        results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${executionProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
+        continue;
+      }
+      const indicatorScore = strategyClass === "scalp"
+        ? {
+            score: Number((signal.confidence * 5).toFixed(2)),
+            qualified: true,
+            vetoed: false,
+            tags: ["SCALP_RANGE", signal.direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"],
+          }
+        : scoreIndicatorSnapshot(indicators, signal.direction, indicatorSettings);
       const indicatorsReady = indicators.emaFast !== null
         && indicators.emaSlow !== null
         && indicators.rsi !== null
         && indicators.macdHistogram !== null
         && indicators.adx !== null;
-      if (indicatorsReady && !indicatorScore.qualified) {
+      if (strategyClass === "smart" && indicatorsReady && !indicatorScore.qualified) {
         await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
         results.push(skip(
           config,
@@ -334,7 +424,7 @@ export async function runAutonomousPerpsMonitor(
         ));
         continue;
       }
-      if (executionProfile) {
+      if (strategyClass === "smart" && executionProfile) {
         const trendQualified = Math.abs(signalMetrics.trend.changePercent) >= effectiveParams.trendThreshold;
         const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= effectiveParams.breakoutPercent
           ? signalMetrics.breakoutChange
@@ -354,7 +444,8 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       if (
-        executionProfile
+        strategyClass === "smart"
+        && executionProfile
         && executionProfile.preferredDirection !== "balanced"
         && signal.direction !== executionProfile.preferredDirection
       ) {
@@ -363,8 +454,16 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
 
-      const basePlan = deriveTradePlan(config, windowPoints, signal, availableUsdc);
-      const plan = applyLearnedTradePlan({ basePlan, asset, points: windowPoints, profile: executionProfile });
+      const planningConfig = strategyClass === "scalp"
+        ? { ...config, settings: { ...config.settings, perpsExecutionMode: "set-parameters" as const } }
+        : config;
+      const basePlan = deriveTradePlan(planningConfig, windowPoints, signal, availableUsdc);
+      const plan = applyLearnedTradePlan({
+        basePlan,
+        asset,
+        points: windowPoints,
+        profile: strategyClass === "smart" ? executionProfile : null,
+      });
       const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
@@ -390,6 +489,7 @@ export async function runAutonomousPerpsMonitor(
         side,
         stopLossPercent: plan.stopLossPercent,
         takeProfitPercent: plan.takeProfitPercent,
+        takeProfitUsd: strategyClass === "scalp" ? config.settings.scalpTakeProfitUsd : undefined,
       });
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
@@ -406,7 +506,8 @@ export async function runAutonomousPerpsMonitor(
         stopLossPrice: triggers.stopLossPrice,
         maxSlippageBps: 100,
         smartTradeProfile: config.settings.smartTradeProfile,
-        executionStyle: config.settings.perpsExecutionMode,
+        executionStyle: strategyClass === "scalp" ? "set-parameters" : config.settings.perpsExecutionMode,
+        strategyClass,
         strategyContext: {
           signalType: signal.type,
           trendWindow: effectiveParams.trendWindow,

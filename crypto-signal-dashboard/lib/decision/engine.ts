@@ -93,6 +93,7 @@ export function buildTradeDecisionPayload(input: {
     direction: signal.direction,
     signalConfidence: signal.signalConfidence ?? null,
     asset: signal.asset,
+    strategyClass: signal.strategyClass ?? "smart",
     requestedTrade: {
       collateralUsd: signal.collateralUsd,
       leverage: signal.leverage,
@@ -134,6 +135,7 @@ export function buildTradeDecisionPayload(input: {
 export function evaluateTradeDecision(payload: TradeDecisionPayload, learningProfile: DecisionLearningProfile | null = null): TradeDecisionRecommendation {
   const config = getTradeDecisionConfig();
   const tags = new Set<string>(["decision-layer", payload.shadowMode ? "shadow-mode" : "active-mode"]);
+  tags.add(payload.strategyClass === "scalp" ? "scalp-trade" : "smart-trade");
   let confidence = 0.55;
 
   if (typeof payload.signalConfidence === "number") {

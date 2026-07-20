@@ -145,6 +145,8 @@ type AutoTradeSettings = {
   stopLossPercent: number;
   perpsLeverage: number;
   perpsExecutionMode: PerpsExecutionMode;
+  scalpModeEnabled: boolean;
+  scalpTakeProfitUsd: number;
   decisionMode: DecisionMode;
   smartTradeProfile: SmartTradeProfile;
   slots: AutoTradeSlot[];
@@ -172,6 +174,8 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   stopLossPercent: OPERATOR_TRAINING_BASELINE.stopLossRoePercent,
   perpsLeverage: OPERATOR_TRAINING_BASELINE.leverageCap,
   perpsExecutionMode: "set-parameters",
+  scalpModeEnabled: false,
+  scalpTakeProfitUsd: 2,
   decisionMode: "active",
   smartTradeProfile: "balanced",
   slots: [
@@ -314,6 +318,7 @@ type PerpsExecutionSummary = {
   errorMessage?: string | null;
   createdAt: string;
   txid?: string | null;
+  strategyClass?: "smart" | "scalp";
 };
 
 type DecisionLogEntry = {
@@ -330,6 +335,7 @@ type DecisionLogEntry = {
     direction: "bullish" | "bearish";
     signalConfidence: number | null;
     asset: "SOL" | "ETH" | "BTC";
+    strategyClass?: "smart" | "scalp";
     requestedTrade: {
       collateralUsd: number;
       leverage: number;
@@ -3487,6 +3493,11 @@ function DashboardPage() {
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
+      const scalpModeEnabled = Boolean(parsed.scalpModeEnabled);
+      const parsedScalpTakeProfitUsd = Number(parsed.scalpTakeProfitUsd);
+      const scalpTakeProfitUsd = Number.isFinite(parsedScalpTakeProfitUsd)
+        ? Math.max(2, parsedScalpTakeProfitUsd)
+        : DEFAULT_AUTO_TRADE_SETTINGS.scalpTakeProfitUsd;
       const decisionMode = parsed.decisionMode === "shadow" ? "shadow" : "active";
       const smartTradeProfile =
         parsed.smartTradeProfile === "conservative" || parsed.smartTradeProfile === "aggressive"
@@ -3533,6 +3544,8 @@ function DashboardPage() {
         stopLossPercent,
         perpsLeverage,
         perpsExecutionMode,
+        scalpModeEnabled,
+        scalpTakeProfitUsd,
         decisionMode,
         smartTradeProfile,
         slots: normalizedSlots,
@@ -5393,6 +5406,12 @@ function DashboardPage() {
             onClockIn={() => { void clockInPerpsAgent().catch((error: unknown) => setPerpsAutoTradeStatus(error instanceof Error ? error.message : "Clock In failed")); }}
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
             onViewLog={() => { void openDecisionLog(); }}
+            scalpModeEnabled={autoTradeSettings.scalpModeEnabled}
+            scalpTakeProfitUsd={autoTradeSettings.scalpTakeProfitUsd}
+            onToggleScalpMode={(enabled) => persistAutoTradeSettings({
+              ...autoTradeSettings,
+              scalpModeEnabled: enabled,
+            })}
             onToggleMode={() => setPerpsSessionModePreference((current) => current === "paper" ? "live" : "paper")}
             onToggleDecisionMode={() => setAutoTradeSettings((current) => ({
               ...current,
@@ -5954,7 +5973,7 @@ function DashboardPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
                     <div>
                       <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>
-                        {entry.payload.symbol} · {entry.payload.direction === "bullish" ? "Long bias" : "Short bias"}
+                        {entry.payload.strategyClass === "scalp" ? "Scalp" : "Smart"} · {entry.payload.symbol} · {entry.payload.direction === "bullish" ? "Long bias" : "Short bias"}
                       </div>
                       <div style={{ color: "var(--muted)", fontSize: 12 }}>
                         {new Date(entry.payload.createdAt).toLocaleString()} · {shortAddress(entry.payload.walletAddress)} · {entry.payload.sessionMode.toUpperCase()}
