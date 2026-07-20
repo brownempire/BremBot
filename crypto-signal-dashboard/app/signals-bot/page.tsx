@@ -12,6 +12,12 @@ import bs58 from "bs58";
 import { PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@/app/components/SolanaWalletProvider";
 import { isNativeIosRuntime, isNativeMacRuntime, isNativeShellRuntime, isStandalonePwaRuntime } from "@/app/lib/nativeShell";
+import {
+  remoteAuthSourceLabel,
+  resolvePerpsRuntimePlatform,
+  resolveRemoteSyncWalletAddress,
+  type RemoteAuthSource,
+} from "@/app/lib/walletRuntime";
 import { syncWidgetSnapshot } from "@/app/lib/widgetSync";
 
 import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/JupiterTradePanel";
@@ -241,7 +247,6 @@ type PerpsPnlPayload = {
   updatedAt?: number;
   message?: string;
 };
-type RemoteAuthSource = "in-app" | "phantom";
 type DashboardSectionId = "chart" | "wallet" | "perps" | "pnl" | "params" | "signals" | "trades";
 type DashboardSectionLayout = {
   id: DashboardSectionId;
@@ -1187,16 +1192,19 @@ function DashboardPage() {
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
   const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
   const nativeWalletShell = nativeShell || nativeMacShell;
-  const remoteSyncWalletAddress =
-    remoteAuthSource === "phantom"
-      ? phantomAuthAddress ?? remoteAuthAddress
-      : remoteAuthSource === "in-app"
-        ? walletAddress ?? remoteAuthAddress
-        : null;
+  const remoteSyncWalletAddress = resolveRemoteSyncWalletAddress({
+    source: remoteAuthSource,
+    walletConnectAddress: jupiterPerpsController?.walletAddress ?? null,
+    inAppAddress: walletAddress,
+    phantomAddress: phantomAuthAddress,
+    remoteAuthAddress,
+  });
   const tradeStorageAddress =
-    remoteAuthSource === "phantom"
-      ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
-      : walletAddress ?? "paper-auto";
+    remoteAuthSource === "walletconnect"
+      ? jupiterPerpsController?.walletAddress ?? remoteAuthAddress ?? "paper-auto"
+      : remoteAuthSource === "phantom"
+        ? phantomAuthAddress ?? walletAddress ?? "paper-auto"
+        : walletAddress ?? "paper-auto";
   const automationConfigSyncLabel = automationConfigSync.walletAddress
     ? `${automationConfigSync.message} · ${shortAddress(automationConfigSync.walletAddress)}${automationConfigSync.revision > 0 ? ` · revision ${automationConfigSync.revision}` : ""}${automationConfigSync.updatedAt ? ` · ${new Date(automationConfigSync.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
     : automationConfigSync.message;
@@ -1210,27 +1218,24 @@ function DashboardPage() {
   const perpsLiveEligibleWallet =
     jupiterPerpsController?.walletAddress ?? walletAddress ?? remoteSyncWalletAddress;
   const perpsLiveWalletAllowed = isPublicPerpsLiveWalletAllowed(perpsLiveEligibleWallet);
-  const perpsRuntimePlatform =
-    nativeShell
-      ? "native"
-      : standalonePwa
-        ? "pwa"
-        : "web";
+  const perpsRuntimePlatform = resolvePerpsRuntimePlatform({ nativeShell, nativeMacShell, standalonePwa });
   const perpsPlatformLabel =
-    perpsAgentSession?.platform === "native"
+    nativeWalletShell
       ? "Native app"
-      : perpsAgentSession?.platform === "pwa"
-        ? "PWA"
-        : perpsAgentSession?.platform === "web"
-          ? "Web"
-          : perpsRuntimePlatform === "native"
-            ? "Native app"
+      : perpsAgentSession?.platform === "native"
+        ? "Native app"
+        : perpsAgentSession?.platform === "pwa"
+          ? "PWA"
+          : perpsAgentSession?.platform === "web"
+            ? "Web"
             : perpsRuntimePlatform === "pwa"
               ? "PWA"
               : "Web";
   const perpsProviderLabel =
-    perpsAgentSession?.walletProvider
-      ?? (jupiterPerpsController?.connected ? "Jupiter Mobile" : remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
+    jupiterPerpsController?.connected
+      ? (nativeMacShell ? "WalletConnect" : "Jupiter Mobile")
+      : perpsAgentSession?.walletProvider
+        ?? (remoteAuthSource === "phantom" ? "Phantom" : wallet.connected ? "In-app wallet" : "Disconnected");
   const activeWalletProviderLabel =
     nativeWalletShell && jupiterPerpsController?.connected
       ? "WalletConnect"
@@ -2090,12 +2095,12 @@ function DashboardPage() {
   const clockInPerpsAgent = useCallback(async () => {
     setPerpsSessionBusy(true);
     try {
-      const platform = nativeShell
+      const platform = nativeWalletShell
         ? "native"
         : (typeof window !== "undefined" && window.matchMedia?.("(display-mode: standalone)").matches ? "pwa" : "web");
       const walletProvider =
         jupiterPerpsController?.connected
-          ? "Jupiter Mobile"
+          ? (nativeMacShell ? "WalletConnect" : "Jupiter Mobile")
           : remoteAuthSource === "phantom"
             ? "Phantom"
             : wallet.connected
@@ -2164,7 +2169,7 @@ function DashboardPage() {
     } finally {
       setPerpsSessionBusy(false);
     }
-  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeShell, perpsLiveWalletAllowed, perpsSessionModePreference, perpsUnlimitedSession, perpsWalletConnected, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.connected, walletAddress]);
+  }, [jupiterPerpsController?.canWrite, jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeMacShell, nativeWalletShell, perpsLiveWalletAllowed, perpsSessionModePreference, perpsUnlimitedSession, perpsWalletConnected, refreshPerpsAgentState, remoteAuthSource, remoteAuthToken, remoteSyncWalletAddress, wallet.connected, walletAddress]);
 
   const clockOutPerpsAgent = useCallback(async (reason?: string) => {
     setPerpsSessionBusy(true);
@@ -3967,6 +3972,13 @@ function DashboardPage() {
   const signRemoteAuthMessage = useCallback(async (source: RemoteAuthSource, message: string) => {
     const encodedMessage = new TextEncoder().encode(message);
 
+    if (source === "walletconnect") {
+      if (!jupiterPerpsController?.connected || !jupiterPerpsController.signMessage) {
+        throw new Error("WalletConnect is not ready to authenticate this Mac session.");
+      }
+      return bs58.encode(await jupiterPerpsController.signMessage(encodedMessage));
+    }
+
     if (source === "in-app") {
       const signature = await walletSignMessage(encodedMessage);
       return bs58.encode(signature);
@@ -3986,14 +3998,10 @@ function DashboardPage() {
       throw new Error("Phantom did not return a signature.");
     }
     return bs58.encode(signatureBytes);
-  }, [walletSignMessage]);
+  }, [jupiterPerpsController, walletSignMessage]);
 
   const completeRemoteAuth = useCallback(async (address: string, source: RemoteAuthSource) => {
-    setRemoteAuthStatus(
-      source === "in-app"
-        ? "Requesting in-app wallet signature..."
-        : "Requesting Phantom signature..."
-    );
+    setRemoteAuthStatus(`Requesting ${remoteAuthSourceLabel(source)} signature...`);
     const challenge = await requestRemoteAuthChallenge(address);
     const signature = await signRemoteAuthMessage(source, challenge.message);
     const nextToken = await verifyRemoteAuthChallenge(address, challenge.challengeId, signature);
@@ -4004,9 +4012,32 @@ function DashboardPage() {
     } catch {
       // ignore storage errors
     }
-    setRemoteAuthStatus(`Remote auth connected via ${source === "in-app" ? "in-app wallet" : "Phantom"}`);
+    setRemoteAuthStatus(`Remote auth connected via ${remoteAuthSourceLabel(source)}`);
     return nextToken;
   }, [requestRemoteAuthChallenge, signRemoteAuthMessage, verifyRemoteAuthChallenge]);
+
+  useEffect(() => {
+    const connectedAddress = jupiterPerpsController?.connected
+      ? jupiterPerpsController.walletAddress
+      : null;
+
+    if (nativeMacShell && connectedAddress) {
+      if (remoteAuthSource !== "walletconnect") {
+        setRemoteAuthSource("walletconnect");
+        setRemoteAuthToken(null);
+        setRemoteAuthAddress(null);
+      }
+      return;
+    }
+
+    if (remoteAuthSource === "walletconnect") {
+      setRemoteAuthSource(null);
+      setRemoteAuthToken(null);
+      setRemoteAuthAddress(null);
+      setRemoteAuthStatus("Remote auth pending");
+      setRemoteSyncStatus("Remote sync unavailable");
+    }
+  }, [jupiterPerpsController?.connected, jupiterPerpsController?.walletAddress, nativeMacShell, remoteAuthSource]);
 
   async function connectPhantomForRemoteSync() {
     const provider = getPhantomAuthProvider();
@@ -4171,7 +4202,7 @@ function DashboardPage() {
       : null;
 
     if (cachedToken && remoteAuthAddress === walletAddressForAuth && remoteAuthToken === cachedToken) {
-      setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
+      setRemoteAuthStatus(`Remote auth connected via ${remoteAuthSourceLabel(authSourceForSync)}`);
       return;
     }
 
@@ -4203,7 +4234,7 @@ function DashboardPage() {
     if (cachedToken) {
       setRemoteAuthToken(cachedToken);
       setRemoteAuthAddress(walletAddressForAuth);
-      setRemoteAuthStatus(`Remote auth connected via ${authSourceForSync === "in-app" ? "in-app wallet" : "Phantom"}`);
+      setRemoteAuthStatus(`Remote auth connected via ${remoteAuthSourceLabel(authSourceForSync)}`);
       return;
     }
 
@@ -5258,7 +5289,9 @@ function DashboardPage() {
             <button type="button" className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            Wallet keys are stored in this browser until you disconnect (which removes them from this device).
+            {nativeWalletShell && jupiterPerpsController?.connected
+              ? "WalletConnect keeps the private key in your wallet. BremLogic requests signatures without importing the key."
+              : "Wallet keys are stored in this browser until you disconnect (which removes them from this device)."}
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
             {activeWalletAddress
@@ -5368,7 +5401,7 @@ function DashboardPage() {
             onToggleUnlimited={setPerpsUnlimitedSession}
           />
           <PerpsSessionStatus
-            walletAddress={perpsAgentSession?.walletAddress ?? remoteSyncWalletAddress}
+            walletAddress={remoteSyncWalletAddress ?? jupiterPerpsController?.walletAddress ?? perpsAgentSession?.walletAddress ?? null}
             platformLabel={perpsPlatformLabel}
             providerLabel={perpsProviderLabel}
             appOpen={perpsAgentSession?.appOpen ?? true}
@@ -5706,8 +5739,8 @@ function DashboardPage() {
           </div>
           <div className="subtext">Local device view keeps the most recent {LOCAL_RECENT_TRADES_CAP} trades for quick history. Remote sync stores a longer canonical history for cross-device PnL.</div>
           <div className="subtext">Remote status · auth: {remoteAuthStatus} · sync: {remoteSyncStatus}</div>
-          {!wallet.publicKey && recentTrades.length === 0 && (<div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>)}
-          {recentTrades.length === 0 && wallet.publicKey && (<div className="subtext">No recent trades recorded for this wallet yet.</div>)}
+          {!activeWalletAddress && recentTrades.length === 0 && (<div className="subtext">Connect a wallet for live execution. Auto-trade can still run paper executions.</div>)}
+          {recentTrades.length === 0 && activeWalletAddress && (<div className="subtext">No recent trades recorded for this wallet yet.</div>)}
           <div className="recent-trades-scroll">
             {recentTrades.map((trade) => (
               <div key={trade.id} className="news-item">

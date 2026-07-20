@@ -16,6 +16,7 @@ type NativeJupiterWalletState = {
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   clearFeedback: () => void;
+  signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
 };
 
@@ -300,6 +301,35 @@ export function useNativeJupiterWalletConnect(
     }
   }, []);
 
+  const signMessage = useCallback(async (message: Uint8Array) => {
+    const adapter = adapterRef.current;
+    if (!adapter || !adapter.connected || !adapter.publicKey) {
+      throw new Error("WalletConnect is not connected.");
+    }
+
+    if (typeof adapter.signMessage !== "function") {
+      throw new Error("The connected WalletConnect session does not expose message signing.");
+    }
+
+    let timeoutId = 0;
+
+    try {
+      return await Promise.race([
+        adapter.signMessage(message),
+        new Promise<never>((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            setFeedback(SIGN_TIMEOUT_MESSAGE);
+            reject(new Error(SIGN_TIMEOUT_MESSAGE));
+          }, SIGN_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (!enabled) {
       clearPendingTimeout();
@@ -422,6 +452,7 @@ export function useNativeJupiterWalletConnect(
     connect,
     disconnect,
     clearFeedback,
+    signMessage,
     signTransaction,
   };
 }

@@ -99,6 +99,38 @@ extension BremLogicMacBrowser: WKNavigationDelegate {
 extension BremLogicMacBrowser: WKUIDelegate {
     func webView(
         _ webView: WKWebView,
+        runJavaScriptTextInputPanelWithPrompt prompt: String,
+        defaultText: String?,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping (String?) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = prompt
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let sensitivePrompt = prompt.localizedCaseInsensitiveContains("private key")
+            || prompt.localizedCaseInsensitiveContains("password")
+        let input: NSTextField = sensitivePrompt
+            ? NSSecureTextField(string: defaultText ?? "")
+            : NSTextField(string: defaultText ?? "")
+        input.placeholderString = sensitivePrompt ? "Secure entry" : nil
+        input.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = input
+
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            completionHandler(response == .alertFirstButtonReturn ? input.stringValue : nil)
+        }
+
+        if let window = webView.window {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(alert.runModal())
+        }
+    }
+
+    func webView(
+        _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
