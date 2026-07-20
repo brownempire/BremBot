@@ -21,6 +21,7 @@ import { createUserPerpsExecution, listUserPerpsExecutions, updateUserPerpsExecu
 import { evaluateUserScopedPerpsRisk } from "@/lib/perps/userScopedRisk";
 import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
 import { executePerpsEntryWithRetries } from "@/lib/perps/entryRetry";
+import { calculateActualPositionProtection } from "@/lib/perps/tpslPlan";
 
 function nowIso() {
   return new Date().toISOString();
@@ -325,6 +326,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         buildPerpsTpslTransactionForSignal,
         buildPerpsTransactionForSignal,
         executeSignedPerpsTransaction,
+        getActualPositionForProtection,
       } = await import("@/lib/perps/jupiterAdapter");
       const executionSignal = {
         signalId: signal.signalId,
@@ -354,32 +356,48 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       const positionPubkey = submitted.positionPubkey ?? built.positionPubkey;
       let protectionTxid: string | null = null;
       let protectionError: string | null = null;
-      if (built.tpslMode === "deferred") {
-        if (!positionPubkey) {
-          protectionError = "Jupiter did not return the position reference needed to attach TP/SL.";
-        } else {
-          for (let attempt = 0; attempt < 3 && !protectionTxid; attempt += 1) {
-            if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt * 750));
-            try {
-              const protection = await buildPerpsTpslTransactionForSignal(
-                successfulSignal,
-                agentWalletAddress,
-                positionPubkey
-              );
-              if (!protection) break;
-              const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);
-              const submittedProtection = await executeSignedPerpsTransaction(
-                "create-tpsl",
-                signedProtection.signedSerializedTxBase64
-              );
-              protectionTxid = submittedProtection.txid ?? null;
-              if (!protectionTxid) throw new Error("Jupiter did not return a TP/SL transaction signature.");
-              protectionError = null;
-            } catch (protectionFailure) {
-              protectionError = protectionFailure instanceof Error
-                ? protectionFailure.message
-                : "Unable to attach autonomous TP/SL protection.";
-            }
+      let actualTakeProfitPrice = resolvedSignal.takeProfitPrice ?? null;
+      let actualStopLossPrice = resolvedSignal.stopLossPrice ?? null;
+      if (!positionPubkey) {
+        protectionError = "Jupiter did not return the position reference needed to attach TP/SL.";
+      } else {
+        for (let attempt = 0; attempt < 3 && !protectionTxid; attempt += 1) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt * 750));
+          try {
+            const actualPosition = await getActualPositionForProtection(agentWalletAddress, positionPubkey);
+            const protectionPlan = calculateActualPositionProtection({
+              position: actualPosition,
+              referencePriceUsd: resolvedSignal.marketContext?.spotPrice ?? actualPosition.entryPriceUsd,
+              referenceSizeUsd: successfulSignal.sizeUsd,
+              requestedTakeProfitPrice: resolvedSignal.takeProfitPrice,
+              requestedStopLossPrice: resolvedSignal.stopLossPrice,
+              minimumTakeProfitUsd: signal.strategyClass === "scalp" ? 3.5 : 2,
+            });
+            actualTakeProfitPrice = protectionPlan.takeProfitPrice;
+            actualStopLossPrice = protectionPlan.stopLossPrice;
+            const protectionSignal = {
+              ...successfulSignal,
+              takeProfit: { enabled: true, priceUsd: actualTakeProfitPrice },
+              stopLoss: { enabled: Boolean(actualStopLossPrice), priceUsd: actualStopLossPrice },
+            };
+            const protection = await buildPerpsTpslTransactionForSignal(
+              protectionSignal,
+              agentWalletAddress,
+              positionPubkey
+            );
+            if (!protection) throw new Error("Jupiter did not build the required TP transaction.");
+            const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);
+            const submittedProtection = await executeSignedPerpsTransaction(
+              "create-tpsl",
+              signedProtection.signedSerializedTxBase64
+            );
+            protectionTxid = submittedProtection.txid ?? null;
+            if (!protectionTxid) throw new Error("Jupiter did not return a TP/SL transaction signature.");
+            protectionError = null;
+          } catch (protectionFailure) {
+            protectionError = protectionFailure instanceof Error
+              ? protectionFailure.message
+              : "Unable to attach autonomous TP/SL protection.";
           }
         }
       }
@@ -391,6 +409,8 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         collateralUsd: successfulSignal.collateralUsd,
         sizeUsd: successfulSignal.sizeUsd,
         leverage: successfulSignal.leverage,
+        takeProfitPrice: actualTakeProfitPrice,
+        stopLossPrice: actualStopLossPrice,
         attemptCount: entryResult.attemptCount,
         retrySummary: entryResult.failures,
         errorMessage: protectionError,

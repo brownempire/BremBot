@@ -9,9 +9,10 @@ import {
 
 import { PerpsExecutionError } from "@/lib/perps/errors";
 import {
-  buildEntryWithTpslFallback,
-  getInitialPositionTpsl,
+  getEntryPositionTpsl,
   getStandalonePositionTpsl,
+  parseActualPositionForProtection,
+  type ActualPositionForProtection,
 } from "@/lib/perps/tpslPlan";
 import type { PerpsSignalPayload } from "@/lib/perps/types";
 
@@ -34,6 +35,7 @@ function usdToAtomicUsdcString(value: number) {
 }
 
 type PerpsTradingClient = Pick<typeof perps.trading, "increasePosition" | "createTpsl">;
+type PerpsPositionsClient = Pick<typeof perps.positions, "get">;
 
 function getAssetForMarket(market: string): Asset {
   const asset = MARKET_TO_ASSET[market.toUpperCase()];
@@ -57,7 +59,6 @@ export async function buildPerpsTransactionForSignal(
     throw new PerpsExecutionError("LIVE_CLOSE_NOT_IMPLEMENTED", "Live close execution is not enabled in this build yet.", 501);
   }
 
-  const requestedTpsl = getInitialPositionTpsl(signal);
   const request = {
     asset,
     inputToken,
@@ -68,11 +69,7 @@ export async function buildPerpsTransactionForSignal(
     maxSlippageBps: String(signal.maxSlippageBps),
   };
 
-  const built = await buildEntryWithTpslFallback(
-    requestedTpsl,
-    (tpsl) => tradingClient.increasePosition({ ...request, tpsl })
-  );
-  const { response, tpslMode } = built;
+  const response = await tradingClient.increasePosition({ ...request, tpsl: getEntryPositionTpsl() });
 
   if (!response.serializedTxBase64) {
     throw new PerpsExecutionError("MISSING_SERIALIZED_TX", "Jupiter Perps did not return a serialized transaction.", 502);
@@ -84,8 +81,28 @@ export async function buildPerpsTransactionForSignal(
     serializedTxBase64: response.serializedTxBase64,
     positionPubkey: response.positionPubkey ?? null,
     quote: response.quote,
-    tpslMode,
+    tpslMode: "deferred" as const,
   };
+}
+
+export async function getActualPositionForProtection(
+  walletAddress: string,
+  positionPubkey: string,
+  positionsClient: PerpsPositionsClient = perps.positions
+): Promise<ActualPositionForProtection> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
+    try {
+      const response = await positionsClient.get({ walletAddress, includeClosedPositions: false });
+      const position = response.dataList.find((item) => item.positionPubkey === positionPubkey);
+      if (!position) throw new Error("Jupiter has not indexed the opened position yet.");
+      return parseActualPositionForProtection(position);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Unable to load the opened Jupiter position.");
+    }
+  }
+  throw lastError ?? new Error("Unable to load the opened Jupiter position.");
 }
 
 export async function buildPerpsTpslTransactionForSignal(

@@ -28,7 +28,7 @@ function createInput(): PerpsAutomationConfigInput {
       perpsLeverage: 25,
       perpsExecutionMode: "set-parameters",
       scalpModeEnabled: false,
-      scalpTakeProfitUsd: 2,
+      scalpTakeProfitUsd: 3.5,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [{ id: "slot-sol", token: "SOL" }],
@@ -64,8 +64,20 @@ test("legacy wallet automation configs migrate to revision one", () => {
   assert.equal(parsed?.revision, 1);
   assert.equal(parsed?.settings.decisionMode, "active");
   assert.equal(parsed?.settings.scalpModeEnabled, false);
-  assert.equal(parsed?.settings.scalpTakeProfitUsd, 2);
+  assert.equal(parsed?.settings.scalpTakeProfitUsd, 3.5);
   assert.equal(parsed?.walletAddress, walletAddress);
+});
+
+test("saved $2 scalp targets migrate to the $3.50 minimum", () => {
+  const input = createInput();
+  const parsed = parsePerpsAutomationConfig(JSON.stringify({
+    walletAddress,
+    ...input,
+    settings: { ...input.settings, scalpTakeProfitUsd: 2 },
+    revision: 2,
+    updatedAt: new Date().toISOString(),
+  }));
+  assert.equal(parsed?.settings.scalpTakeProfitUsd, 3.5);
 });
 
 test("wallet automation writes require a non-negative expected revision", () => {

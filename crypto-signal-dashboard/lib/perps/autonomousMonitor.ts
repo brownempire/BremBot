@@ -246,6 +246,18 @@ function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], si
   };
 }
 
+export function getScalpTradePlanningConfig(config: PerpsAutomationConfig): PerpsAutomationConfig {
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      perpsExecutionMode: "set-parameters",
+      walletAllocationMode: "percent",
+      walletPercent: 50,
+    },
+  };
+}
+
 export function computeTriggerPrices(options: {
   config: PerpsAutomationConfig;
   entryPrice: number;
@@ -452,7 +464,7 @@ export async function runAutonomousPerpsMonitor(
       }
 
       const planningConfig = strategyClass === "scalp"
-        ? { ...config, settings: { ...config.settings, perpsExecutionMode: "set-parameters" as const } }
+        ? getScalpTradePlanningConfig(config)
         : config;
       const basePlan = deriveTradePlan(planningConfig, windowPoints, signal, availableUsdc);
       const plan = applyLearnedTradePlan({
