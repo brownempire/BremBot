@@ -131,7 +131,11 @@ struct BremLogicMacWidgetEntryView: View {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: family == .systemSmall ? 66 : family == .systemMedium ? 92 : 112, height: 30, alignment: .leading)
+                .frame(
+                    width: family == .systemSmall ? 54 : family == .systemMedium ? 72 : 90,
+                    height: family == .systemSmall ? 18 : 22,
+                    alignment: .leading
+                )
         } else {
             Text("BremLogic")
                 .font(.system(size: 17, weight: .bold, design: .rounded))
@@ -140,23 +144,23 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private func metric(_ title: String, _ value: String, color: Color = .white) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 1) {
             Text(title.uppercased())
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(.system(size: 7, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(.system(size: 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .stroke(Color.white.opacity(0.065), lineWidth: 1)
         }
     }
@@ -168,12 +172,12 @@ struct BremLogicMacWidgetEntryView: View {
             Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? mint : .white.opacity(0.65))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
                 Text("Updated \(updatedLabel)")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
@@ -184,24 +188,24 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private var compactContent: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             header
             if hasOpenPerp {
                 Text(positionLabel)
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Text(pnlSummary)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(pnlColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.68)
-                HStack(spacing: 5) {
+                HStack(spacing: 3) {
                     compactMetric("ENTRY", price(entry.snapshot.openPerpEntryPrice))
                     compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: pnlColor)
                 }
-                HStack(spacing: 5) {
+                HStack(spacing: 3) {
                     compactMetric("LEVERAGE", leverage(entry.snapshot.openPerpLeverage))
                     compactMetric("TAKE PROFIT", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
                 }
@@ -220,7 +224,7 @@ struct BremLogicMacWidgetEntryView: View {
             Spacer(minLength: 0)
             HStack(spacing: 5) {
                 Text(entry.snapshot.perpsAutoTradeStatus ?? "Agent status unavailable")
-                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                    .font(.system(size: 6, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(1)
                     .minimumScaleFactor(0.62)
@@ -233,18 +237,18 @@ struct BremLogicMacWidgetEntryView: View {
     private func compactMetric(_ title: String, _ value: String, color: Color = .white) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title)
-                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .font(.system(size: 5.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.45))
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 5)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
@@ -253,7 +257,7 @@ struct BremLogicMacWidgetEntryView: View {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(mint)
-                .frame(width: 24, height: 22)
+                .frame(width: 20, height: 18)
                 .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .contentShape(Rectangle())
         }
@@ -262,26 +266,26 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private var mediumContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
                 logo
                 VStack(alignment: .leading, spacing: 1) {
                     Text(positionLabel)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                     Text(pnlSummary)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(pnlColor)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 3)
                 Text(leverage(entry.snapshot.openPerpLeverage))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.7))
             }
             if hasOpenPerp {
-                chart(height: 76)
+                chart(height: 52)
             } else {
                 Text(detailLabel)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -292,36 +296,35 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 7) {
             header
 
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("OPEN PERPS")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .foregroundStyle(mint)
                     Text(positionLabel)
-                        .font(.system(size: family == .systemExtraLarge ? 30 : 25, weight: .bold, design: .rounded))
+                        .font(.system(size: family == .systemExtraLarge ? 22 : 20, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
                     Text(detailLabel)
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .font(.system(size: 9, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.68))
-                        .lineLimit(2)
-                    Spacer(minLength: 3)
+                        .lineLimit(1)
                     Text("UNREALIZED PNL")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .font(.system(size: 7, weight: .semibold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                     Text(usd(entry.snapshot.openPerpPnlUsd, signed: true))
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .font(.system(size: 19, weight: .bold, design: .rounded))
                         .foregroundStyle(pnlColor)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(12)
-                .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(8)
+                .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 4), spacing: 7) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
                     metric("Position", usd(entry.snapshot.openPerpPositionValueUsd))
                     metric("Collateral", usd(entry.snapshot.openPerpCollateralUsd))
                     metric("Entry", price(entry.snapshot.openPerpEntryPrice))
@@ -335,15 +338,15 @@ struct BremLogicMacWidgetEntryView: View {
             }
 
             if hasOpenPerp {
-                chart(height: family == .systemExtraLarge ? 112 : 92)
+                chart(height: family == .systemExtraLarge ? 72 : 64)
             }
 
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 metric("Main Wallet", usd(entry.snapshot.mainWalletBalanceUsd))
                 metric("Agent Wallet", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
                 refreshButton
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
             .overlay(alignment: .top) {
                 Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             }
@@ -355,7 +358,7 @@ struct BremLogicMacWidgetEntryView: View {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 14, weight: .bold))
                 .foregroundStyle(mint)
-                .frame(width: 40, height: 42)
+                .frame(width: 32, height: 32)
                 .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .contentShape(Rectangle())
         }
@@ -373,7 +376,7 @@ struct BremLogicMacWidgetEntryView: View {
                 compactContent
             }
         }
-        .padding(family == .systemExtraLarge ? 16 : 12)
+        .padding(family == .systemSmall ? 5 : family == .systemMedium ? 7 : 9)
         .containerBackground(background, for: .widget)
         .widgetURL(URL(string: "https://app.bremlogic.com/signals-bot?tab=perps"))
     }
