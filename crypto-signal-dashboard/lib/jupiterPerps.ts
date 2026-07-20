@@ -634,8 +634,21 @@ function inferLiveTriggerKind(
 }
 
 function normalizeLiveMarketSymbol(positionName: string | null, mint: string | null) {
+  const normalizedPositionName = positionName
+    ? positionName.replace(/-PERP$/i, "").replace(/[^A-Z0-9]/gi, "").toUpperCase()
+    : "";
+
+  if (normalizedPositionName && normalizedPositionName !== "PERP") {
+    return normalizedPositionName;
+  }
+
+  const mintMarket = mint
+    ? [...JUPITER_CUSTODY_MARKETS.values()].find((market) => market.marketAddress === mint)
+    : null;
+  if (mintMarket) return mintMarket.symbol;
+
   if (positionName) {
-    return positionName.replace(/-PERP$/i, "").replace(/[^A-Z0-9]/gi, "").toUpperCase() || "PERP";
+    return normalizedPositionName || "PERP";
   }
 
   if (mint && mint === "So11111111111111111111111111111111111111112") {
@@ -793,6 +806,45 @@ function mapLivePerpsTrade(trade: LivePerpsTradeResponse): JupiterPerpsTrade {
   };
 }
 
+function enrichGenericLivePositionMarket(
+  record: ReturnType<typeof mapLivePerpsPosition>,
+  recentTrades: JupiterPerpsTrade[]
+) {
+  if (record.position.marketSymbol !== "PERP") return record;
+
+  const matchingTrade = recentTrades.find(
+    (trade) =>
+      trade.positionPubkey === record.position.accountRef &&
+      JUPITER_COINBASE_PRODUCTS.has(trade.marketSymbol)
+  );
+  if (!matchingTrade) return record;
+
+  const custodyEntry = [...JUPITER_CUSTODY_MARKETS.entries()].find(
+    ([, market]) => market.symbol === matchingTrade.marketSymbol
+  );
+  if (!custodyEntry) return record;
+
+  const [custodyAddress, market] = custodyEntry;
+  const position: JupiterPerpsPosition = {
+    ...record.position,
+    marketSymbol: market.symbol,
+    marketName: matchingTrade.marketName ?? market.marketName,
+    marketAddress: market.marketAddress,
+    custodyAddress,
+  };
+
+  return {
+    position,
+    pendingTriggers: record.pendingTriggers.map((trigger) => ({
+      ...trigger,
+      marketSymbol: position.marketSymbol,
+      marketName: position.marketName,
+      marketAddress: position.marketAddress,
+      custodyAddress: position.custodyAddress,
+    })),
+  };
+}
+
 export async function fetchJupiterPerpsTradeHistory(
   walletAddress: string,
   options: { batchSize?: number; maxTrades?: number } = {}
@@ -873,7 +925,9 @@ async function fetchLivePerpsSnapshot(walletAddress: string, includeRecentTrades
     }
   }
 
-  const livePositionRecords = (positionsPayload.dataList ?? []).map((item) => mapLivePerpsPosition(item));
+  const livePositionRecords = (positionsPayload.dataList ?? [])
+    .map((item) => mapLivePerpsPosition(item))
+    .map((record) => enrichGenericLivePositionMarket(record, recentTrades));
   const positions = livePositionRecords.map((item) => item.position);
   const pendingTriggers = livePositionRecords.flatMap((item) => item.pendingTriggers);
 
