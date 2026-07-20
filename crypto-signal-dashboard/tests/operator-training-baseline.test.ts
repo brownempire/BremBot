@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 import { decisionLearningProfileSchema } from "../lib/decision/learningTypes";
 import {
   makeOperatorTrainingBaselineProfile,
-  OPERATOR_TRAINING_BASELINE,
 } from "../lib/decision/operatorTrainingBaseline";
+import { OPERATOR_TRAINING_BASELINE } from "../lib/decision/operatorTrainingBaselineConstants";
 import { DEFAULT_SERVER_SIGNAL_PARAMS } from "../lib/perps/automationConfig";
 
 test("operator training baseline matches the requested starting parameters", () => {
@@ -28,4 +30,14 @@ test("operator training baseline matches the requested starting parameters", () 
     assert.equal(profile.assetAdjustments[asset].trendThreshold, 0.14);
     assert.equal(profile.assetAdjustments[asset].breakoutPercent, 0.19);
   }
+});
+
+test("client baseline constants do not import server-only runtime modules", () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "lib/decision/operatorTrainingBaselineConstants.ts"),
+    "utf8"
+  );
+
+  assert.doesNotMatch(source, /node:/);
+  assert.doesNotMatch(source, /^import (?!type\b)/m);
 });

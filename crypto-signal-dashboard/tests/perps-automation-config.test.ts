@@ -6,7 +6,7 @@ import {
   perpsAutomationConfigWriteSchema,
   type PerpsAutomationConfigInput,
 } from "../lib/perps/automationConfig";
-import { OPERATOR_TRAINING_BASELINE } from "../lib/decision/operatorTrainingBaseline";
+import { OPERATOR_TRAINING_BASELINE } from "../lib/decision/operatorTrainingBaselineConstants";
 import { parsePerpsAutomationConfig } from "../lib/perps/automationConfigStore";
 
 const walletAddress = "WalletConfig11111111111111111111111111111111";

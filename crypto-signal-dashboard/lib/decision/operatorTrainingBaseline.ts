@@ -1,21 +1,8 @@
 import crypto from "node:crypto";
 
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
-import type { UserParams } from "@/lib/signal/engine";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
-
-export const OPERATOR_TRAINING_BASELINE = {
-  signalParams: {
-    trendWindow: 15,
-    trendThreshold: 0.14,
-    breakoutPercent: 0.19,
-    cooldownSeconds: 180,
-  } satisfies UserParams,
-  maximumAllocationPercent: 80,
-  takeProfitRoePercent: 0,
-  stopLossRoePercent: 0,
-  leverageCap: 50,
-} as const;
 
 export function makeOperatorTrainingBaselineProfile(
   walletAddress: string,
