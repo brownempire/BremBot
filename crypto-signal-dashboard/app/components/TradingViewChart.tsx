@@ -17,7 +17,23 @@ type IntervalSubscription = {
 };
 
 type WidgetChart = {
+  createShape?: (
+    point: { price: number },
+    options: {
+      shape: "horizontal_line";
+      text: string;
+      lock: boolean;
+      disableSave: boolean;
+      disableSelection: boolean;
+      disableUndo: boolean;
+      showInObjectsTree: boolean;
+      zOrder: "top";
+      overrides: Record<string, string | number | boolean>;
+    }
+  ) => Promise<string | number> | string | number;
+  getAllShapes?: () => Array<{ id: string | number }>;
   onIntervalChanged?: () => IntervalSubscription;
+  removeEntity?: (id: string | number) => void;
   resolution?: () => string;
 };
 
@@ -42,8 +58,15 @@ const SCRIPT_ID = "tradingview-widget-script";
 const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v2";
 const DEFAULT_INTERVAL = "15";
 const DEFAULT_FAVORITE_INTERVALS = ["1", "5", "15", "60"];
-const OVERLAY_REFRESH_MS = 3_000;
+export const OVERLAY_REFRESH_MS = 5_000;
 let scriptLoadingPromise: Promise<void> | null = null;
+
+type Guide = NonNullable<TradingViewChartProps["guides"]>[number];
+
+type NativeGuideRecord = {
+  entityId: string | number;
+  signature: string;
+};
 
 type ComputedGuide = {
   id: string;
@@ -59,6 +82,38 @@ type OverlayScaleSnapshot = {
   minPrice: number;
   maxPrice: number;
 };
+
+function getGuideColor(tone: Guide["tone"]) {
+  if (tone === "tp") return "rgba(76, 227, 138, 0.95)";
+  if (tone === "sl") return "rgba(255, 122, 122, 0.95)";
+  return "rgba(101, 217, 255, 0.95)";
+}
+
+export function getNativeGuideDrawing(guide: Guide) {
+  const color = getGuideColor(guide.tone);
+  return {
+    point: { price: guide.price },
+    options: {
+      shape: "horizontal_line" as const,
+      text: guide.label,
+      lock: true,
+      disableSave: true,
+      disableSelection: true,
+      disableUndo: true,
+      showInObjectsTree: false,
+      zOrder: "top" as const,
+      overrides: {
+        linecolor: color,
+        linestyle: 2,
+        linewidth: 2,
+        showPrice: true,
+        textcolor: color,
+        bold: true,
+        fontsize: 11,
+      },
+    },
+  };
+}
 
 function getIntervalWindowMs(interval: string) {
   const normalized = interval.trim().toUpperCase();
@@ -319,9 +374,84 @@ export function TradingViewChart({
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
+  const nativeGuideRecordsRef = useRef(new Map<string, NativeGuideRecord>());
+  const nativeGuideSyncingRef = useRef(false);
+  const syncNativeGuidesRef = useRef<() => Promise<void>>(async () => undefined);
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [computedGuides, setComputedGuides] = useState<ComputedGuide[]>([]);
   const [isVisible, setIsVisible] = useState(true);
+  const [nativeGuidesActive, setNativeGuidesActive] = useState(false);
+
+  const clearNativeGuides = useCallback((chart = widgetRef.current?.activeChart?.()) => {
+    if (chart?.removeEntity) {
+      nativeGuideRecordsRef.current.forEach(({ entityId }) => {
+        try {
+          chart.removeEntity?.(entityId);
+        } catch {
+          // The chart may already have discarded drawings during a symbol or interval change.
+        }
+      });
+    }
+    nativeGuideRecordsRef.current.clear();
+    setNativeGuidesActive(false);
+  }, []);
+
+  const syncNativeGuides = useCallback(async () => {
+    if (nativeGuideSyncingRef.current) return;
+    const chart = widgetRef.current?.activeChart?.();
+    if (!chart?.createShape) {
+      setNativeGuidesActive(false);
+      return;
+    }
+
+    const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+    nativeGuideSyncingRef.current = true;
+    try {
+      const desiredIds = new Set(validGuides.map((guide) => guide.id));
+      const visibleShapeIds = chart.getAllShapes
+        ? new Set(chart.getAllShapes().map((shape) => String(shape.id)))
+        : null;
+
+      nativeGuideRecordsRef.current.forEach((record, guideId) => {
+        if (!desiredIds.has(guideId) || (visibleShapeIds && !visibleShapeIds.has(String(record.entityId)))) {
+          try {
+            chart.removeEntity?.(record.entityId);
+          } catch {
+            // The embedded chart already removed this drawing.
+          }
+          nativeGuideRecordsRef.current.delete(guideId);
+        }
+      });
+
+      for (const guide of validGuides) {
+        const signature = `${guide.price}:${guide.label}:${guide.tone}`;
+        const existing = nativeGuideRecordsRef.current.get(guide.id);
+        if (existing?.signature === signature) continue;
+        if (existing) {
+          try {
+            chart.removeEntity?.(existing.entityId);
+          } catch {
+            // The embedded chart already removed this drawing.
+          }
+          nativeGuideRecordsRef.current.delete(guide.id);
+        }
+
+        const drawing = getNativeGuideDrawing(guide);
+        const entityId = await chart.createShape(drawing.point, drawing.options);
+        nativeGuideRecordsRef.current.set(guide.id, { entityId, signature });
+      }
+
+      setNativeGuidesActive(
+        validGuides.length > 0
+        && validGuides.every((guide) => nativeGuideRecordsRef.current.has(guide.id))
+      );
+    } catch {
+      setNativeGuidesActive(false);
+    } finally {
+      nativeGuideSyncingRef.current = false;
+    }
+  }, [guides]);
+  syncNativeGuidesRef.current = syncNativeGuides;
 
   const refreshOverlay = useCallback(() => {
     const frameNode = frameRef.current;
@@ -351,6 +481,7 @@ export function TradingViewChart({
       if (!container) return;
 
       container.innerHTML = "";
+      clearNativeGuides();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
 
@@ -411,6 +542,8 @@ export function TradingViewChart({
               setCurrentInterval(interval);
             }
           });
+
+          void syncNativeGuidesRef.current();
         });
       } catch {
         if (!cancelled) {
@@ -424,10 +557,11 @@ export function TradingViewChart({
 
     return () => {
       cancelled = true;
+      clearNativeGuides();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol]);
+  }, [clearNativeGuides, containerId, symbol]);
 
   useEffect(() => {
     const node = frameRef.current;
@@ -508,20 +642,22 @@ export function TradingViewChart({
     if (!isVisible) return;
 
     refreshOverlay();
+    void syncNativeGuides();
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       refreshOverlay();
+      void syncNativeGuides();
     }, OVERLAY_REFRESH_MS);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [isVisible, refreshOverlay]);
+  }, [isVisible, refreshOverlay, syncNativeGuides]);
 
   return (
     <div ref={frameRef} className="tradingview-frame">
       <div id={containerId} className="tradingview-container" />
-      {computedGuides.length > 0 ? (
+      {!nativeGuidesActive && computedGuides.length > 0 ? (
         <div className="tradingview-overlay-layer" aria-hidden="true">
           {computedGuides.map((guide) => (
             <div
