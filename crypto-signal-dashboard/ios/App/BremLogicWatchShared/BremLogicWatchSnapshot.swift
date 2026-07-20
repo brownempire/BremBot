@@ -77,14 +77,14 @@ struct BremLogicWatchSnapshot: Codable {
 }
 
 enum BremLogicWatchServerClient {
-    static func fetch() async throws -> BremLogicWatchSnapshot {
+    static func fetch(timeoutInterval: TimeInterval = 10) async throws -> BremLogicWatchSnapshot {
         var components = URLComponents(url: BremLogicWatchServerURL, resolvingAgainstBaseURL: false)
         components?.queryItems = [
             URLQueryItem(name: "widgetRefresh", value: String(Int(Date().timeIntervalSince1970)))
         ]
         var request = URLRequest(url: components?.url ?? BremLogicWatchServerURL)
         request.httpMethod = "GET"
-        request.timeoutInterval = 10
+        request.timeoutInterval = timeoutInterval
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("no-cache, no-store", forHTTPHeaderField: "Cache-Control")

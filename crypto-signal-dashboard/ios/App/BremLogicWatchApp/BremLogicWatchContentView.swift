@@ -1,5 +1,6 @@
 import SwiftUI
 import ImageIO
+import WidgetKit
 
 private struct BremLogicOfficialLogo: View {
     let width: CGFloat
@@ -131,6 +132,7 @@ struct BremLogicWatchContentView: View {
             snapshot = .previewPosition
         } else if let next = try? await BremLogicWatchServerClient.fetch() {
             snapshot = next
+            WidgetCenter.shared.reloadAllTimelines()
         }
         isLoading = false
     }

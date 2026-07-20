@@ -31,8 +31,46 @@ struct BremLogicWatchEntry: TimelineEntry {
 }
 
 struct BremLogicWatchProvider: TimelineProvider {
+    private static let cacheKey = "BremLogicWatchWidgetSnapshot"
+
+    private func cachedSnapshot() -> BremLogicWatchSnapshot? {
+        guard let data = UserDefaults.standard.data(forKey: Self.cacheKey) else { return nil }
+        return try? JSONDecoder().decode(BremLogicWatchSnapshot.self, from: data)
+    }
+
+    private func cache(_ snapshot: BremLogicWatchSnapshot) {
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        UserDefaults.standard.set(data, forKey: Self.cacheKey)
+    }
+
+    /// WidgetKit may terminate a watch complication extension that waits too
+    /// long for its first timeline. Race the request against a short deadline
+    /// and always give the system a usable cached or fallback entry.
+    private func loadTimelineSnapshot() async -> BremLogicWatchSnapshot {
+        let fallback = cachedSnapshot() ?? .fallback
+
+        return await withTaskGroup(of: BremLogicWatchSnapshot?.self) { group in
+            group.addTask {
+                try? await BremLogicWatchServerClient.fetch(timeoutInterval: 3)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return nil
+            }
+
+            let result = await group.next() ?? nil
+            group.cancelAll()
+
+            if let result {
+                cache(result)
+                return result
+            }
+            return fallback
+        }
+    }
+
     func placeholder(in context: Context) -> BremLogicWatchEntry {
-        BremLogicWatchEntry(date: Date(), snapshot: .previewPosition)
+        BremLogicWatchEntry(date: Date(), snapshot: .fallback)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (BremLogicWatchEntry) -> Void) {
@@ -41,14 +79,14 @@ struct BremLogicWatchProvider: TimelineProvider {
             return
         }
         Task {
-            let snapshot = (try? await BremLogicWatchServerClient.fetch()) ?? .previewPosition
+            let snapshot = await loadTimelineSnapshot()
             completion(BremLogicWatchEntry(date: Date(), snapshot: snapshot))
         }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicWatchEntry>) -> Void) {
         Task {
-            let snapshot = (try? await BremLogicWatchServerClient.fetch()) ?? .fallback
+            let snapshot = await loadTimelineSnapshot()
             let refreshInterval: TimeInterval = snapshot.hasOpenPerp ? 5 * 60 : 15 * 60
             completion(Timeline(
                 entries: [BremLogicWatchEntry(date: Date(), snapshot: snapshot)],
@@ -148,7 +186,12 @@ struct BremLogicPositionComplicationView: View {
     }
 
     var body: some View {
-        content.containerBackground(.clear, for: .widget)
+        content
+            .containerBackground(.clear, for: .widget)
+            // Without an explicit privacy declaration, watchOS renders the
+            // entire complication as a placeholder while Always On is active.
+            .privacySensitive(false)
+            .unredacted()
     }
 }
 
@@ -176,6 +219,8 @@ struct BremLogicWalletComplicationView: View {
             }
         }
         .containerBackground(.clear, for: .widget)
+        .privacySensitive(false)
+        .unredacted()
     }
 }
 
@@ -206,6 +251,8 @@ struct BremLogicAgentComplicationView: View {
             }
         }
         .containerBackground(.clear, for: .widget)
+        .privacySensitive(false)
+        .unredacted()
     }
 }
 
