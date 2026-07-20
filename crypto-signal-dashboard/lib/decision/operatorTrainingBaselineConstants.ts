@@ -8,7 +8,7 @@ export const OPERATOR_TRAINING_BASELINE = {
     cooldownSeconds: 180,
   } satisfies UserParams,
   maximumAllocationPercent: 80,
-  takeProfitRoePercent: 0,
+  takeProfitRoePercent: 25,
   stopLossRoePercent: 0,
   leverageCap: 50,
 } as const;

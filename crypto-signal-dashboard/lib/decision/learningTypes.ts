@@ -87,7 +87,7 @@ export const decisionLearningProfileSchema = z.object({
   preferredDirection: z.enum(["bullish", "bearish", "balanced"]),
   trendWindow: z.number().int().min(5).max(180),
   cooldownSeconds: z.number().int().min(30).max(3_600),
-  takeProfitRoePercent: z.number().finite().min(0).max(12),
+  takeProfitRoePercent: z.number().finite().min(0).max(50),
   stopLossRoePercent: z.number().finite().min(0).max(6),
   minimumRewardRiskRatio: z.number().finite().min(1.25).max(4),
   atrLookback: z.number().int().min(7).max(30),
