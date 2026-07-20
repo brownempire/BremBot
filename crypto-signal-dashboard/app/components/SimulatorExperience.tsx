@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import type { SimulatorPdfField, SimulatorPdfTradeRow } from "@/lib/simulator/pdfReport";
 
 type SimulatorInputs = {
   startingBalance: number;
@@ -164,6 +165,15 @@ function formatPercent(value: number) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   })}%`;
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Unable to read the BremLogic logo."));
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read the BremLogic logo."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function simulateTrades(settings: NormalizedSimulatorSettings, randomize: boolean) {
@@ -345,6 +355,8 @@ export function SimulatorExperience() {
     "The blue curve shows wallet balance over time. The red dashed line marks the target balance: starting balance plus target profit."
   );
   const [sampleRuns, setSampleRuns] = useState<MonteCarloScreenRun[]>([]);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfStatus, setPdfStatus] = useState("");
   const [highlightedRun, setHighlightedRun] = useState<number | null>(null);
   const [zoom, setZoom] = useState(1);
   const [tooltip, setTooltip] = useState<TooltipState>({
@@ -567,6 +579,79 @@ export function SimulatorExperience() {
     showTooltip(nearest.run, nearest.point, pageX, pageY);
   }
 
+  async function saveResultsPdf() {
+    const canvas = canvasRef.current;
+    if (!canvas || rows.length === 0) {
+      setPdfStatus("Calculate results before saving a PDF.");
+      return;
+    }
+
+    setPdfBusy(true);
+    setPdfStatus("Building PDF...");
+    try {
+      const logoResponse = await fetch("/bremlogic-logo.png", { cache: "force-cache" });
+      if (!logoResponse.ok) throw new Error("The BremLogic logo could not be loaded.");
+      const logoDataUrl = await blobToDataUrl(await logoResponse.blob());
+      const chartDataUrl = canvas.toDataURL("image/png", 1);
+      const reportInputs: SimulatorPdfField[] = [
+        { label: "Starting Balance", value: formatCurrency(Number(inputs.startingBalance)) },
+        { label: "Leverage", value: `${Number(inputs.leverage)}x` },
+        { label: "Win Rate", value: formatPercent(Number(inputs.winRate)) },
+        { label: "Take Profit Move", value: formatPercent(Number(inputs.takeProfit)) },
+        { label: "Stop Loss Move", value: formatPercent(Number(inputs.stopLoss)) },
+        { label: "Open Fee", value: formatPercent(Number(inputs.openFee)) },
+        { label: "Close Fee", value: formatPercent(Number(inputs.closeFee)) },
+        { label: "Borrow / Funding Fee", value: formatPercent(Number(inputs.borrowFee)) },
+        { label: "Max Wallet Risk", value: formatPercent(Number(inputs.maxRisk)) },
+        { label: "Number of Trades", value: String(Number(inputs.numTrades)) },
+        { label: "Target Profit", value: formatCurrency(Number(inputs.targetProfit)) },
+        { label: "Reinvest Full Balance", value: inputs.reinvest === "yes" ? "Yes" : "No" },
+        {
+          label: "Custom Margin",
+          value: inputs.customMarginType === "percent"
+            ? formatPercent(Number(inputs.customMarginValue))
+            : formatCurrency(Number(inputs.customMarginValue)),
+        },
+        ...(monteCarloMode ? [
+          { label: "Monte Carlo Runs", value: String(Number(inputs.mcRuns)) },
+          { label: "Ruin Balance", value: formatCurrency(Number(inputs.ruinBalance)) },
+          { label: "Sample Graph Paths", value: String(Number(inputs.samplePaths)) },
+        ] : []),
+      ];
+      const reportTrades: SimulatorPdfTradeRow[] = rows.map((row) => ({
+        trade: String(row.i),
+        result: row.result,
+        start: formatCurrency(row.start),
+        margin: formatCurrency(row.margin),
+        position: formatCurrency(row.position),
+        grossPnl: formatCurrency(row.grossPnl),
+        fees: formatCurrency(row.fees),
+        netPnl: formatCurrency(row.netPnl),
+        end: formatCurrency(row.balance),
+      }));
+      const { buildSimulatorReportPdf } = await import("@/lib/simulator/pdfReport");
+      const pdf = buildSimulatorReportPdf({
+        modeLabel: currentModeLabel,
+        generatedAt: new Date().toLocaleString(),
+        logoDataUrl,
+        chartDataUrl,
+        chartNote,
+        summary: summary.map((item) => ({ label: item.label, value: String(item.value) })),
+        inputs: reportInputs,
+        trades: reportTrades,
+        logTitle,
+        logNote,
+      });
+      const date = new Date().toISOString().slice(0, 10);
+      pdf.save(`bremlogic-${monteCarloMode ? "monte-carlo" : "simple"}-results-${date}.pdf`);
+      setPdfStatus("PDF saved with the graph and complete results.");
+    } catch (error) {
+      setPdfStatus(error instanceof Error ? error.message : "Unable to save the simulator PDF.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   useEffect(() => {
     calculate();
   }, [calculate]);
@@ -765,7 +850,13 @@ export function SimulatorExperience() {
 
         <div className="simulator-results-column">
           <div className="simulator-card">
-            <h2>Results</h2>
+            <div className="simulator-results-header">
+              <h2>Results</h2>
+              <button className="simulator-pdf-button" disabled={pdfBusy || rows.length === 0} onClick={() => { void saveResultsPdf(); }} type="button">
+                {pdfBusy ? "Building PDF..." : "Save Results PDF"}
+              </button>
+            </div>
+            {pdfStatus ? <div className="note simulator-pdf-status">{pdfStatus}</div> : null}
             <div className="summary">
               {summary.map((item) => (
                 <div key={item.label} className="metric">

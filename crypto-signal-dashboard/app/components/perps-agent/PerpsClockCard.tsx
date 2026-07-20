@@ -56,7 +56,7 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
           </button>
         </div>
       </div>
-      <div className="wallet-controls">
+      <div className="wallet-controls perps-agent-controls">
         <button type="button" className={props.modeLabel === "Paper mode" ? "" : "secondary"} onClick={props.onToggleMode} disabled={props.isBusy}>
           {props.modeLabel === "Paper mode" ? "Switch To Live" : "Switch To Paper"}
         </button>

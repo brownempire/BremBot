@@ -473,6 +473,25 @@ main {
   font-size: 1.05rem;
 }
 
+.simulator-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.simulator-results-header h2 {
+  margin-bottom: 0;
+}
+
+.simulator-pdf-button {
+  flex: 0 0 auto;
+}
+
+.simulator-pdf-status {
+  margin-top: 10px;
+}
+
 .simulator-card label {
   color: var(--muted);
   font-size: 0.88rem;
@@ -1283,6 +1302,39 @@ button:disabled {
 .perps-scalp-switch input:focus-visible + span[aria-hidden] {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+@media (max-width: 520px) and (orientation: portrait) {
+  .perps-agent-controls {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 5px;
+    align-items: stretch;
+  }
+
+  .perps-agent-controls > button,
+  .perps-agent-controls > .perps-scalp-menu > summary {
+    min-width: 0;
+    min-height: 38px;
+    padding: 8px 7px;
+    justify-content: center;
+    white-space: nowrap;
+    font-size: clamp(10px, 3vw, 12px);
+    line-height: 1.1;
+  }
+
+  .perps-agent-controls > button {
+    width: 100%;
+  }
+
+  .perps-agent-controls > .perps-scalp-menu {
+    min-width: 0;
+  }
+
+  .perps-agent-controls .perps-scalp-dropdown {
+    right: 0;
+    width: min(300px, calc(100vw - 40px));
+  }
 }
 
 .modal-backdrop {
