@@ -64,6 +64,14 @@ test("widget summary contains display-safe position data and agent equity", () =
     agentAvailableUsdc: 250,
     session: liveSession,
     now: new Date("2026-07-16T12:34:56.000Z"),
+    chartSymbol: "SOL",
+    chartPoints: Array.from({ length: 18 }, (_, index) => ({
+      t: 1_784_204_400_000 + index * 60_000,
+      o: 149 + index,
+      h: 150.5 + index,
+      l: 148.5 + index,
+      v: 150 + index,
+    })),
   });
 
   assert.equal(snapshot.openPerpLabel, "SOL/USD LONG");
@@ -82,6 +90,15 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpStopLossPrice, 135);
   assert.equal(snapshot.openPerpTakeProfitPnlUsd, 50);
   assert.equal(snapshot.openPerpStopLossPnlUsd, -30);
+  assert.equal(snapshot.chartSymbol, "SOL");
+  assert.equal(snapshot.chartCandles.length, 15);
+  assert.deepEqual(snapshot.chartCandles[0], {
+    timestamp: 1_784_204_580,
+    open: 152,
+    high: 153.5,
+    low: 151.5,
+    close: 153,
+  });
   assert.equal(snapshot.walletBalanceUsd, 360);
   assert.equal(snapshot.mainWalletBalanceUsd, 75);
   assert.equal(snapshot.agentWalletBalanceUsd, 360);
@@ -113,6 +130,8 @@ test("widget summary provides a useful idle state without inventing a balance", 
   assert.equal(snapshot.openPerpEntryPrice, null);
   assert.equal(snapshot.openPerpTakeProfitPnlUsd, null);
   assert.equal(snapshot.openPerpStopLossPnlUsd, null);
+  assert.equal(snapshot.chartSymbol, null);
+  assert.deepEqual(snapshot.chartCandles, []);
   assert.equal(snapshot.walletBalanceUsd, null);
   assert.equal(snapshot.mainWalletBalanceUsd, null);
   assert.equal(snapshot.agentWalletBalanceUsd, null);

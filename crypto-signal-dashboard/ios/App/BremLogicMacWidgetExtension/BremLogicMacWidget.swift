@@ -85,6 +85,27 @@ struct BremLogicMacWidgetEntryView: View {
         Date(timeIntervalSince1970: entry.snapshot.updatedAt).formatted(date: .omitted, time: .shortened)
     }
 
+    private var chartCandles: [BremLogicWidgetCandle] {
+        entry.snapshot.chartCandles ?? []
+    }
+
+    private var pnlSummary: String {
+        let amount = usd(entry.snapshot.openPerpPnlUsd, signed: true)
+        guard let percent = entry.snapshot.openPerpPnlPercent else { return amount }
+        return "\(amount)  ·  \(percent >= 0 ? "+" : "-")\(String(format: "%.2f", abs(percent)))%"
+    }
+
+    private func chart(height: CGFloat) -> some View {
+        BremLogicCandlestickChart(
+            candles: chartCandles,
+            symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
+            entryPrice: entry.snapshot.openPerpEntryPrice,
+            markPrice: entry.snapshot.openPerpMarkPrice,
+            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
+        )
+        .frame(height: height)
+    }
+
     private func usd(_ value: Double?, signed: Bool = false) -> String {
         guard let value else { return "--" }
         if signed {
@@ -163,30 +184,109 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private var compactContent: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 4) {
             header
-            Text("OPEN PERPS")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(mint)
-            Text(positionLabel)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-            Text(detailLabel)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(.white.opacity(0.7))
-                .lineLimit(1)
             if hasOpenPerp {
-                Text(usd(entry.snapshot.openPerpPnlUsd, signed: true))
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                Text(positionLabel)
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(pnlSummary)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(pnlColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+                HStack(spacing: 5) {
+                    compactMetric("ENTRY", price(entry.snapshot.openPerpEntryPrice))
+                    compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: pnlColor)
+                }
+                HStack(spacing: 5) {
+                    compactMetric("LEVERAGE", leverage(entry.snapshot.openPerpLeverage))
+                    compactMetric("TAKE PROFIT", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
+                }
+            } else {
+                Text("OPEN PERPS")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(mint)
+                Text(positionLabel)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(detailLabel)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(2)
             }
             Spacer(minLength: 0)
-            HStack(spacing: 7) {
-                metric("Main", usd(entry.snapshot.mainWalletBalanceUsd))
-                metric("Agent", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                refreshButton
+            HStack(spacing: 5) {
+                Text(entry.snapshot.perpsAutoTradeStatus ?? "Agent status unavailable")
+                    .font(.system(size: 8, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+                Spacer(minLength: 2)
+                compactRefreshButton
+            }
+        }
+    }
+
+    private func compactMetric(_ title: String, _ value: String, color: Color = .white) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private var compactRefreshButton: some View {
+        Button(intent: BremLogicMacWidgetRefreshIntent()) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(mint)
+                .frame(width: 24, height: 22)
+                .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Refresh BremLogic widget")
+    }
+
+    private var mediumContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                logo
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(positionLabel)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(pnlSummary)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 3)
+                Text(leverage(entry.snapshot.openPerpLeverage))
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            if hasOpenPerp {
+                chart(height: 76)
+            } else {
+                Text(detailLabel)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .frame(maxHeight: .infinity, alignment: .center)
             }
         }
     }
@@ -229,13 +329,13 @@ struct BremLogicMacWidgetEntryView: View {
                     metric("Leverage", leverage(entry.snapshot.openPerpLeverage))
                     metric("Liquidation", price(entry.snapshot.openPerpLiquidationPrice), color: .orange)
                     metric("Take Profit", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
-                    metric("Stop Loss", price(entry.snapshot.openPerpStopLossPrice), color: negative)
                     metric("TP P/L", usd(entry.snapshot.openPerpTakeProfitPnlUsd, signed: true), color: positive)
-                    metric("SL P/L", usd(entry.snapshot.openPerpStopLossPnlUsd, signed: true), color: negative)
-                    metric("Mode", entry.snapshot.perpsMode ?? "Paper")
-                    metric("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
+            }
+
+            if hasOpenPerp {
+                chart(height: family == .systemExtraLarge ? 112 : 92)
             }
 
             HStack(spacing: 8) {
@@ -267,6 +367,8 @@ struct BremLogicMacWidgetEntryView: View {
         Group {
             if family == .systemLarge || family == .systemExtraLarge {
                 expandedContent
+            } else if family == .systemMedium {
+                mediumContent
             } else {
                 compactContent
             }

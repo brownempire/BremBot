@@ -3,6 +3,16 @@ import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPosition } from "@/l
 import { getPerpsSession } from "@/lib/perps/sessionStore";
 import type { PerpsAutomationSession } from "@/lib/perps/sessionTypes";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
+import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
+import type { PricePoint } from "@/lib/price/simulated";
+
+export type WidgetChartCandle = {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+};
 
 export type WidgetServerSnapshot = {
   title: string;
@@ -22,6 +32,8 @@ export type WidgetServerSnapshot = {
   openPerpStopLossPrice: number | null;
   openPerpTakeProfitPnlUsd: number | null;
   openPerpStopLossPnlUsd: number | null;
+  chartSymbol: string | null;
+  chartCandles: WidgetChartCandle[];
   walletBalanceUsd: number | null;
   mainWalletBalanceUsd: number | null;
   agentWalletBalanceUsd: number | null;
@@ -39,6 +51,8 @@ type WidgetSnapshotInput = {
   mainAvailableUsdc: number | null;
   agentAvailableUsdc: number | null;
   session: PerpsAutomationSession | null;
+  chartSymbol?: string | null;
+  chartPoints?: PricePoint[];
   now?: Date;
 };
 
@@ -57,6 +71,32 @@ function formatUsd(value: number) {
 
 function getLivePositions(positions: JupiterPerpsPosition[]) {
   return positions.filter((position) => position.source !== "mock" && position.source !== "rpc-placeholder");
+}
+
+function getChartAsset(position: JupiterPerpsPosition | null) {
+  const source = [position?.marketSymbol, position?.marketName]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toUpperCase();
+  if (/\bSOL(?:ANA)?\b/.test(source)) return "SOL";
+  if (/\bETH(?:EREUM)?\b/.test(source)) return "ETH";
+  if (/\bBTC\b|\bBITCOIN\b/.test(source)) return "BTC";
+  return null;
+}
+
+function buildChartCandles(points: PricePoint[] = []): WidgetChartCandle[] {
+  return points
+    .flatMap((point) => {
+      const close = finiteOrNull(point.v);
+      if (close === null || close <= 0) return [];
+      const open = finiteOrNull(point.o) ?? close;
+      const high = Math.max(finiteOrNull(point.h) ?? close, open, close);
+      const low = Math.min(finiteOrNull(point.l) ?? close, open, close);
+      if (!Number.isFinite(point.t) || point.t <= 0 || low <= 0) return [];
+      return [{ timestamp: Math.round(point.t / 1_000), open, high, low, close }];
+    })
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-15);
 }
 
 function calculateExpectedPnl(position: JupiterPerpsPosition | null, targetPrice: number | null | undefined) {
@@ -92,6 +132,8 @@ export function buildWidgetServerSnapshot({
   mainAvailableUsdc,
   agentAvailableUsdc,
   session,
+  chartSymbol = null,
+  chartPoints = [],
   now = new Date(),
 }: WidgetSnapshotInput): WidgetServerSnapshot {
   const liveAgentPositions = getLivePositions(agentPositions);
@@ -144,6 +186,8 @@ export function buildWidgetServerSnapshot({
     openPerpStopLossPrice: finiteOrNull(position?.stopLoss),
     openPerpTakeProfitPnlUsd: calculateExpectedPnl(position, position?.takeProfit),
     openPerpStopLossPnlUsd: calculateExpectedPnl(position, position?.stopLoss),
+    chartSymbol: position ? chartSymbol ?? getChartAsset(position) : null,
+    chartCandles: position ? buildChartCandles(chartPoints) : [],
     walletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
     mainWalletBalanceUsd: finiteOrNull(mainWalletBalanceUsd),
     agentWalletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
@@ -175,11 +219,21 @@ export async function loadWidgetServerSnapshot() {
     throw new Error("The live Perps portfolio is temporarily unavailable.");
   }
 
+  const agentPositions = agentPortfolioResult.status === "fulfilled" ? agentPortfolioResult.value.positions : [];
+  const mainPositions = mainPortfolioResult.status === "fulfilled" ? mainPortfolioResult.value.positions : [];
+  const chartPosition = getLivePositions(agentPositions)[0] ?? getLivePositions(mainPositions)[0] ?? null;
+  const chartSymbol = getChartAsset(chartPosition);
+  const chartPoints = chartSymbol
+    ? await fetchCoinbaseMinuteCandles(`${chartSymbol}-USD`, 16).catch(() => [])
+    : [];
+
   return buildWidgetServerSnapshot({
-    agentPositions: agentPortfolioResult.status === "fulfilled" ? agentPortfolioResult.value.positions : [],
-    mainPositions: mainPortfolioResult.status === "fulfilled" ? mainPortfolioResult.value.positions : [],
+    agentPositions,
+    mainPositions,
     mainAvailableUsdc: mainBalanceResult.status === "fulfilled" ? mainBalanceResult.value : null,
     agentAvailableUsdc: agentBalanceResult.status === "fulfilled" ? agentBalanceResult.value : null,
     session: sessionResult.status === "fulfilled" ? sessionResult.value : null,
+    chartSymbol,
+    chartPoints,
   });
 }
