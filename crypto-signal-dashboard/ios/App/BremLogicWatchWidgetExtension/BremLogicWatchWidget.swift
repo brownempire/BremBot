@@ -1,29 +1,5 @@
 import SwiftUI
 import WidgetKit
-import ImageIO
-
-private struct BremLogicOfficialLogo: View {
-    let width: CGFloat
-    let height: CGFloat
-
-    private static let image: CGImage? = {
-        guard let url = Bundle.main.url(forResource: "BremLogicLogo", withExtension: "png"),
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            return nil
-        }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }()
-
-    var body: some View {
-        if let image = Self.image {
-            Image(decorative: image, scale: 1)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .frame(width: width, height: height, alignment: .leading)
-        }
-    }
-}
 
 struct BremLogicWatchEntry: TimelineEntry {
     let date: Date
@@ -43,29 +19,11 @@ struct BremLogicWatchProvider: TimelineProvider {
         UserDefaults.standard.set(data, forKey: Self.cacheKey)
     }
 
-    /// WidgetKit may terminate a watch complication extension that waits too
-    /// long for its first timeline. Race the request against a short deadline
-    /// and always give the system a usable cached or fallback entry.
-    private func loadTimelineSnapshot() async -> BremLogicWatchSnapshot {
-        let fallback = cachedSnapshot() ?? .fallback
-
-        return await withTaskGroup(of: BremLogicWatchSnapshot?.self) { group in
-            group.addTask {
-                try? await BremLogicWatchServerClient.fetch(timeoutInterval: 3)
+    private func refreshCache() {
+        Task {
+            if let snapshot = try? await BremLogicWatchServerClient.fetch(timeoutInterval: 8) {
+                cache(snapshot)
             }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                return nil
-            }
-
-            let result = await group.next() ?? nil
-            group.cancelAll()
-
-            if let result {
-                cache(result)
-                return result
-            }
-            return fallback
         }
     }
 
@@ -78,21 +36,21 @@ struct BremLogicWatchProvider: TimelineProvider {
             completion(BremLogicWatchEntry(date: Date(), snapshot: .previewPosition))
             return
         }
-        Task {
-            let snapshot = await loadTimelineSnapshot()
-            completion(BremLogicWatchEntry(date: Date(), snapshot: snapshot))
-        }
+        completion(BremLogicWatchEntry(date: Date(), snapshot: cachedSnapshot() ?? .fallback))
+        refreshCache()
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicWatchEntry>) -> Void) {
-        Task {
-            let snapshot = await loadTimelineSnapshot()
-            let refreshInterval: TimeInterval = snapshot.hasOpenPerp ? 5 * 60 : 15 * 60
-            completion(Timeline(
-                entries: [BremLogicWatchEntry(date: Date(), snapshot: snapshot)],
-                policy: .after(Date().addingTimeInterval(refreshInterval))
-            ))
-        }
+        // Hand WidgetKit an entry synchronously. A complication extension can
+        // be suspended before an initial network request finishes, which leaves
+        // the face with an empty slot and no timeline to render.
+        let snapshot = cachedSnapshot() ?? .fallback
+        let refreshInterval: TimeInterval = snapshot.hasOpenPerp ? 60 : 5 * 60
+        completion(Timeline(
+            entries: [BremLogicWatchEntry(date: Date(), snapshot: snapshot)],
+            policy: .after(Date().addingTimeInterval(refreshInterval))
+        ))
+        refreshCache()
     }
 }
 
@@ -100,10 +58,10 @@ struct BremLogicComplicationBrand: View {
     var compact = false
 
     var body: some View {
-        BremLogicOfficialLogo(
-            width: compact ? 34 : 46,
-            height: compact ? 11 : 15
-        )
+        Text("BREM")
+            .font(.system(size: compact ? 7 : 9, weight: .black, design: .rounded))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
     }
 }
 
@@ -123,16 +81,19 @@ struct BremLogicPositionComplicationView: View {
     private var content: some View {
         switch family {
         case .accessoryCircular:
-            VStack(spacing: 0) {
-                BremLogicComplicationBrand(compact: true)
-                Text(market)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                Text(pnl)
-                    .font(.system(size: 11, weight: .black, design: .rounded))
-                    .foregroundStyle(pnlColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
+            ZStack {
+                AccessoryWidgetBackground()
+                VStack(spacing: 0) {
+                    BremLogicComplicationBrand(compact: true)
+                    Text(market)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                    Text(pnl)
+                        .font(.system(size: 11, weight: .black, design: .rounded))
+                        .foregroundStyle(pnlColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
+                }
             }
         case .accessoryCorner:
             Text(pnl)
@@ -188,10 +149,6 @@ struct BremLogicPositionComplicationView: View {
     var body: some View {
         content
             .containerBackground(.clear, for: .widget)
-            // Without an explicit privacy declaration, watchOS renders the
-            // entire complication as a placeholder while Always On is active.
-            .privacySensitive(false)
-            .unredacted()
     }
 }
 
@@ -208,19 +165,20 @@ struct BremLogicWalletComplicationView: View {
             case .accessoryCorner:
                 Text(balance).font(.system(size: 12, weight: .black, design: .rounded)).widgetLabel { Text("B WALLET") }
             default:
-                VStack(spacing: 1) {
-                    BremLogicComplicationBrand(compact: true)
-                    Text(balance)
-                        .font(.system(size: 10, weight: .black, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
-                    Text("WALLET").font(.system(size: 6, weight: .bold, design: .rounded)).foregroundStyle(.secondary)
+                ZStack {
+                    AccessoryWidgetBackground()
+                    VStack(spacing: 1) {
+                        BremLogicComplicationBrand(compact: true)
+                        Text(balance)
+                            .font(.system(size: 10, weight: .black, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                        Text("WALLET").font(.system(size: 6, weight: .bold, design: .rounded)).foregroundStyle(.secondary)
+                    }
                 }
             }
         }
         .containerBackground(.clear, for: .widget)
-        .privacySensitive(false)
-        .unredacted()
     }
 }
 
@@ -240,19 +198,20 @@ struct BremLogicAgentComplicationView: View {
                     .foregroundStyle(clockedIn ? .green : .secondary)
                     .widgetLabel { Text("B AGENT") }
             default:
-                VStack(spacing: 1) {
-                    BremLogicComplicationBrand(compact: true)
-                    Image(systemName: clockedIn ? "bolt.fill" : "pause.fill")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(clockedIn ? .green : .secondary)
-                    Text(clockedIn ? "ACTIVE" : "IDLE")
-                        .font(.system(size: 6, weight: .bold, design: .rounded))
+                ZStack {
+                    AccessoryWidgetBackground()
+                    VStack(spacing: 1) {
+                        BremLogicComplicationBrand(compact: true)
+                        Image(systemName: clockedIn ? "bolt.fill" : "pause.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(clockedIn ? .green : .secondary)
+                        Text(clockedIn ? "ACTIVE" : "IDLE")
+                            .font(.system(size: 6, weight: .bold, design: .rounded))
+                    }
                 }
             }
         }
         .containerBackground(.clear, for: .widget)
-        .privacySensitive(false)
-        .unredacted()
     }
 }
 
