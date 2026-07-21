@@ -102,7 +102,7 @@ struct BremLogicCandlestickChart: View {
     private let takeProfitColor = Color(red: 0.57, green: 0.94, blue: 0.78)
 
     private var visibleCandles: [BremLogicWidgetCandle] {
-        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(15))
+        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
     }
 
     private func formattedPrice(_ value: Double?) -> String? {
@@ -234,7 +234,7 @@ struct BremLogicCandlestickChart: View {
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(symbol ?? "Perpetual") one minute candlestick chart for the last fifteen minutes")
+        .accessibilityLabel("\(symbol ?? "Perpetual") one minute candlestick chart for the last hour")
     }
 }
 

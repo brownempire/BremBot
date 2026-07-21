@@ -151,20 +151,11 @@ struct BremLogicWidgetEntryView: View {
         .frame(height: height)
     }
 
-    private func chartRow<Leading: View>(
-        height: CGFloat,
-        @ViewBuilder leading: @escaping () -> Leading
-    ) -> some View {
+    private var flexibleChart: some View {
         GeometryReader { geometry in
-            let columnWidth = max(1, (geometry.size.width - 6) * 0.5)
-            HStack(spacing: 6) {
-                leading()
-                    .frame(width: columnWidth, height: height, alignment: .center)
-                chart(height: height)
-                    .frame(width: columnWidth, height: height)
-            }
+            chart(height: max(1, geometry.size.height))
+                .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .frame(height: height)
     }
 
     private var widgetBackground: LinearGradient {
@@ -315,32 +306,35 @@ struct BremLogicWidgetEntryView: View {
 
     @ViewBuilder
     private var mediumContent: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 5) {
-                brandLogo
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(openPerpLabel)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  ·  "))
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(pnlColor)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.55))
-            }
+        VStack(alignment: .leading, spacing: 4) {
+            sessionHeader
 
             if hasOpenPerp {
-                chartRow(height: 50) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 2), spacing: 3) {
-                        smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
-                        smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
-                        smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
-                        smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                GeometryReader { geometry in
+                    let leftWidth = max(112, geometry.size.width * 0.31)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(openPerpLabel)
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  ·  "))
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .foregroundStyle(pnlColor)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 2), spacing: 3) {
+                                smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
+                                smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
+                                smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
+                                smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                            }
+                        }
+                        .frame(width: leftWidth, height: geometry.size.height, alignment: .topLeading)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - leftWidth - 6), height: geometry.size.height)
                     }
                 }
             } else {
@@ -374,86 +368,132 @@ struct BremLogicWidgetEntryView: View {
         }
     }
 
-    @ViewBuilder
-    private var largeContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                brandLogo
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
+    private var sessionHeader: some View {
+        HStack(spacing: 8) {
+            brandLogo
+            Spacer(minLength: 6)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
+                if widgetFamily != .systemMedium {
                     Text("Updated \(updatedLabel)")
                         .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                 }
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                            .frame(width: 26, height: 26)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
-                }
             }
+            if #available(iOS 17.0, *) {
+                Button(intent: BremLogicWidgetRefreshIntent()) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(brandPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Refresh BremLogic widget")
+            }
+        }
+    }
+
+    private var positionSummary: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("OPEN PERPS")
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(brandPrimary)
+            Text(openPerpLabel)
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 22 : 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+            Text(openPerpDetail)
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.68))
+                .lineLimit(1)
+                .minimumScaleFactor(0.45)
+        }
+    }
+
+    private var pnlPanel: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("UNREALIZED PNL")
+                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.5))
+            Text(pnlLabel ?? "--")
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 19 : 17, weight: .bold, design: .rounded))
+                .foregroundStyle(pnlColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+            if let pnlPercentLabel {
+                Text(pnlPercentLabel)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(pnlColor.opacity(0.9))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(7)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.065), lineWidth: 1)
+        }
+    }
+
+    private var walletStatusGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 4) {
+            metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+            metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+            metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+            metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+        }
+    }
+
+    private var tradeMetricGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
+            metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
+            metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
+            metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
+            metricTile("Mark", priceLabel(entry.snapshot.openPerpMarkPrice))
+            metricTile("Leverage", leverageLabel(entry.snapshot.openPerpLeverage))
+            metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
+            metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+            metricTile("TP P/L", expectedPnlLabel(entry.snapshot.openPerpTakeProfitPnlUsd), accent: Color(red: 0.45, green: 0.92, blue: 0.62))
+        }
+    }
+
+    @ViewBuilder
+    private var largeContent: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            sessionHeader
 
             if hasOpenPerp {
-                HStack(alignment: .bottom, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("OPEN PERPS")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                        Text(openPerpLabel)
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                        Text(openPerpDetail)
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.68))
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                    if let pnlLabel {
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("UNREALIZED PNL")
-                                .font(.system(size: 7, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.5))
-                            Text(pnlLabel)
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
-                                .foregroundStyle(pnlColor)
-                            if let pnlPercentLabel {
-                                Text(pnlPercentLabel)
-                                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                                    .foregroundStyle(pnlColor.opacity(0.9))
-                            }
+                GeometryReader { geometry in
+                    let summaryHeight = max(72, geometry.size.height * 0.30)
+                    let lowerHeight = max(1, geometry.size.height - summaryHeight - 6)
+                    let railWidth = max(96, geometry.size.width * 0.24)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 7) {
+                            positionSummary
+                                .frame(width: max(108, geometry.size.width * 0.39), height: summaryHeight, alignment: .leading)
+                            tradeMetricGrid
+                                .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
                         }
-                    }
-                }
+                        .frame(height: summaryHeight)
 
-                chartRow(height: 64) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 4) {
-                        metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                        metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                        metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
-                        metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
-                    }
-                }
+                        HStack(spacing: 7) {
+                            VStack(spacing: 4) {
+                                pnlPanel
+                                walletStatusGrid
+                            }
+                            .frame(width: railWidth, height: lowerHeight)
 
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
-                    metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
-                    metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
-                    metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
-                    metricTile("Mark", priceLabel(entry.snapshot.openPerpMarkPrice))
-                    metricTile("Leverage", leverageLabel(entry.snapshot.openPerpLeverage))
-                    metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
-                    metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
-                    metricTile("TP P/L", expectedPnlLabel(entry.snapshot.openPerpTakeProfitPnlUsd), accent: Color(red: 0.45, green: 0.92, blue: 0.62))
+                            flexibleChart
+                                .frame(width: max(1, geometry.size.width - railWidth - 7), height: lowerHeight)
+                        }
+                        .frame(height: lowerHeight)
+                    }
                 }
             } else {
                 VStack(alignment: .leading, spacing: 7) {
@@ -477,85 +517,37 @@ struct BremLogicWidgetEntryView: View {
     @ViewBuilder
     private var extraLargeContent: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                brandLogo
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(entry.snapshot.perpsSessionState ?? "Clocked Out")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(entry.snapshot.perpsSessionState == "Clocked In" ? brandPrimary : .white.opacity(0.64))
-                    Text("Updated \(updatedLabel)")
-                        .font(.system(size: 8, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                            .frame(width: 26, height: 26)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
-                }
-            }
+            sessionHeader
 
             if hasOpenPerp {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("OPEN PERPS")
-                            .font(.system(size: 9, weight: .semibold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                        Text(openPerpLabel)
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.72)
-                        Text(openPerpDetail)
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.68))
-                            .lineLimit(1)
-                        if let pnlLabel {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("UNREALIZED PNL")
-                                    .font(.system(size: 7, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white.opacity(0.5))
-                                Text(pnlLabel)
-                                    .font(.system(size: 19, weight: .bold, design: .rounded))
-                                    .foregroundStyle(pnlColor)
-                                if let pnlPercentLabel {
-                                    Text(pnlPercentLabel)
-                                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                                        .foregroundStyle(pnlColor.opacity(0.9))
-                                }
-                            }
+                GeometryReader { geometry in
+                    let headlineHeight = max(58, geometry.size.height * 0.19)
+                    let statusHeight = max(36, geometry.size.height * 0.12)
+                    let metricsHeight = max(68, geometry.size.height * 0.21)
+                    let chartHeight = max(72, geometry.size.height - headlineHeight - statusHeight - metricsHeight - 18)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 8) {
+                            positionSummary
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                            pnlPanel
+                                .frame(width: max(110, geometry.size.width * 0.27), height: headlineHeight)
                         }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(8)
-                    .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .frame(height: headlineHeight)
 
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
-                        metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
-                        metricTile("Collateral", balanceLabel(entry.snapshot.openPerpCollateralUsd))
-                        metricTile("Entry", priceLabel(entry.snapshot.openPerpEntryPrice))
-                        metricTile("Mark", priceLabel(entry.snapshot.openPerpMarkPrice))
-                        metricTile("Leverage", leverageLabel(entry.snapshot.openPerpLeverage))
-                        metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
-                        metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
-                        metricTile("TP P/L", expectedPnlLabel(entry.snapshot.openPerpTakeProfitPnlUsd), accent: Color(red: 0.45, green: 0.92, blue: 0.62))
-                    }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                }
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
+                            metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                            metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                            metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+                            metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                        }
+                        .frame(height: statusHeight)
 
-                chartRow(height: 66) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 4) {
-                        metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                        metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                        metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
-                        metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                        flexibleChart
+                            .frame(height: chartHeight)
+
+                        tradeMetricGrid
+                            .frame(height: metricsHeight, alignment: .top)
                     }
                 }
             } else {

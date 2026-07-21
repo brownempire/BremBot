@@ -96,7 +96,7 @@ function buildChartCandles(points: PricePoint[] = []): WidgetChartCandle[] {
       return [{ timestamp: Math.round(point.t / 1_000), open, high, low, close }];
     })
     .sort((left, right) => left.timestamp - right.timestamp)
-    .slice(-15);
+    .slice(-60);
 }
 
 function calculateExpectedPnl(position: JupiterPerpsPosition | null, targetPrice: number | null | undefined) {
@@ -224,7 +224,7 @@ export async function loadWidgetServerSnapshot() {
   const chartPosition = getLivePositions(agentPositions)[0] ?? getLivePositions(mainPositions)[0] ?? null;
   const chartSymbol = getChartAsset(chartPosition);
   const chartPoints = chartSymbol
-    ? await fetchCoinbaseMinuteCandles(`${chartSymbol}-USD`, 16).catch(() => [])
+    ? await fetchCoinbaseMinuteCandles(`${chartSymbol}-USD`, 61).catch(() => [])
     : [];
 
   return buildWidgetServerSnapshot({

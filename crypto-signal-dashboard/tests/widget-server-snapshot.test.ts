@@ -65,7 +65,7 @@ test("widget summary contains display-safe position data and agent equity", () =
     session: liveSession,
     now: new Date("2026-07-16T12:34:56.000Z"),
     chartSymbol: "SOL",
-    chartPoints: Array.from({ length: 18 }, (_, index) => ({
+    chartPoints: Array.from({ length: 65 }, (_, index) => ({
       t: 1_784_204_400_000 + index * 60_000,
       o: 149 + index,
       h: 150.5 + index,
@@ -91,13 +91,13 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpTakeProfitPnlUsd, 50);
   assert.equal(snapshot.openPerpStopLossPnlUsd, -30);
   assert.equal(snapshot.chartSymbol, "SOL");
-  assert.equal(snapshot.chartCandles.length, 15);
+  assert.equal(snapshot.chartCandles.length, 60);
   assert.deepEqual(snapshot.chartCandles[0], {
-    timestamp: 1_784_204_580,
-    open: 152,
-    high: 153.5,
-    low: 151.5,
-    close: 153,
+    timestamp: 1_784_204_700,
+    open: 154,
+    high: 155.5,
+    low: 153.5,
+    close: 155,
   });
   assert.equal(snapshot.walletBalanceUsd, 360);
   assert.equal(snapshot.mainWalletBalanceUsd, 75);
