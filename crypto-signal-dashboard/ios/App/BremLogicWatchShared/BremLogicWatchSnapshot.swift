@@ -11,6 +11,32 @@ enum BremLogicWatchRefreshPolicy {
     }
 }
 
+struct BremLogicWatchCandle: Codable, Identifiable {
+    var timestamp: Double
+    var open: Double
+    var high: Double
+    var low: Double
+    var close: Double
+
+    var id: Double { timestamp }
+}
+
+private let bremLogicPreviewWatchCandles: [BremLogicWatchCandle] = {
+    let now = Date().timeIntervalSince1970
+    return (0..<60).map { index in
+        let center = 76.65 + sin(Double(index) * 0.31) * 0.20 - Double(index) * 0.002
+        let open = center + sin(Double(index) * 0.73) * 0.055
+        let close = center + sin(Double(index + 1) * 0.73) * 0.055
+        return BremLogicWatchCandle(
+            timestamp: now - Double(59 - index) * 60,
+            open: open,
+            high: max(open, close) + 0.045,
+            low: min(open, close) - 0.045,
+            close: close
+        )
+    }
+}()
+
 struct BremLogicWatchSnapshot: Codable {
     var openPerpLabel: String?
     var openPerpDetail: String?
@@ -28,6 +54,8 @@ struct BremLogicWatchSnapshot: Codable {
     var openPerpStopLossPrice: Double?
     var openPerpTakeProfitPnlUsd: Double?
     var openPerpStopLossPnlUsd: Double?
+    var chartSymbol: String?
+    var chartCandles: [BremLogicWatchCandle]?
     var agentWalletBalanceUsd: Double?
     var walletBalanceUsd: Double?
     var perpsSessionState: String?
@@ -50,6 +78,8 @@ struct BremLogicWatchSnapshot: Codable {
         openPerpStopLossPrice: nil,
         openPerpTakeProfitPnlUsd: nil,
         openPerpStopLossPnlUsd: nil,
+        chartSymbol: nil,
+        chartCandles: [],
         agentWalletBalanceUsd: nil,
         walletBalanceUsd: nil,
         perpsSessionState: "Clocked Out",
@@ -73,6 +103,8 @@ struct BremLogicWatchSnapshot: Codable {
         openPerpStopLossPrice: nil,
         openPerpTakeProfitPnlUsd: 6.34,
         openPerpStopLossPnlUsd: nil,
+        chartSymbol: "SOL",
+        chartCandles: bremLogicPreviewWatchCandles,
         agentWalletBalanceUsd: 132.84,
         walletBalanceUsd: 132.84,
         perpsSessionState: "Clocked In",

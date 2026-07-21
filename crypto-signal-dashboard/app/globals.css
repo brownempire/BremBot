@@ -1647,6 +1647,15 @@ button:disabled {
   border-top-color: rgba(255, 122, 122, 0.95);
 }
 
+.tradingview-overlay-line-liquidation {
+  border-top-color: rgba(255, 159, 67, 0.98);
+}
+
+.tradingview-overlay-line-above,
+.tradingview-overlay-line-below {
+  border-top-style: solid;
+}
+
 .tradingview-overlay-label {
   position: absolute;
   right: 0;

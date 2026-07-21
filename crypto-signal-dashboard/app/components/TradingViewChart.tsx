@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  buildPositionOverlayScale,
+  positionOverlayGuides,
+  type PositionedOverlayGuide,
+  type PositionOverlayGuide,
+  type PositionOverlayScale,
+} from "@/lib/chart/positionOverlay";
 import type { PricePoint } from "@/lib/price/simulated";
 
 declare global {
@@ -19,6 +26,11 @@ type IntervalSubscription = {
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   resolution?: () => string;
+  createShape?: (
+    point: { price: number },
+    options: Record<string, unknown>
+  ) => string | Promise<string>;
+  removeEntity?: (id: string) => void;
 };
 
 type WidgetApi = {
@@ -30,107 +42,15 @@ type WidgetApi = {
 type TradingViewChartProps = {
   symbol?: string;
   pricePoints?: PricePoint[];
-  guides?: Array<{
-    id: string;
-    label: string;
-    price: number;
-    tone: "entry" | "tp" | "sl";
-  }>;
+  guides?: PositionOverlayGuide[];
 };
 
 const SCRIPT_ID = "tradingview-widget-script";
 const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v2";
 const DEFAULT_INTERVAL = "15";
 const DEFAULT_FAVORITE_INTERVALS = ["1", "5", "15", "60"];
-const OVERLAY_REFRESH_MS = 3_000;
+const OVERLAY_REFRESH_MS = 1_500;
 let scriptLoadingPromise: Promise<void> | null = null;
-
-type ComputedGuide = {
-  id: string;
-  label: string;
-  price: number;
-  tone: "entry" | "tp" | "sl";
-  top: number;
-};
-
-type OverlayScaleSnapshot = {
-  paneTop: number;
-  paneBottom: number;
-  minPrice: number;
-  maxPrice: number;
-};
-
-function getIntervalWindowMs(interval: string) {
-  const normalized = interval.trim().toUpperCase();
-  if (normalized === "1") return 60 * 60 * 1000;
-  if (normalized === "3") return 3 * 60 * 60 * 1000;
-  if (normalized === "5") return 6 * 60 * 60 * 1000;
-  if (normalized === "15") return 18 * 60 * 60 * 1000;
-  if (normalized === "30") return 24 * 60 * 60 * 1000;
-  if (normalized === "60" || normalized === "1H") return 3 * 24 * 60 * 60 * 1000;
-  if (normalized === "120" || normalized === "2H") return 5 * 24 * 60 * 60 * 1000;
-  if (normalized === "240" || normalized === "4H") return 10 * 24 * 60 * 60 * 1000;
-  if (normalized === "1D" || normalized === "D") return 45 * 24 * 60 * 60 * 1000;
-  return 6 * 60 * 60 * 1000;
-}
-
-function computeGuidePositions(
-  pricePoints: PricePoint[],
-  guides: TradingViewChartProps["guides"],
-  interval: string
-): ComputedGuide[] {
-  const validGuides = (guides ?? []).filter(
-    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
-      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
-  );
-  if (validGuides.length === 0) return [];
-
-  const validPoints = pricePoints.filter(
-    (point): point is PricePoint => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0
-  );
-  if (validPoints.length === 0) {
-    const guidePrices = validGuides.map((guide) => guide.price);
-    const minGuidePrice = Math.min(...guidePrices);
-    const maxGuidePrice = Math.max(...guidePrices);
-    const midpoint = (minGuidePrice + maxGuidePrice) / 2;
-    const span = Math.max(maxGuidePrice - minGuidePrice, midpoint * 0.02, 1e-6);
-    const paddedMin = minGuidePrice - span * 0.2;
-    const paddedMax = maxGuidePrice + span * 0.2;
-    const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
-
-    return validGuides.map((guide) => {
-      const relative = (guide.price - paddedMin) / paddedSpan;
-      const top = 100 - Math.min(100, Math.max(0, relative * 100));
-      return {
-        ...guide,
-        top,
-      };
-    });
-  }
-
-  const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
-  const intervalWindowMs = getIntervalWindowMs(interval);
-  const visiblePoints = validPoints.filter((point) => point.t >= latestTimestamp - intervalWindowMs);
-  const effectivePoints = visiblePoints.length >= 8 ? visiblePoints : validPoints.slice(-240);
-  const values = effectivePoints.map((point) => point.v);
-  if (values.length === 0) return [];
-
-  const minPrice = Math.min(...values);
-  const maxPrice = Math.max(...values);
-  const span = Math.max(maxPrice - minPrice, minPrice * 0.02, 1e-6);
-  const paddedMin = minPrice - span * 0.15;
-  const paddedMax = maxPrice + span * 0.15;
-  const paddedSpan = Math.max(paddedMax - paddedMin, 1e-6);
-
-  return validGuides.map((guide) => {
-    const relative = (guide.price - paddedMin) / paddedSpan;
-    const top = 100 - Math.min(100, Math.max(0, relative * 100));
-    return {
-      ...guide,
-      top,
-    };
-  });
-}
 
 function parseVisiblePrice(text: string) {
   const normalized = text.replace(/[,\s\u202f]/g, "");
@@ -199,77 +119,7 @@ function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
     paneBottom,
     maxPrice: Math.max(topNode.price, bottomNode.price),
     minPrice: Math.min(topNode.price, bottomNode.price),
-  } satisfies OverlayScaleSnapshot;
-}
-
-function buildFallbackScaleSnapshot(
-  frameNode: HTMLDivElement | null,
-  pricePoints: PricePoint[],
-  guides: TradingViewChartProps["guides"],
-  interval: string
-) {
-  const frameHeight = frameNode?.clientHeight ?? 0;
-  const paneTop = Math.min(90, Math.max(54, frameHeight * 0.105));
-  const paneBottom = Math.max(paneTop + 120, frameHeight - Math.min(42, Math.max(26, frameHeight * 0.055)));
-
-  const validGuides = (guides ?? []).filter(
-    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
-      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
-  );
-  const validPoints = pricePoints.filter(
-    (point): point is PricePoint => Number.isFinite(point.t) && Number.isFinite(point.v) && point.v > 0
-  );
-
-  const guidePrices = validGuides.map((guide) => guide.price);
-  const latestTimestamp = validPoints[validPoints.length - 1]?.t ?? Date.now();
-  const intervalWindowMs = getIntervalWindowMs(interval);
-  const visiblePoints = validPoints.filter((point) => point.t >= latestTimestamp - intervalWindowMs);
-  const effectivePoints = visiblePoints.length >= 8 ? visiblePoints : validPoints.slice(-240);
-  const pointValues = effectivePoints.map((point) => point.v);
-  const scaleValues = [...pointValues, ...guidePrices].filter((value) => Number.isFinite(value) && value > 0);
-
-  if (scaleValues.length === 0) {
-    return null;
-  }
-
-  const minPrice = Math.min(...scaleValues);
-  const maxPrice = Math.max(...scaleValues);
-  const midpoint = (minPrice + maxPrice) / 2;
-  const span = Math.max(maxPrice - minPrice, midpoint * 0.02, 1e-6);
-
-  return {
-    paneTop,
-    paneBottom,
-    minPrice: minPrice - span * 0.15,
-    maxPrice: maxPrice + span * 0.15,
-  } satisfies OverlayScaleSnapshot;
-}
-
-function computeGuidePositionsFromScale(
-  guides: TradingViewChartProps["guides"],
-  scale: OverlayScaleSnapshot,
-  frameHeight: number
-) {
-  if (!Number.isFinite(frameHeight) || frameHeight <= 0) return [];
-
-  const validGuides = (guides ?? []).filter(
-    (guide): guide is NonNullable<TradingViewChartProps["guides"]>[number] =>
-      Boolean(guide) && Number.isFinite(guide.price) && guide.price > 0
-  );
-  if (validGuides.length === 0) return [];
-
-  const clampedPaneHeight = Math.max(scale.paneBottom - scale.paneTop, 1);
-  const scaleSpan = Math.max(scale.maxPrice - scale.minPrice, 1e-6);
-
-  return validGuides.map((guide) => {
-    const relative = (guide.price - scale.minPrice) / scaleSpan;
-    const paneOffset = 1 - Math.min(1, Math.max(0, relative));
-    const y = scale.paneTop + paneOffset * clampedPaneHeight;
-    return {
-      ...guide,
-      top: (y / frameHeight) * 100,
-    };
-  });
+  } satisfies PositionOverlayScale;
 }
 
 function loadTradingViewScript() {
@@ -319,23 +169,41 @@ export function TradingViewChart({
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
+  const nativeShapeIdsRef = useRef<string[]>([]);
+  const guidesRef = useRef(guides);
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
-  const [computedGuides, setComputedGuides] = useState<ComputedGuide[]>([]);
+  const [computedGuides, setComputedGuides] = useState<PositionedOverlayGuide[]>([]);
+  const [nativeOverlayActive, setNativeOverlayActive] = useState(false);
+  const [chartReadyVersion, setChartReadyVersion] = useState(0);
   const [isVisible, setIsVisible] = useState(true);
+  guidesRef.current = guides;
+  const guideSignature = guides
+    .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}`)
+    .join("|");
 
   const refreshOverlay = useCallback(() => {
     const frameNode = frameRef.current;
     const frameHeight = frameNode?.clientHeight ?? 0;
     const liveScale = readOverlayScaleSnapshot(frameNode);
-    const fallbackScale = buildFallbackScaleSnapshot(frameNode, pricePoints, guides, currentInterval);
+    const fallbackScale = buildPositionOverlayScale({
+      frameHeight,
+      pricePoints,
+      guides,
+      interval: currentInterval,
+    });
     const resolvedScale = liveScale ?? fallbackScale;
 
     if (!resolvedScale || frameHeight <= 0) {
-      setComputedGuides(computeGuidePositions(pricePoints, guides, currentInterval));
+      // Do not blink existing labels away during iframe reloads, orientation changes,
+      // or short gaps in the price feed.
+      if ((guides?.length ?? 0) === 0) {
+        setComputedGuides([]);
+      }
       return;
     }
 
-    setComputedGuides(computeGuidePositionsFromScale(guides, resolvedScale, frameHeight));
+    const nextGuides = positionOverlayGuides(guides, resolvedScale, frameHeight);
+    setComputedGuides(nextGuides);
   }, [currentInterval, guides, pricePoints]);
 
   useEffect(() => {
@@ -391,6 +259,7 @@ export function TradingViewChart({
         widgetRef.current = widget;
 
         widget.onChartReady?.(() => {
+          setChartReadyVersion((version) => version + 1);
           const chart = widget.activeChart?.();
           const currentResolution = chart?.resolution?.();
           if (typeof currentResolution === "string" && currentResolution.length > 0) {
@@ -428,6 +297,81 @@ export function TradingViewChart({
       widgetRef.current = null;
     };
   }, [containerId, symbol]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const chart = widgetRef.current?.activeChart?.();
+
+    const removeNativeShapes = () => {
+      nativeShapeIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
+      nativeShapeIdsRef.current = [];
+    };
+
+    const syncNativeShapes = async () => {
+      removeNativeShapes();
+      setNativeOverlayActive(false);
+
+      const currentGuides = guidesRef.current;
+      if (!chart?.createShape || !chart.removeEntity || currentGuides.length === 0) return;
+      const createShape = chart.createShape.bind(chart);
+      const removeEntity = chart.removeEntity.bind(chart);
+
+      const colors = {
+        entry: "#65d9ff",
+        tp: "#4ce38a",
+        sl: "#ff7a7a",
+        liquidation: "#ff9f43",
+      } as const;
+      const created: string[] = [];
+
+      try {
+        for (const guide of currentGuides) {
+          if (!Number.isFinite(guide.price) || guide.price <= 0) continue;
+          const id = await Promise.resolve(createShape(
+            { price: guide.price },
+            {
+              shape: "horizontal_line",
+              text: `${guide.label} ${guide.price.toFixed(2)}`,
+              lock: true,
+              disableSelection: true,
+              disableSave: true,
+              disableUndo: true,
+              showInObjectsTree: false,
+              zOrder: "top",
+              overrides: {
+                linecolor: colors[guide.tone],
+                linestyle: 2,
+                linewidth: 2,
+                showLabel: true,
+                showPrice: true,
+                textcolor: colors[guide.tone],
+              },
+            }
+          ));
+          if (cancelled) {
+            removeEntity(id);
+          } else {
+            created.push(id);
+          }
+        }
+
+        if (!cancelled && created.length > 0) {
+          nativeShapeIdsRef.current = created;
+          setNativeOverlayActive(true);
+        }
+      } catch {
+        created.forEach(removeEntity);
+        if (!cancelled) setNativeOverlayActive(false);
+      }
+    };
+
+    void syncNativeShapes();
+
+    return () => {
+      cancelled = true;
+      removeNativeShapes();
+    };
+  }, [chartReadyVersion, guideSignature]);
 
   useEffect(() => {
     const node = frameRef.current;
@@ -497,10 +441,22 @@ export function TradingViewChart({
 
     window.addEventListener("resize", handleViewportChange);
     window.addEventListener("orientationchange", handleViewportChange);
+    window.addEventListener("focus", handleViewportChange);
+    document.addEventListener("visibilitychange", handleViewportChange);
+
+    const node = frameRef.current;
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined" && node) {
+      resizeObserver = new ResizeObserver(handleViewportChange);
+      resizeObserver.observe(node);
+    }
 
     return () => {
       window.removeEventListener("resize", handleViewportChange);
       window.removeEventListener("orientationchange", handleViewportChange);
+      window.removeEventListener("focus", handleViewportChange);
+      document.removeEventListener("visibilitychange", handleViewportChange);
+      resizeObserver?.disconnect();
     };
   }, [refreshOverlay]);
 
@@ -521,15 +477,16 @@ export function TradingViewChart({
   return (
     <div ref={frameRef} className="tradingview-frame">
       <div id={containerId} className="tradingview-container" />
-      {computedGuides.length > 0 ? (
+      {!nativeOverlayActive && computedGuides.length > 0 ? (
         <div className="tradingview-overlay-layer" aria-hidden="true">
           {computedGuides.map((guide) => (
             <div
               key={guide.id}
-              className={`tradingview-overlay-line tradingview-overlay-line-${guide.tone}`}
+              className={`tradingview-overlay-line tradingview-overlay-line-${guide.tone}${guide.edge ? ` tradingview-overlay-line-${guide.edge}` : ""}`}
               style={{ top: `${guide.top}%` }}
             >
               <span className="tradingview-overlay-label">
+                {guide.edge === "above" ? "↑ " : guide.edge === "below" ? "↓ " : ""}
                 {guide.label} {guide.price.toFixed(2)}
               </span>
             </div>

@@ -93,6 +93,7 @@ struct BremLogicCandlestickChart: View {
     let entryPrice: Double?
     let markPrice: Double?
     let takeProfitPrice: Double?
+    let liquidationPrice: Double?
 
     private let upColor = Color(red: 0.035, green: 0.60, blue: 0.51)
     private let downColor = Color(red: 0.95, green: 0.21, blue: 0.27)
@@ -100,6 +101,7 @@ struct BremLogicCandlestickChart: View {
     private let entryColor = Color(red: 0.98, green: 0.75, blue: 0.26)
     private let markColor = Color(red: 0.36, green: 0.68, blue: 0.98)
     private let takeProfitColor = Color(red: 0.57, green: 0.94, blue: 0.78)
+    private let liquidationColor = Color(red: 1.0, green: 0.58, blue: 0.22)
 
     private var visibleCandles: [BremLogicWidgetCandle] {
         Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
@@ -137,7 +139,7 @@ struct BremLogicCandlestickChart: View {
                         height: max(1, size.height - 27)
                     )
                     let candlePrices = visibleCandles.flatMap { [$0.low, $0.high] }
-                    let referencePrices = [entryPrice, markPrice, takeProfitPrice]
+                    let referencePrices = [entryPrice, markPrice, takeProfitPrice, liquidationPrice]
                         .compactMap { $0 }
                         .filter { $0.isFinite && $0 > 0 }
                     guard let rawMinimum = (candlePrices + referencePrices).min(),
@@ -193,6 +195,7 @@ struct BremLogicCandlestickChart: View {
                         (entryPrice, entryColor, [4, 3]),
                         (markPrice, markColor, []),
                         (takeProfitPrice, takeProfitColor, [2, 3]),
+                        (liquidationPrice, liquidationColor, [6, 3]),
                     ]
                     for (price, color, dash) in levels {
                         guard let price, price.isFinite, price > 0 else { continue }
@@ -210,13 +213,11 @@ struct BremLogicCandlestickChart: View {
 
                 VStack(spacing: 0) {
                     HStack(spacing: 7) {
-                        Text("\(symbol ?? "PERP") · 1m · 1h")
-                            .font(.system(size: 8, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.74))
-                        Spacer(minLength: 3)
+                        Spacer(minLength: 0)
                         legendItem("E", entryPrice, color: entryColor)
                         legendItem("M", markPrice, color: markColor)
                         legendItem("TP", takeProfitPrice, color: takeProfitColor)
+                        legendItem("LIQ", liquidationPrice, color: liquidationColor)
                     }
                     .font(.system(size: 7, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.65))

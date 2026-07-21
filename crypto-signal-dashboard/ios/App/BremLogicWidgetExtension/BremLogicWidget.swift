@@ -146,7 +146,8 @@ struct BremLogicWidgetEntryView: View {
             symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
             entryPrice: entry.snapshot.openPerpEntryPrice,
             markPrice: entry.snapshot.openPerpMarkPrice,
-            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
+            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice,
+            liquidationPrice: entry.snapshot.openPerpLiquidationPrice
         )
         .frame(height: height)
     }
@@ -521,31 +522,30 @@ struct BremLogicWidgetEntryView: View {
 
             if hasOpenPerp {
                 GeometryReader { geometry in
-                    let summaryHeight = max(94, geometry.size.height * 0.28)
-                    let lowerHeight = max(1, geometry.size.height - summaryHeight - 8)
-                    let railWidth = max(156, geometry.size.width * 0.24)
+                    let railWidth = max(310, geometry.size.width * 0.39)
+                    let heroHeight = max(94, geometry.size.height * 0.28)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .top, spacing: 8) {
-                            positionSummary
-                                .frame(width: max(210, geometry.size.width * 0.39), height: summaryHeight, alignment: .leading)
-                            tradeMetricGrid
-                                .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
-                        }
-                        .frame(height: summaryHeight)
-
-                        HStack(spacing: 8) {
-                            VStack(spacing: 6) {
+                    HStack(alignment: .top, spacing: 9) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(alignment: .top, spacing: 7) {
+                                positionSummary
                                 pnlPanel
-                                walletStatusGrid
+                                    .frame(width: max(112, railWidth * 0.36))
                             }
-                            .frame(width: railWidth, height: lowerHeight)
+                            .frame(height: heroHeight)
 
-                            flexibleChart
-                                .frame(width: max(1, geometry.size.width - railWidth - 8), height: lowerHeight)
+                            tradeMetricGrid
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                            walletStatusGrid
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                         }
-                        .frame(height: lowerHeight)
+                        .frame(width: railWidth, height: geometry.size.height, alignment: .top)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - railWidth - 9), height: geometry.size.height)
                     }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 8) {

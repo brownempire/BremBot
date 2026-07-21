@@ -25,6 +25,133 @@ private struct BremLogicOfficialLogo: View {
     }
 }
 
+private struct BremLogicWatchCandlestickChart: View {
+    let candles: [BremLogicWatchCandle]
+    let symbol: String
+    let entryPrice: Double?
+    let markPrice: Double?
+    let takeProfitPrice: Double?
+    let liquidationPrice: Double?
+
+    private let upColor = Color(red: 0.035, green: 0.60, blue: 0.51)
+    private let downColor = Color(red: 0.95, green: 0.21, blue: 0.27)
+    private let entryColor = Color(red: 0.40, green: 0.85, blue: 1.0)
+    private let markColor = Color(red: 0.36, green: 0.68, blue: 0.98)
+    private let takeProfitColor = Color(red: 0.30, green: 0.89, blue: 0.54)
+    private let liquidationColor = Color(red: 1.0, green: 0.58, blue: 0.22)
+
+    private var visibleCandles: [BremLogicWatchCandle] {
+        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text("\(symbol) · 1m · 1h")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 2)
+                legend("E", entryPrice, entryColor)
+                legend("M", markPrice, markColor)
+                legend("TP", takeProfitPrice, takeProfitColor)
+                legend("L", liquidationPrice, liquidationColor)
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+
+            if visibleCandles.isEmpty {
+                Text("Chart waiting for market data")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Canvas { context, size in
+                    let plot = CGRect(x: 3, y: 3, width: max(1, size.width - 6), height: max(1, size.height - 6))
+                    let candlePrices = visibleCandles.flatMap { [$0.low, $0.high] }
+                    let levels = [entryPrice, markPrice, takeProfitPrice, liquidationPrice]
+                        .compactMap { $0 }
+                        .filter { $0.isFinite && $0 > 0 }
+                    guard let rawMin = (candlePrices + levels).min(),
+                          let rawMax = (candlePrices + levels).max()
+                    else { return }
+                    let rawRange = max(rawMax - rawMin, rawMax * 0.0005)
+                    let minimum = rawMin - rawRange * 0.07
+                    let maximum = rawMax + rawRange * 0.07
+                    let range = max(maximum - minimum, 0.000_001)
+
+                    func y(_ price: Double) -> CGFloat {
+                        plot.maxY - CGFloat((price - minimum) / range) * plot.height
+                    }
+
+                    for index in 0...3 {
+                        let lineY = plot.minY + CGFloat(index) * plot.height / 3
+                        var grid = Path()
+                        grid.move(to: CGPoint(x: plot.minX, y: lineY))
+                        grid.addLine(to: CGPoint(x: plot.maxX, y: lineY))
+                        context.stroke(grid, with: .color(.white.opacity(0.08)), lineWidth: 0.45)
+                    }
+
+                    let step = plot.width / CGFloat(max(visibleCandles.count, 1))
+                    let bodyWidth = max(1, min(3, step * 0.62))
+                    for (index, candle) in visibleCandles.enumerated() {
+                        let x = plot.minX + (CGFloat(index) + 0.5) * step
+                        let color = candle.close >= candle.open ? upColor : downColor
+                        var wick = Path()
+                        wick.move(to: CGPoint(x: x, y: y(candle.high)))
+                        wick.addLine(to: CGPoint(x: x, y: y(candle.low)))
+                        context.stroke(wick, with: .color(color), lineWidth: 0.65)
+
+                        let openY = y(candle.open)
+                        let closeY = y(candle.close)
+                        var body = Path()
+                        body.addRect(CGRect(
+                            x: x - bodyWidth / 2,
+                            y: min(openY, closeY),
+                            width: bodyWidth,
+                            height: max(1, abs(closeY - openY))
+                        ))
+                        context.fill(body, with: .color(color))
+                    }
+
+                    let referenceLines: [(Double?, Color, [CGFloat])] = [
+                        (entryPrice, entryColor, [4, 2]),
+                        (markPrice, markColor, []),
+                        (takeProfitPrice, takeProfitColor, [2, 2]),
+                        (liquidationPrice, liquidationColor, [6, 2]),
+                    ]
+                    for (price, color, dash) in referenceLines {
+                        guard let price, price.isFinite, price > 0 else { continue }
+                        var line = Path()
+                        line.move(to: CGPoint(x: plot.minX, y: y(price)))
+                        line.addLine(to: CGPoint(x: plot.maxX, y: y(price)))
+                        context.stroke(line, with: .color(color.opacity(0.9)), style: StrokeStyle(lineWidth: 0.8, dash: dash))
+                    }
+                }
+            }
+        }
+        .padding(6)
+        .frame(height: 132)
+        .background(Color(red: 0.075, green: 0.09, blue: 0.13), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.09), lineWidth: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(symbol) one minute chart showing the latest 60 candles")
+    }
+
+    @ViewBuilder
+    private func legend(_ label: String, _ value: Double?, _ color: Color) -> some View {
+        if let value, value.isFinite, value > 0 {
+            HStack(spacing: 1) {
+                Circle().fill(color).frame(width: 3, height: 3)
+                Text("\(label) \(value >= 100 ? String(format: "%.1f", value) : String(format: "%.2f", value))")
+                    .font(.system(size: 6, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 struct BremLogicWatchContentView: View {
     @State private var snapshot = BremLogicWatchSnapshot.fallback
     @State private var isLoading = true
@@ -53,6 +180,15 @@ struct BremLogicWatchContentView: View {
                         metric("POSITION", bremLogicWalletUsd(snapshot.openPerpPositionValueUsd))
                         metric("COLLATERAL", bremLogicWalletUsd(snapshot.openPerpCollateralUsd))
                     }
+
+                    BremLogicWatchCandlestickChart(
+                        candles: snapshot.chartCandles ?? [],
+                        symbol: snapshot.chartSymbol ?? snapshot.openPerpMarket ?? "PERP",
+                        entryPrice: snapshot.openPerpEntryPrice,
+                        markPrice: snapshot.openPerpMarkPrice,
+                        takeProfitPrice: snapshot.openPerpTakeProfitPrice,
+                        liquidationPrice: snapshot.openPerpLiquidationPrice
+                    )
                 } else {
                     Text(snapshot.openPerpDetail ?? "The agent is monitoring for the next setup.")
                         .font(.system(size: 11, weight: .medium, design: .rounded))

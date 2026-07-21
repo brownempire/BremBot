@@ -4538,7 +4538,12 @@ function DashboardPage() {
   const selectedChartGuides = useMemo(() => {
     if (selectedChartPerpsPositions.length === 0) return [];
 
-    const guides: Array<{ id: string; label: string; price: number; tone: "entry" | "tp" | "sl" }> = [];
+    const guides: Array<{
+      id: string;
+      label: string;
+      price: number;
+      tone: "entry" | "tp" | "sl" | "liquidation";
+    }> = [];
 
     selectedChartPerpsPositions.forEach((position, index) => {
       const labelPrefix = selectedChartPerpsPositions.length > 1 ? `${index + 1} ` : "";
@@ -4558,6 +4563,15 @@ function DashboardPage() {
           label: `${labelPrefix}TP`,
           price: position.takeProfit,
           tone: "tp",
+        });
+      }
+
+      if (typeof position.liquidationPrice === "number" && Number.isFinite(position.liquidationPrice)) {
+        guides.push({
+          id: `${position.id}-liquidation`,
+          label: `${labelPrefix}Liq`,
+          price: position.liquidationPrice,
+          tone: "liquidation",
         });
       }
 
