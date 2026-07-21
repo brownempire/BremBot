@@ -210,7 +210,7 @@ struct BremLogicCandlestickChart: View {
 
                 VStack(spacing: 0) {
                     HStack(spacing: 7) {
-                        Text("\(symbol ?? "PERP") · 1m · 15m")
+                        Text("\(symbol ?? "PERP") · 1m · 1h")
                             .font(.system(size: 8, weight: .bold, design: .rounded))
                             .foregroundStyle(.white.opacity(0.74))
                         Spacer(minLength: 3)
