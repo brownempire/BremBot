@@ -1043,7 +1043,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacApp/BremLogicMac.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1071,7 +1071,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacApp/BremLogicMac.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1099,7 +1099,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;
@@ -1110,7 +1110,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget.hourly;
 				PRODUCT_NAME = BremLogicMacWidget;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
@@ -1126,7 +1126,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;
@@ -1137,7 +1137,7 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bremlogic.signalsbot.macos.widget.hourly;
 				PRODUCT_NAME = BremLogicMacWidget;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;

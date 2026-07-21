@@ -558,14 +558,14 @@ struct BremLogicMacWidgetEntryView: View {
 }
 
 struct BremLogicMacWidget: Widget {
-    let kind = "BremLogicMacWidget"
+    let kind = BremLogicMacWidgetIdentity.kind
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: BremLogicMacWidgetProvider()) { entry in
             BremLogicMacWidgetEntryView(entry: entry)
         }
-        .configurationDisplayName("BremLogic")
-        .description("Shows open Perps, PnL, and wallet values on your Mac desktop.")
+        .configurationDisplayName("BremLogic Mac")
+        .description("Shows open Perps, PnL, wallet values, and a one-hour chart on your Mac desktop.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
     }
 }

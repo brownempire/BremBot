@@ -1524,6 +1524,36 @@ button:disabled {
   min-width: 0;
 }
 
+.dashboard-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.position-overlay-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.position-overlay-toggle strong {
+  color: var(--text);
+}
+
+.position-overlay-toggle .perps-scalp-switch {
+  display: inline-block;
+  flex: 0 0 auto;
+  transform: scale(0.82);
+  transform-origin: center;
+}
+
 .drag-handle {
   cursor: grab;
   padding: 6px 10px;

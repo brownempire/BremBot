@@ -1007,6 +1007,7 @@ function extractPhantomPublicKey(provider: PhantomAuthProvider) {
 }
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
+const POSITION_OVERLAY_STORAGE_KEY = "brembot.tradingview.position-overlay.v1";
 const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
   { id: "chart", width: 1080, height: 640 },
   { id: "wallet", width: 1080, height: 520 },
@@ -1071,6 +1072,7 @@ function DashboardPage() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
+  const [positionOverlayEnabled, setPositionOverlayEnabled] = useState(true);
   const [receiveSignalsForSlotId, setReceiveSignalsForSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
@@ -1356,6 +1358,11 @@ function DashboardPage() {
     setNativeShell(isNativeShellApp());
     setNativeMacShell(isNativeMacRuntime());
     setStandalonePwa(isStandalonePwaRuntime());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setPositionOverlayEnabled(window.localStorage.getItem(POSITION_OVERLAY_STORAGE_KEY) !== "false");
   }, []);
 
   useEffect(() => {
@@ -5368,6 +5375,15 @@ function DashboardPage() {
     resizeStateRef.current = null;
   }
 
+  function togglePositionOverlay(enabled: boolean) {
+    setPositionOverlayEnabled(enabled);
+    try {
+      window.localStorage.setItem(POSITION_OVERLAY_STORAGE_KEY, enabled ? "true" : "false");
+    } catch {
+      // The in-memory setting still applies when local storage is unavailable.
+    }
+  }
+
   function renderDashboardSection(id: DashboardSectionId) {
     if (id === "chart") {
       return (
@@ -5376,7 +5392,7 @@ function DashboardPage() {
             <TradingViewChart
               symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
               pricePoints={selectedChartPricePoints}
-              guides={selectedChartGuides}
+              guides={positionOverlayEnabled ? selectedChartGuides : []}
             />
           </div>
         </>
@@ -5889,7 +5905,25 @@ function DashboardPage() {
       <article key={id} className="panel dashboard-panel dashboard-panel-static">
         <div className="dashboard-panel-toolbar">
           <div className="dashboard-panel-title-group">
-            <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[id]}</span>
+            <div className="dashboard-panel-title-row">
+              <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[id]}</span>
+              {id === "chart" ? (
+                <label className="position-overlay-toggle">
+                  <span>
+                    Position Overlay <strong>{positionOverlayEnabled ? "On" : "Off"}</strong>
+                  </span>
+                  <span className="perps-scalp-switch">
+                    <input
+                      type="checkbox"
+                      checked={positionOverlayEnabled}
+                      onChange={(event) => togglePositionOverlay(event.target.checked)}
+                      aria-label="Toggle position overlay"
+                    />
+                    <span aria-hidden="true" />
+                  </span>
+                </label>
+              ) : null}
+            </div>
             {id === "chart" && selectedChartCard ? (
               <span className="subtext">
                 {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
