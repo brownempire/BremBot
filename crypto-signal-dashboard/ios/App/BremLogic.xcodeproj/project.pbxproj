@@ -1043,7 +1043,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacApp/BremLogicMac.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1071,7 +1071,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacApp/BremLogicMac.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1099,7 +1099,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;
@@ -1126,7 +1126,7 @@
 				CODE_SIGN_ENTITLEMENTS = BremLogicMacWidgetExtension/BremLogicMacWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 3T59LS48LZ;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = BremLogicMacWidgetExtension/Info.plist;

@@ -190,8 +190,8 @@ struct BremLogicWidgetEntryView: View {
                 .interpolation(.high)
                 .scaledToFit()
                 .frame(
-                    width: widgetFamily == .systemSmall ? 54 : widgetFamily == .systemMedium ? 72 : 84,
-                    height: widgetFamily == .systemSmall ? 18 : 22,
+                    width: widgetFamily == .systemSmall ? 54 : widgetFamily == .systemMedium ? 72 : widgetFamily == .systemExtraLarge ? 108 : 84,
+                    height: widgetFamily == .systemSmall ? 18 : widgetFamily == .systemExtraLarge ? 28 : 22,
                     alignment: .leading
                 )
         } else {
@@ -349,21 +349,21 @@ struct BremLogicWidgetEntryView: View {
     private func metricTile(_ title: String, _ value: String, accent: Color = .white) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(title.uppercased())
-                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 8.5 : 7, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
             Text(value)
-                .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 13 : 10.5, weight: .bold, design: .rounded))
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .padding(.horizontal, widgetFamily == .systemExtraLarge ? 8 : 6)
+        .padding(.vertical, widgetFamily == .systemExtraLarge ? 6 : 4)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: widgetFamily == .systemExtraLarge ? 9 : 7, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: widgetFamily == .systemExtraLarge ? 9 : 7, style: .continuous)
                 .stroke(Color.white.opacity(0.065), lineWidth: 1)
         }
     }
@@ -400,15 +400,15 @@ struct BremLogicWidgetEntryView: View {
     private var positionSummary: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text("OPEN PERPS")
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 11 : 9, weight: .semibold, design: .rounded))
                 .foregroundStyle(brandPrimary)
             Text(openPerpLabel)
-                .font(.system(size: widgetFamily == .systemExtraLarge ? 22 : 20, weight: .bold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 28 : 20, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.68)
             Text(openPerpDetail)
-                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 11 : 9, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.68))
                 .lineLimit(1)
                 .minimumScaleFactor(0.45)
@@ -418,16 +418,16 @@ struct BremLogicWidgetEntryView: View {
     private var pnlPanel: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("UNREALIZED PNL")
-                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 9 : 7, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.5))
             Text(pnlLabel ?? "--")
-                .font(.system(size: widgetFamily == .systemExtraLarge ? 19 : 17, weight: .bold, design: .rounded))
+                .font(.system(size: widgetFamily == .systemExtraLarge ? 27 : 17, weight: .bold, design: .rounded))
                 .foregroundStyle(pnlColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.68)
             if let pnlPercentLabel {
                 Text(pnlPercentLabel)
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .font(.system(size: widgetFamily == .systemExtraLarge ? 11 : 9, weight: .bold, design: .rounded))
                     .foregroundStyle(pnlColor.opacity(0.9))
             }
         }
@@ -521,33 +521,30 @@ struct BremLogicWidgetEntryView: View {
 
             if hasOpenPerp {
                 GeometryReader { geometry in
-                    let headlineHeight = max(58, geometry.size.height * 0.19)
-                    let statusHeight = max(36, geometry.size.height * 0.12)
-                    let metricsHeight = max(68, geometry.size.height * 0.21)
-                    let chartHeight = max(72, geometry.size.height - headlineHeight - statusHeight - metricsHeight - 18)
+                    let summaryHeight = max(94, geometry.size.height * 0.28)
+                    let lowerHeight = max(1, geometry.size.height - summaryHeight - 8)
+                    let railWidth = max(156, geometry.size.width * 0.24)
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack(alignment: .top, spacing: 8) {
                             positionSummary
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                            pnlPanel
-                                .frame(width: max(110, geometry.size.width * 0.27), height: headlineHeight)
+                                .frame(width: max(210, geometry.size.width * 0.39), height: summaryHeight, alignment: .leading)
+                            tradeMetricGrid
+                                .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
                         }
-                        .frame(height: headlineHeight)
+                        .frame(height: summaryHeight)
 
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
-                            metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                            metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                            metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
-                            metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                        HStack(spacing: 8) {
+                            VStack(spacing: 6) {
+                                pnlPanel
+                                walletStatusGrid
+                            }
+                            .frame(width: railWidth, height: lowerHeight)
+
+                            flexibleChart
+                                .frame(width: max(1, geometry.size.width - railWidth - 8), height: lowerHeight)
                         }
-                        .frame(height: statusHeight)
-
-                        flexibleChart
-                            .frame(height: chartHeight)
-
-                        tradeMetricGrid
-                            .frame(height: metricsHeight, alignment: .top)
+                        .frame(height: lowerHeight)
                     }
                 }
             } else {
