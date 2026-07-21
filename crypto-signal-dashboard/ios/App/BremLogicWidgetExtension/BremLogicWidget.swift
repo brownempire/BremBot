@@ -141,16 +141,28 @@ struct BremLogicWidgetEntryView: View {
     }
 
     private func chart(height: CGFloat) -> some View {
+        BremLogicCandlestickChart(
+            candles: chartCandles,
+            symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
+            entryPrice: entry.snapshot.openPerpEntryPrice,
+            markPrice: entry.snapshot.openPerpMarkPrice,
+            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
+        )
+        .frame(height: height)
+    }
+
+    private func chartRow<Leading: View>(
+        height: CGFloat,
+        @ViewBuilder leading: @escaping () -> Leading
+    ) -> some View {
         GeometryReader { geometry in
-            BremLogicCandlestickChart(
-                candles: chartCandles,
-                symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
-                entryPrice: entry.snapshot.openPerpEntryPrice,
-                markPrice: entry.snapshot.openPerpMarkPrice,
-                takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
-            )
-            .frame(width: max(1, geometry.size.width * 0.5), height: height)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            let columnWidth = max(1, (geometry.size.width - 6) * 0.5)
+            HStack(spacing: 6) {
+                leading()
+                    .frame(width: columnWidth, height: height, alignment: .center)
+                chart(height: height)
+                    .frame(width: columnWidth, height: height)
+            }
         }
         .frame(height: height)
     }
@@ -323,12 +335,13 @@ struct BremLogicWidgetEntryView: View {
             }
 
             if hasOpenPerp {
-                chart(height: 50)
-                HStack(spacing: 3) {
-                    smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
-                    smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
-                    smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
-                    smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                chartRow(height: 50) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 2), spacing: 3) {
+                        smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
+                        smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
+                        smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
+                        smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                    }
                 }
             } else {
                 Text(openPerpDetail)
@@ -375,6 +388,18 @@ struct BremLogicWidgetEntryView: View {
                         .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
                 }
+                if #available(iOS 17.0, *) {
+                    Button(intent: BremLogicWidgetRefreshIntent()) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(brandPrimary)
+                            .frame(width: 26, height: 26)
+                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
+                }
             }
 
             if hasOpenPerp {
@@ -411,7 +436,14 @@ struct BremLogicWidgetEntryView: View {
                     }
                 }
 
-                chart(height: 64)
+                chartRow(height: 64) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 4) {
+                        metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                        metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                        metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+                        metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                    }
+                }
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 4) {
                     metricTile("Position", balanceLabel(entry.snapshot.openPerpPositionValueUsd))
@@ -439,32 +471,6 @@ struct BremLogicWidgetEntryView: View {
                 .padding(.top, 12)
             }
 
-            Spacer(minLength: 0)
-
-            HStack(spacing: 4) {
-                metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
-                metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                            .frame(width: 30, height: 32)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
-                }
-            }
-            .padding(.top, 4)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.08))
-                    .frame(height: 1)
-            }
         }
     }
 
@@ -481,6 +487,18 @@ struct BremLogicWidgetEntryView: View {
                     Text("Updated \(updatedLabel)")
                         .font(.system(size: 8, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.5))
+                }
+                if #available(iOS 17.0, *) {
+                    Button(intent: BremLogicWidgetRefreshIntent()) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(brandPrimary)
+                            .frame(width: 26, height: 26)
+                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
 
@@ -532,7 +550,14 @@ struct BremLogicWidgetEntryView: View {
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
 
-                chart(height: 66)
+                chartRow(height: 66) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 2), spacing: 4) {
+                        metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+                        metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                        metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+                        metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+                    }
+                }
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("OPEN PERPS")
@@ -549,30 +574,6 @@ struct BremLogicWidgetEntryView: View {
                 .padding(.top, 16)
             }
 
-            HStack(spacing: 4) {
-                metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
-                metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
-                metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                            .frame(width: 30, height: 32)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
-                }
-            }
-            .padding(.top, 4)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color.white.opacity(0.08))
-                    .frame(height: 1)
-            }
         }
     }
 

@@ -96,16 +96,28 @@ struct BremLogicMacWidgetEntryView: View {
     }
 
     private func chart(height: CGFloat) -> some View {
+        BremLogicCandlestickChart(
+            candles: chartCandles,
+            symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
+            entryPrice: entry.snapshot.openPerpEntryPrice,
+            markPrice: entry.snapshot.openPerpMarkPrice,
+            takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
+        )
+        .frame(height: height)
+    }
+
+    private func chartRow<Leading: View>(
+        height: CGFloat,
+        @ViewBuilder leading: @escaping () -> Leading
+    ) -> some View {
         GeometryReader { geometry in
-            BremLogicCandlestickChart(
-                candles: chartCandles,
-                symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
-                entryPrice: entry.snapshot.openPerpEntryPrice,
-                markPrice: entry.snapshot.openPerpMarkPrice,
-                takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice
-            )
-            .frame(width: max(1, geometry.size.width * 0.5), height: height)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            let columnWidth = max(1, (geometry.size.width - 6) * 0.5)
+            HStack(spacing: 6) {
+                leading()
+                    .frame(width: columnWidth, height: height, alignment: .center)
+                chart(height: height)
+                    .frame(width: columnWidth, height: height)
+            }
         }
         .frame(height: height)
     }
@@ -289,7 +301,14 @@ struct BremLogicMacWidgetEntryView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
             if hasOpenPerp {
-                chart(height: 52)
+                chartRow(height: 52) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 2), spacing: 3) {
+                        compactMetric("ENTRY", price(entry.snapshot.openPerpEntryPrice))
+                        compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: pnlColor)
+                        compactMetric("LEVERAGE", leverage(entry.snapshot.openPerpLeverage))
+                        compactMetric("TAKE PROFIT", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
+                    }
+                }
             } else {
                 Text(detailLabel)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -342,17 +361,15 @@ struct BremLogicMacWidgetEntryView: View {
             }
 
             if hasOpenPerp {
-                chart(height: family == .systemExtraLarge ? 72 : 64)
-            }
-
-            HStack(spacing: 4) {
-                metric("Main Wallet", usd(entry.snapshot.mainWalletBalanceUsd))
-                metric("Agent Wallet", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
-                refreshButton
-            }
-            .padding(.top, 4)
-            .overlay(alignment: .top) {
-                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                chartRow(height: family == .systemExtraLarge ? 72 : 64) {
+                    HStack(spacing: 4) {
+                        VStack(spacing: 4) {
+                            metric("Main Wallet", usd(entry.snapshot.mainWalletBalanceUsd))
+                            metric("Agent Wallet", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                        }
+                        refreshButton
+                    }
+                }
             }
         }
     }
