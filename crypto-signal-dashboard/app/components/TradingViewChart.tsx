@@ -23,14 +23,32 @@ type IntervalSubscription = {
   subscribe?: (context: unknown, callback: (interval: unknown) => void) => void;
 };
 
+type ChartSubscription<T> = {
+  subscribe?: (context: unknown, callback: (value: T) => void) => void;
+};
+
+type WidgetPriceScale = {
+  getVisiblePriceRange?: () => { from: number; to: number } | null;
+  isInverted?: () => boolean;
+};
+
+type WidgetPane = {
+  getHeight?: () => number;
+  getMainSourcePriceScale?: () => WidgetPriceScale | null;
+  hasMainSeries?: () => boolean;
+};
+
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
+  onVisibleRangeChanged?: () => ChartSubscription<{ from: number; to: number }>;
   resolution?: () => string;
   createShape?: (
     point: { price: number },
     options: Record<string, unknown>
-  ) => string | Promise<string>;
-  removeEntity?: (id: string) => void;
+  ) => string | number | Promise<string | number>;
+  getAllShapes?: () => Array<{ id: string | number }>;
+  getPanes?: () => WidgetPane[];
+  removeEntity?: (id: string | number) => void;
 };
 
 type WidgetApi = {
@@ -49,8 +67,81 @@ const SCRIPT_ID = "tradingview-widget-script";
 const INTERVAL_STORAGE_KEY = "brembot.tradingview.interval.v2";
 const DEFAULT_INTERVAL = "15";
 const DEFAULT_FAVORITE_INTERVALS = ["1", "5", "15", "60"];
-const OVERLAY_REFRESH_MS = 1_500;
+export const OVERLAY_REFRESH_MS = 5_000;
 let scriptLoadingPromise: Promise<void> | null = null;
+
+type NativeGuideRecord = {
+  entityId: string | number;
+  signature: string;
+};
+
+function getGuideColor(tone: PositionOverlayGuide["tone"]) {
+  if (tone === "tp") return "#4ce38a";
+  if (tone === "sl") return "#ff7a7a";
+  if (tone === "liquidation") return "#ff9f43";
+  return "#65d9ff";
+}
+
+export function getNativeGuideDrawing(guide: PositionOverlayGuide) {
+  const color = getGuideColor(guide.tone);
+  return {
+    point: { price: guide.price },
+    options: {
+      shape: "horizontal_line" as const,
+      text: `${guide.label} ${guide.price.toFixed(2)}`,
+      lock: true,
+      disableSelection: true,
+      disableSave: true,
+      disableUndo: true,
+      showInObjectsTree: false,
+      zOrder: "top" as const,
+      overrides: {
+        linecolor: color,
+        linestyle: 2,
+        linewidth: 2,
+        showLabel: true,
+        showPrice: true,
+        textcolor: color,
+        bold: true,
+        fontsize: 11,
+      },
+    },
+  };
+}
+
+export function buildChartPriceScaleSnapshot({
+  frameHeight,
+  paneHeight,
+  range,
+  inverted = false,
+  paneBounds,
+}: {
+  frameHeight: number;
+  paneHeight?: number | null;
+  range: { from: number; to: number } | null | undefined;
+  inverted?: boolean;
+  paneBounds?: Pick<PositionOverlayScale, "paneTop" | "paneBottom"> | null;
+}): PositionOverlayScale | null {
+  if (!Number.isFinite(frameHeight) || frameHeight <= 0 || !range) return null;
+  if (!Number.isFinite(range.from) || !Number.isFinite(range.to) || range.from === range.to) return null;
+
+  const fallbackPaneTop = Math.min(90, Math.max(54, frameHeight * 0.105));
+  const resolvedPaneHeight = Number.isFinite(paneHeight) && Number(paneHeight) > 0
+    ? Number(paneHeight)
+    : frameHeight - fallbackPaneTop - Math.min(42, Math.max(26, frameHeight * 0.055));
+  const paneTop = paneBounds?.paneTop ?? fallbackPaneTop;
+  const paneBottom = paneBounds?.paneBottom
+    ?? Math.min(frameHeight - 8, paneTop + Math.max(1, resolvedPaneHeight));
+
+  if (paneBottom <= paneTop) return null;
+  return {
+    paneTop,
+    paneBottom,
+    minPrice: Math.min(range.from, range.to),
+    maxPrice: Math.max(range.from, range.to),
+    inverted,
+  };
+}
 
 function parseVisiblePrice(text: string) {
   const normalized = text.replace(/[,\s\u202f]/g, "");
@@ -75,9 +166,9 @@ function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
   }
   if (!iframeDocument) return null;
 
-  const pane = iframeDocument.querySelector(".chart-markup-table.pane");
-  const axis = iframeDocument.querySelector(".price-axis");
-  if (!(pane instanceof HTMLElement) || !(axis instanceof HTMLElement)) return null;
+  const pane = iframeDocument.querySelector<HTMLElement>(".chart-markup-table.pane");
+  const axis = iframeDocument.querySelector<HTMLElement>(".price-axis");
+  if (!pane || !axis) return null;
 
   const paneRect = pane.getBoundingClientRect();
   const iframeRect = iframe.getBoundingClientRect();
@@ -88,6 +179,7 @@ function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
   if (!Number.isFinite(paneTop) || !Number.isFinite(paneBottom) || paneBottom <= paneTop) return null;
 
   const labelNodes = Array.from(axis.querySelectorAll<HTMLElement>("div, span"))
+    .filter((node) => node.childElementCount === 0)
     .map((node) => {
       const rect = node.getBoundingClientRect();
       const price = parseVisiblePrice(node.textContent ?? "");
@@ -120,6 +212,30 @@ function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
     maxPrice: Math.max(topNode.price, bottomNode.price),
     minPrice: Math.min(topNode.price, bottomNode.price),
   } satisfies PositionOverlayScale;
+}
+
+function readChartPriceScaleSnapshot(
+  chart: WidgetChart | undefined,
+  frameHeight: number,
+  paneBounds: PositionOverlayScale | null
+) {
+  if (!chart?.getPanes) return null;
+
+  try {
+    const panes = chart.getPanes();
+    const pane = panes.find((candidate) => candidate.hasMainSeries?.()) ?? panes[0];
+    const priceScale = pane?.getMainSourcePriceScale?.();
+    const range = priceScale?.getVisiblePriceRange?.();
+    return buildChartPriceScaleSnapshot({
+      frameHeight,
+      paneHeight: pane?.getHeight?.(),
+      range,
+      inverted: priceScale?.isInverted?.() ?? false,
+      paneBounds,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function loadTradingViewScript() {
@@ -169,29 +285,105 @@ export function TradingViewChart({
   const containerId = useMemo(() => "tradingview_main_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
-  const nativeShapeIdsRef = useRef<string[]>([]);
-  const guidesRef = useRef(guides);
+  const nativeGuideRecordsRef = useRef(new Map<string, NativeGuideRecord>());
+  const nativeGuideSyncingRef = useRef(false);
+  const syncNativeGuidesRef = useRef<() => Promise<void>>(async () => undefined);
+  const refreshOverlayRef = useRef<() => void>(() => undefined);
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [computedGuides, setComputedGuides] = useState<PositionedOverlayGuide[]>([]);
   const [nativeOverlayActive, setNativeOverlayActive] = useState(false);
-  const [chartReadyVersion, setChartReadyVersion] = useState(0);
   const [isVisible, setIsVisible] = useState(true);
-  guidesRef.current = guides;
-  const guideSignature = guides
-    .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}`)
-    .join("|");
+
+  const clearNativeGuides = useCallback((chart = widgetRef.current?.activeChart?.()) => {
+    if (chart?.removeEntity) {
+      nativeGuideRecordsRef.current.forEach(({ entityId }) => {
+        try {
+          chart.removeEntity?.(entityId);
+        } catch {
+          // TradingView may already have discarded the drawing during a reload.
+        }
+      });
+    }
+    nativeGuideRecordsRef.current.clear();
+    setNativeOverlayActive(false);
+  }, []);
+
+  const syncNativeGuides = useCallback(async () => {
+    if (nativeGuideSyncingRef.current) return;
+    const chart = widgetRef.current?.activeChart?.();
+    const validGuides = guides.filter((guide) => Number.isFinite(guide.price) && guide.price > 0);
+
+    if (!chart?.createShape || !chart.removeEntity) {
+      setNativeOverlayActive(false);
+      return;
+    }
+
+    nativeGuideSyncingRef.current = true;
+    try {
+      const desiredIds = new Set(validGuides.map((guide) => guide.id));
+      const visibleShapeIds = chart.getAllShapes
+        ? new Set(chart.getAllShapes().map((shape) => String(shape.id)))
+        : null;
+
+      nativeGuideRecordsRef.current.forEach((record, guideId) => {
+        const shapeIsMissing = visibleShapeIds && !visibleShapeIds.has(String(record.entityId));
+        if (!desiredIds.has(guideId) || shapeIsMissing) {
+          try {
+            chart.removeEntity?.(record.entityId);
+          } catch {
+            // The drawing is already gone.
+          }
+          nativeGuideRecordsRef.current.delete(guideId);
+        }
+      });
+
+      for (const guide of validGuides) {
+        const signature = `${guide.price}:${guide.label}:${guide.tone}`;
+        const existing = nativeGuideRecordsRef.current.get(guide.id);
+        if (existing?.signature === signature) continue;
+
+        if (existing) {
+          try {
+            chart.removeEntity(existing.entityId);
+          } catch {
+            // The drawing is already gone.
+          }
+          nativeGuideRecordsRef.current.delete(guide.id);
+        }
+
+        const drawing = getNativeGuideDrawing(guide);
+        const entityId = await Promise.resolve(chart.createShape(drawing.point, drawing.options));
+        nativeGuideRecordsRef.current.set(guide.id, { entityId, signature });
+      }
+
+      setNativeOverlayActive(
+        validGuides.length > 0
+        && validGuides.every((guide) => nativeGuideRecordsRef.current.has(guide.id))
+      );
+    } catch {
+      clearNativeGuides(chart);
+    } finally {
+      nativeGuideSyncingRef.current = false;
+    }
+  }, [clearNativeGuides, guides]);
+  syncNativeGuidesRef.current = syncNativeGuides;
 
   const refreshOverlay = useCallback(() => {
     const frameNode = frameRef.current;
     const frameHeight = frameNode?.clientHeight ?? 0;
-    const liveScale = readOverlayScaleSnapshot(frameNode);
+    const domScale = readOverlayScaleSnapshot(frameNode);
+    const chartScale = readChartPriceScaleSnapshot(
+      widgetRef.current?.activeChart?.(),
+      frameHeight,
+      domScale
+    );
     const fallbackScale = buildPositionOverlayScale({
       frameHeight,
       pricePoints,
       guides,
       interval: currentInterval,
     });
-    const resolvedScale = liveScale ?? fallbackScale;
+    const resolvedScale = chartScale ?? domScale ?? fallbackScale;
 
     if (!resolvedScale || frameHeight <= 0) {
       // Do not blink existing labels away during iframe reloads, orientation changes,
@@ -205,6 +397,7 @@ export function TradingViewChart({
     const nextGuides = positionOverlayGuides(guides, resolvedScale, frameHeight);
     setComputedGuides(nextGuides);
   }, [currentInterval, guides, pricePoints]);
+  refreshOverlayRef.current = refreshOverlay;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -219,6 +412,7 @@ export function TradingViewChart({
       if (!container) return;
 
       container.innerHTML = "";
+      clearNativeGuides();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
 
@@ -259,7 +453,6 @@ export function TradingViewChart({
         widgetRef.current = widget;
 
         widget.onChartReady?.(() => {
-          setChartReadyVersion((version) => version + 1);
           const chart = widget.activeChart?.();
           const currentResolution = chart?.resolution?.();
           if (typeof currentResolution === "string" && currentResolution.length > 0) {
@@ -278,8 +471,18 @@ export function TradingViewChart({
             if (interval) {
               window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
               setCurrentInterval(interval);
+              refreshOverlayRef.current();
+              void syncNativeGuidesRef.current();
             }
           });
+
+          chart?.onVisibleRangeChanged?.().subscribe?.(null, () => {
+            refreshOverlayRef.current();
+            void syncNativeGuidesRef.current();
+          });
+
+          refreshOverlayRef.current();
+          void syncNativeGuidesRef.current();
         });
       } catch {
         if (!cancelled) {
@@ -293,85 +496,11 @@ export function TradingViewChart({
 
     return () => {
       cancelled = true;
+      clearNativeGuides();
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const chart = widgetRef.current?.activeChart?.();
-
-    const removeNativeShapes = () => {
-      nativeShapeIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
-      nativeShapeIdsRef.current = [];
-    };
-
-    const syncNativeShapes = async () => {
-      removeNativeShapes();
-      setNativeOverlayActive(false);
-
-      const currentGuides = guidesRef.current;
-      if (!chart?.createShape || !chart.removeEntity || currentGuides.length === 0) return;
-      const createShape = chart.createShape.bind(chart);
-      const removeEntity = chart.removeEntity.bind(chart);
-
-      const colors = {
-        entry: "#65d9ff",
-        tp: "#4ce38a",
-        sl: "#ff7a7a",
-        liquidation: "#ff9f43",
-      } as const;
-      const created: string[] = [];
-
-      try {
-        for (const guide of currentGuides) {
-          if (!Number.isFinite(guide.price) || guide.price <= 0) continue;
-          const id = await Promise.resolve(createShape(
-            { price: guide.price },
-            {
-              shape: "horizontal_line",
-              text: `${guide.label} ${guide.price.toFixed(2)}`,
-              lock: true,
-              disableSelection: true,
-              disableSave: true,
-              disableUndo: true,
-              showInObjectsTree: false,
-              zOrder: "top",
-              overrides: {
-                linecolor: colors[guide.tone],
-                linestyle: 2,
-                linewidth: 2,
-                showLabel: true,
-                showPrice: true,
-                textcolor: colors[guide.tone],
-              },
-            }
-          ));
-          if (cancelled) {
-            removeEntity(id);
-          } else {
-            created.push(id);
-          }
-        }
-
-        if (!cancelled && created.length > 0) {
-          nativeShapeIdsRef.current = created;
-          setNativeOverlayActive(true);
-        }
-      } catch {
-        created.forEach(removeEntity);
-        if (!cancelled) setNativeOverlayActive(false);
-      }
-    };
-
-    void syncNativeShapes();
-
-    return () => {
-      cancelled = true;
-      removeNativeShapes();
-    };
-  }, [chartReadyVersion, guideSignature]);
+  }, [clearNativeGuides, containerId, symbol]);
 
   useEffect(() => {
     const node = frameRef.current;
@@ -464,15 +593,17 @@ export function TradingViewChart({
     if (!isVisible) return;
 
     refreshOverlay();
+    void syncNativeGuides();
     const intervalId = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       refreshOverlay();
+      void syncNativeGuides();
     }, OVERLAY_REFRESH_MS);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [isVisible, refreshOverlay]);
+  }, [isVisible, refreshOverlay, syncNativeGuides]);
 
   return (
     <div ref={frameRef} className="tradingview-frame">

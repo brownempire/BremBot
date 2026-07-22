@@ -329,7 +329,7 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   const entryPrice = points[points.length - 1]?.v ?? 0;
   const positionSizeUsd = 25 * 2;
   assert.ok(((routedTakeProfit - entryPrice) / entryPrice) * positionSizeUsd >= 1);
-  assert.ok(((entryPrice - routedStopLoss) / entryPrice) * positionSizeUsd >= 1);
+  assert.equal(routedStopLoss, entryPrice * (1 - 0.25 / 2));
   assert.equal(savedCursor, points[points.length - 1]?.t);
 });
 

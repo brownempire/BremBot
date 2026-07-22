@@ -882,28 +882,24 @@ function deriveSmartPerpsTradePlan(options: {
     collateralBase: number;
     leverageBase: number;
     defaultTp: number;
-    defaultSl: number;
     leverageCapMultiplier: number;
   }> = {
     conservative: {
       collateralBase: 0.4,
       leverageBase: 0.3,
       defaultTp: 0.9,
-      defaultSl: 1.5,
       leverageCapMultiplier: 0.45,
     },
     balanced: {
       collateralBase: 0.65,
       leverageBase: 0.5,
       defaultTp: 1.5,
-      defaultSl: 3.5,
       leverageCapMultiplier: 0.65,
     },
     aggressive: {
       collateralBase: 0.8,
       leverageBase: 1.35,
       defaultTp: 3,
-      defaultSl: 7,
       leverageCapMultiplier: 2,
     },
   };
@@ -922,17 +918,12 @@ function deriveSmartPerpsTradePlan(options: {
   const baseTp = options.settings.perpsTakeProfitMode === "percent" && options.settings.perpsTakeProfitValue > 0
     ? options.settings.perpsTakeProfitValue
     : profileConfig.defaultTp;
-  const baseSl = options.settings.stopLossPercent > 0 ? options.settings.stopLossPercent : profileConfig.defaultSl;
   const takeProfitPercent = clampNumber(
     baseTp * (1 + volatilityFactor * 0.28 + confidenceBias * 0.08),
     0.2,
     6
   );
-  const stopLossPercent = clampNumber(
-    baseSl * (1 + volatilityFactor * 0.18 - confidenceBias * 0.06),
-    0.2,
-    5
-  );
+  const stopLossPercent = OPERATOR_TRAINING_BASELINE.stopLossRoePercent;
 
   return {
     collateralPercent: Number(collateralPercent.toFixed(0)),
@@ -3522,10 +3513,7 @@ function DashboardPage() {
           : DEFAULT_AUTO_TRADE_SETTINGS.spotTakeProfitValue;
       const perpsTakeProfitMode = parsed.perpsTakeProfitMode === "usd" ? "usd" : "percent";
       const spotTakeProfitMode = parsed.spotTakeProfitMode === "usd" ? "usd" : "percent";
-      const nextStopLoss = Number(parsed.stopLossPercent);
-      const stopLossPercent = Number.isFinite(nextStopLoss) && nextStopLoss >= 0
-        ? nextStopLoss
-        : DEFAULT_AUTO_TRADE_SETTINGS.stopLossPercent;
+      const stopLossPercent = OPERATOR_TRAINING_BASELINE.stopLossRoePercent;
       const nextPerpsLeverage = Number(parsed.perpsLeverage);
       const perpsLeverage = Number.isFinite(nextPerpsLeverage) && nextPerpsLeverage >= 1
         ? Math.min(250, Math.max(1, nextPerpsLeverage))
@@ -5718,14 +5706,17 @@ function DashboardPage() {
               />
             </label>
             <label>
-              Stop Loss % (Perps only)
+              Stop Loss ROE % (Perps only)
               <StepperNumberInput
                 value={autoTradeSettings.stopLossPercent}
-                min={0}
+                min={OPERATOR_TRAINING_BASELINE.stopLossRoePercent}
+                max={OPERATOR_TRAINING_BASELINE.stopLossRoePercent}
                 step={0.01}
-                onChange={(value) => {
-                  const stopLossPercent = Number.isFinite(value) && value >= 0 ? value : 0;
-                  const next = { ...autoTradeSettings, stopLossPercent };
+                onChange={() => {
+                  const next = {
+                    ...autoTradeSettings,
+                    stopLossPercent: OPERATOR_TRAINING_BASELINE.stopLossRoePercent,
+                  };
                   persistAutoTradeSettings(next);
                 }}
               />
