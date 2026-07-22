@@ -93,6 +93,7 @@ export async function buildPerpsTpslTransactionForSignal(
   signal: PerpsSignalPayload,
   walletAddress: string,
   positionPubkey: string,
+  minimumNetProfitUsd = 1,
   tradingClient: PerpsTradingClient = perps.trading,
   positionsClient: PerpsPositionsClient = perps.positions
 ) {
@@ -104,7 +105,7 @@ export async function buildPerpsTpslTransactionForSignal(
     // A transient read failure should not prevent Jupiter from accepting the
     // original protection request. A later retry will refresh the fill again.
   }
-  const tpsl = getStandalonePositionTpsl(signal, livePosition);
+  const tpsl = getStandalonePositionTpsl(signal, livePosition, minimumNetProfitUsd);
   if (tpsl.length === 0) return null;
   return tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
 }

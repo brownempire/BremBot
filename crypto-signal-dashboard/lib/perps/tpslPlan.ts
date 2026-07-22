@@ -73,10 +73,11 @@ export function rebaseTakeProfitForLivePosition(
 
 export function getStandalonePositionTpsl(
   signal: SignalWithTpsl,
-  livePosition?: LivePositionForTpsl | null
+  livePosition?: LivePositionForTpsl | null,
+  minimumNetProfitUsd = 1
 ): PlannedTpslRequest[] {
   const takeProfitPrice = livePosition
-    ? rebaseTakeProfitForLivePosition(signal, livePosition)
+    ? rebaseTakeProfitForLivePosition(signal, livePosition, minimumNetProfitUsd)
     : signal.takeProfit?.priceUsd;
   return [
     ...(signal.takeProfit?.enabled && takeProfitPrice

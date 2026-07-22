@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { computeTriggerPrices, detectScalpSignal, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
+import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
 
@@ -25,7 +25,7 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
       perpsLeverage: 2,
       perpsExecutionMode: "set-parameters",
       scalpModeEnabled: false,
-      scalpTakeProfitUsd: 2,
+      scalpTakeProfitUsd: 3.5,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [
@@ -83,7 +83,7 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
   assert.equal(signal?.direction, "bullish");
 });
 
-test("scalp trigger pricing covers estimated fees plus the adjustable net target", () => {
+test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net target", () => {
   const config = createConfig();
   const triggers = computeTriggerPrices({
     config,
@@ -93,12 +93,19 @@ test("scalp trigger pricing covers estimated fees plus the adjustable net target
     side: "long",
     stopLossPercent: 0,
     takeProfitPercent: 0,
-    takeProfitUsd: 2,
+    takeProfitUsd: 3.5,
   });
   const targetPnl = (((triggers.takeProfitPrice ?? 0) - 100) / 100) * 50;
 
-  assert.ok(targetPnl - 50 * 0.0012 >= 1.999999);
+  assert.ok(targetPnl - 50 * 0.0012 >= 3.499999);
   assert.equal(triggers.stopLossPrice, null);
+});
+
+test("scalp planning uses 50 percent wallet allocation", () => {
+  const planningConfig = getScalpTradePlanningConfig(createConfig());
+  assert.equal(planningConfig.settings.walletAllocationMode, "percent");
+  assert.equal(planningConfig.settings.walletPercent, 50);
+  assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {

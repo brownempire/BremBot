@@ -364,7 +364,8 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
               const protection = await buildPerpsTpslTransactionForSignal(
                 successfulSignal,
                 agentWalletAddress,
-                positionPubkey
+                positionPubkey,
+                signal.strategyClass === "scalp" ? 3.5 : 1
               );
               if (!protection) break;
               const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);
