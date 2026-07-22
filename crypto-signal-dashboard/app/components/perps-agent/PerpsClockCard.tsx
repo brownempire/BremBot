@@ -94,6 +94,9 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
             <div className="perps-scalp-rule">
               Minimum take profit <strong>${props.scalpTakeProfitUsd.toFixed(2)}</strong>
             </div>
+            <div className="perps-scalp-rule">
+              Wallet allocation <strong>50%</strong>
+            </div>
             <div className="subtext">Automatically turns off when a trend or breakout signal appears.</div>
           </div>
         </details>
