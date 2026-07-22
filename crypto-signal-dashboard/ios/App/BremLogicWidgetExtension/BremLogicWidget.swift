@@ -260,6 +260,10 @@ struct BremLogicWidgetEntryView: View {
                     .foregroundStyle(.white.opacity(0.78))
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
+                HStack(spacing: 3) {
+                    smallMetric("AGENT WALLET", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                    smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: Color(red: 0.36, green: 0.68, blue: 0.98))
+                }
             }
 
             Spacer(minLength: 0)
@@ -339,10 +343,33 @@ struct BremLogicWidgetEntryView: View {
                     }
                 }
             } else {
-                Text(openPerpDetail)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.66))
-                    .frame(maxHeight: .infinity, alignment: .center)
+                GeometryReader { geometry in
+                    let leftWidth = max(112, geometry.size.width * 0.31)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("OPEN PERPS")
+                                .font(.system(size: 8, weight: .semibold, design: .rounded))
+                                .foregroundStyle(brandPrimary)
+                            Text("No open positions")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                            Text(openPerpDetail)
+                                .font(.system(size: 8, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.66))
+                                .lineLimit(2)
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 2), spacing: 3) {
+                                smallMetric("AGENT", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                                smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: Color(red: 0.36, green: 0.68, blue: 0.98))
+                            }
+                        }
+                        .frame(width: leftWidth, height: geometry.size.height, alignment: .topLeading)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - leftWidth - 6), height: geometry.size.height)
+                    }
+                }
             }
         }
     }
@@ -463,6 +490,17 @@ struct BremLogicWidgetEntryView: View {
         }
     }
 
+    private var idleMetricGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
+            metricTile("Main Wallet", balanceLabel(entry.snapshot.mainWalletBalanceUsd))
+            metricTile("Agent Wallet", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+            metricTile("Mark", priceLabel(entry.snapshot.openPerpMarkPrice), accent: Color(red: 0.36, green: 0.68, blue: 0.98))
+            metricTile("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+            metricTile("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+            metricTile("Updated", updatedLabel)
+        }
+    }
+
     @ViewBuilder
     private var largeContent: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -497,19 +535,21 @@ struct BremLogicWidgetEntryView: View {
                     }
                 }
             } else {
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("OPEN PERPS")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        .foregroundStyle(brandPrimary)
-                    Text("No open positions")
-                        .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(openPerpDetail)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                GeometryReader { geometry in
+                    let summaryHeight = max(72, geometry.size.height * 0.30)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 7) {
+                            positionSummary
+                                .frame(width: max(108, geometry.size.width * 0.39), height: summaryHeight, alignment: .leading)
+                            idleMetricGrid
+                                .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
+                        }
+                        .frame(height: summaryHeight)
+
+                        flexibleChart
+                            .frame(width: geometry.size.width, height: max(1, geometry.size.height - summaryHeight - 6))
+                    }
                 }
-                .frame(maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 12)
             }
 
         }
@@ -548,19 +588,19 @@ struct BremLogicWidgetEntryView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("OPEN PERPS")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(brandPrimary)
-                    Text("No open positions")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(openPerpDetail)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                GeometryReader { geometry in
+                    let railWidth = max(310, geometry.size.width * 0.39)
+                    HStack(alignment: .top, spacing: 9) {
+                        VStack(alignment: .leading, spacing: 9) {
+                            positionSummary
+                            idleMetricGrid
+                        }
+                        .frame(width: railWidth, height: geometry.size.height, alignment: .top)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - railWidth - 9), height: geometry.size.height)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 16)
             }
 
         }

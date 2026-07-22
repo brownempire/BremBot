@@ -146,6 +146,8 @@ export function buildWidgetServerSnapshot({
     : null;
   const mainWalletBalanceUsd = calculatePerpsWalletEquity(mainAvailableUsdc, liveMainPositions);
   const agentWalletBalanceUsd = calculatePerpsWalletEquity(agentAvailableUsdc, liveAgentPositions);
+  const chartCandles = buildChartCandles(chartPoints);
+  const latestChartPrice = chartCandles.at(-1)?.close ?? null;
 
   let openPerpLabel = "No open perps";
   let openPerpDetail = "Agent is monitoring for the next setup.";
@@ -179,15 +181,17 @@ export function buildWidgetServerSnapshot({
     openPerpPositionValueUsd: finiteOrNull(position?.positionValue),
     openPerpCollateralUsd: positionCollateral,
     openPerpEntryPrice: finiteOrNull(position?.entryPrice),
-    openPerpMarkPrice: finiteOrNull(position?.markPrice),
+    // The mark doubles as the current market price in the idle dashboard. It
+    // does not imply that a position is open; openPerpMarket remains null.
+    openPerpMarkPrice: finiteOrNull(position?.markPrice) ?? latestChartPrice,
     openPerpLeverage: finiteOrNull(position?.leverage),
     openPerpLiquidationPrice: finiteOrNull(position?.liquidationPrice),
     openPerpTakeProfitPrice: finiteOrNull(position?.takeProfit),
     openPerpStopLossPrice: finiteOrNull(position?.stopLoss),
     openPerpTakeProfitPnlUsd: calculateExpectedPnl(position, position?.takeProfit),
     openPerpStopLossPnlUsd: calculateExpectedPnl(position, position?.stopLoss),
-    chartSymbol: position ? chartSymbol ?? getChartAsset(position) : null,
-    chartCandles: position ? buildChartCandles(chartPoints) : [],
+    chartSymbol: chartSymbol ?? getChartAsset(position),
+    chartCandles,
     walletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
     mainWalletBalanceUsd: finiteOrNull(mainWalletBalanceUsd),
     agentWalletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
@@ -222,10 +226,11 @@ export async function loadWidgetServerSnapshot() {
   const agentPositions = agentPortfolioResult.status === "fulfilled" ? agentPortfolioResult.value.positions : [];
   const mainPositions = mainPortfolioResult.status === "fulfilled" ? mainPortfolioResult.value.positions : [];
   const chartPosition = getLivePositions(agentPositions)[0] ?? getLivePositions(mainPositions)[0] ?? null;
-  const chartSymbol = getChartAsset(chartPosition);
-  const chartPoints = chartSymbol
-    ? await fetchCoinbaseMinuteCandles(`${chartSymbol}-USD`, 61).catch(() => [])
-    : [];
+  // SOL is the strategy's primary monitored market, so continue feeding its
+  // chart while the agent is idle. Position fields stay empty until a real
+  // Jupiter position exists.
+  const chartSymbol = getChartAsset(chartPosition) ?? "SOL";
+  const chartPoints = await fetchCoinbaseMinuteCandles(`${chartSymbol}-USD`, 61).catch(() => []);
 
   return buildWidgetServerSnapshot({
     agentPositions,

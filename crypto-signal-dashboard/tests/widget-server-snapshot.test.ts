@@ -139,6 +139,31 @@ test("widget summary provides a useful idle state without inventing a balance", 
   assert.equal(snapshot.perpsMode, "Paper mode");
 });
 
+test("idle widget keeps wallet balances and monitored SOL market data without inventing a position", () => {
+  const snapshot = buildWidgetServerSnapshot({
+    agentPositions: [],
+    mainAvailableUsdc: 3.43,
+    agentAvailableUsdc: 18.36,
+    session: liveSession,
+    chartSymbol: "SOL",
+    chartPoints: [
+      { t: 1_784_204_400_000, o: 77.4, h: 77.7, l: 77.3, v: 77.6 },
+      { t: 1_784_204_460_000, o: 77.6, h: 77.8, l: 77.5, v: 77.65 },
+    ],
+  });
+
+  assert.equal(snapshot.openPerpMarket, null);
+  assert.equal(snapshot.openPerpPnlUsd, null);
+  assert.equal(snapshot.openPerpEntryPrice, null);
+  assert.equal(snapshot.openPerpTakeProfitPrice, null);
+  assert.equal(snapshot.openPerpLiquidationPrice, null);
+  assert.equal(snapshot.openPerpMarkPrice, 77.65);
+  assert.equal(snapshot.chartSymbol, "SOL");
+  assert.equal(snapshot.chartCandles.length, 2);
+  assert.equal(snapshot.mainWalletBalanceUsd, 3.43);
+  assert.equal(snapshot.agentWalletBalanceUsd, 18.36);
+});
+
 test("widget expected P/L reverses price direction for short positions", () => {
   const snapshot = buildWidgetServerSnapshot({
     agentPositions: [{ ...position, side: "short", takeProfit: 135, stopLoss: 175 }],

@@ -253,6 +253,17 @@ struct BremLogicMacWidgetEntryView: View {
         }
     }
 
+    private var idleMetricGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
+            metric("Main Wallet", usd(entry.snapshot.mainWalletBalanceUsd))
+            metric("Agent Wallet", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+            metric("Mark", price(entry.snapshot.openPerpMarkPrice), color: Color(red: 0.36, green: 0.68, blue: 0.98))
+            metric("Mode", entry.snapshot.perpsMode ?? "Paper mode")
+            metric("Execution", entry.snapshot.perpsExecutionModel == "delegated-ready" ? "Delegated" : "Assisted")
+            metric("Updated", updatedLabel)
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
             logo
@@ -313,6 +324,10 @@ struct BremLogicMacWidgetEntryView: View {
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(.white.opacity(0.65))
                     .lineLimit(2)
+                HStack(spacing: 3) {
+                    compactMetric("AGENT WALLET", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                    compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: Color(red: 0.36, green: 0.68, blue: 0.98))
+                }
             }
             Spacer(minLength: 0)
             HStack(spacing: 5) {
@@ -428,10 +443,33 @@ struct BremLogicMacWidgetEntryView: View {
                     }
                 }
             } else {
-                Text(detailLabel)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .frame(maxHeight: .infinity, alignment: .center)
+                GeometryReader { geometry in
+                    let railWidth = max(96, geometry.size.width * 0.28)
+                    HStack(spacing: 5) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("OPEN PERPS")
+                                .font(.system(size: 7, weight: .semibold, design: .rounded))
+                                .foregroundStyle(mint)
+                            Text("No open positions")
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                            Text(detailLabel)
+                                .font(.system(size: 7, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.65))
+                                .lineLimit(2)
+                            HStack(spacing: 3) {
+                                compactMetric("AGENT", usd(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
+                                compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: Color(red: 0.36, green: 0.68, blue: 0.98))
+                            }
+                        }
+                        .frame(width: railWidth, height: geometry.size.height, alignment: .topLeading)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - railWidth - 5), height: geometry.size.height)
+                    }
+                }
             }
         }
     }
@@ -469,10 +507,21 @@ struct BremLogicMacWidgetEntryView: View {
                     }
                 }
             } else {
-                Text(detailLabel)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.65))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                GeometryReader { geometry in
+                    let summaryHeight = max(72, geometry.size.height * 0.30)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .top, spacing: 7) {
+                            positionSummary
+                                .frame(width: max(108, geometry.size.width * 0.39), height: summaryHeight, alignment: .leading)
+                            idleMetricGrid
+                                .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
+                        }
+                        .frame(height: summaryHeight)
+
+                        flexibleChart
+                            .frame(width: geometry.size.width, height: max(1, geometry.size.height - summaryHeight - 6))
+                    }
+                }
             }
         }
     }
@@ -509,19 +558,19 @@ struct BremLogicMacWidgetEntryView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                 }
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("OPEN PERPS")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .foregroundStyle(mint)
-                    Text("No open positions")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(detailLabel)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.68))
+                GeometryReader { geometry in
+                    let railWidth = max(310, geometry.size.width * 0.39)
+                    HStack(alignment: .top, spacing: 9) {
+                        VStack(alignment: .leading, spacing: 9) {
+                            positionSummary
+                            idleMetricGrid
+                        }
+                        .frame(width: railWidth, height: geometry.size.height, alignment: .top)
+
+                        flexibleChart
+                            .frame(width: max(1, geometry.size.width - railWidth - 9), height: geometry.size.height)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.top, 16)
             }
         }
     }

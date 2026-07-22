@@ -194,6 +194,17 @@ struct BremLogicWatchContentView: View {
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
                         .padding(.vertical, 5)
+
+                    metric("MARK", bremLogicPrice(snapshot.openPerpMarkPrice), Color(red: 0.36, green: 0.68, blue: 0.98))
+
+                    BremLogicWatchCandlestickChart(
+                        candles: snapshot.chartCandles ?? [],
+                        symbol: snapshot.chartSymbol ?? "SOL",
+                        entryPrice: nil,
+                        markPrice: snapshot.openPerpMarkPrice,
+                        takeProfitPrice: nil,
+                        liquidationPrice: nil
+                    )
                 }
 
                 HStack(spacing: 6) {
@@ -252,16 +263,18 @@ struct BremLogicWatchContentView: View {
                 .font(.system(size: 16, weight: .black, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
-            HStack(alignment: .firstTextBaseline, spacing: 5) {
-                Text(bremLogicSignedUsd(snapshot.openPerpPnlUsd))
-                    .font(.system(size: 25, weight: .black, design: .rounded))
-                    .foregroundStyle(pnlColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                Text(bremLogicPercent(snapshot.openPerpPnlPercent))
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(pnlColor)
-                    .lineLimit(1)
+            if snapshot.hasOpenPerp {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(bremLogicSignedUsd(snapshot.openPerpPnlUsd))
+                        .font(.system(size: 25, weight: .black, design: .rounded))
+                        .foregroundStyle(pnlColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                    Text(bremLogicPercent(snapshot.openPerpPnlPercent))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor)
+                        .lineLimit(1)
+                }
             }
         }
     }
