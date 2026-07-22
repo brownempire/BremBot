@@ -1,6 +1,7 @@
 import type { DecisionLearningProfile, LearningAsset } from "@/lib/decision/learningTypes";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import type { PricePoint } from "@/lib/price/simulated";
+import { AGENT_STOP_LOSS_ROE_PERCENT } from "@/lib/decision/operatorTrainingBaselineConstants";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -49,7 +50,7 @@ export function applyLearnedTradePlan(input: {
   if (!input.profile) {
     return {
       ...input.basePlan,
-      stopLossPercent: 0,
+      stopLossPercent: AGENT_STOP_LOSS_ROE_PERCENT,
       atrPercent: computeAtrPercent(input.points),
       profileId: null,
     };
@@ -84,7 +85,7 @@ export function applyLearnedTradePlan(input: {
         input.profile.maximumAllocationPercent
       ).toFixed(2)),
       leverage: Number(leverage.toFixed(2)),
-      stopLossPercent: 0,
+      stopLossPercent: AGENT_STOP_LOSS_ROE_PERCENT,
       takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
       volatilityPercent: input.basePlan.volatilityPercent,
       atrPercent: Number(atrPercent.toFixed(4)),
@@ -104,7 +105,7 @@ export function applyLearnedTradePlan(input: {
   return {
     collateralPercent: Number(collateralPercent.toFixed(2)),
     leverage: Number(leverage.toFixed(2)),
-    stopLossPercent: 0,
+    stopLossPercent: AGENT_STOP_LOSS_ROE_PERCENT,
     takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
     volatilityPercent: input.basePlan.volatilityPercent,
     atrPercent: Number(atrPercent.toFixed(4)),

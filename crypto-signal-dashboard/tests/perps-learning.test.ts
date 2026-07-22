@@ -51,7 +51,7 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(result.profile.leverageCap, 50);
   assert.equal(result.profile.maximumAllocationPercent, 80);
   assert.equal(result.profile.takeProfitRoePercent, 25);
-  assert.equal(result.profile.stopLossRoePercent, 0);
+  assert.equal(result.profile.stopLossRoePercent, 25);
   const plan = runtime.applyLearnedTradePlan({
     basePlan: { collateralPercent: 80, leverage: 50, stopLossPercent: 0, takeProfitPercent: 0, volatilityPercent: 2 },
     asset: "SOL",
@@ -61,7 +61,7 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(plan.collateralPercent, 80);
   assert.equal(plan.leverage, 50);
   assert.ok(plan.takeProfitPercent >= 25 && plan.takeProfitPercent <= 50);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
   assert.ok(plan.takeProfitPercent > plan.stopLossPercent);
 });
 
@@ -195,7 +195,7 @@ test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted r
 
   assert.equal(plan.leverage, 3);
   assert.ok(plan.collateralPercent <= 10);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
   assert.ok(plan.takeProfitPercent > 0);
 });
 

@@ -6,6 +6,11 @@ import {
   positionOverlayGuides,
   type PositionOverlayGuide,
 } from "../lib/chart/positionOverlay";
+import {
+  buildChartPriceScaleSnapshot,
+  getNativeGuideDrawing,
+  OVERLAY_REFRESH_MS,
+} from "../app/components/TradingViewChart";
 
 const now = Date.now();
 const points = Array.from({ length: 60 }, (_, index) => ({
@@ -66,4 +71,42 @@ test("position overlay rejects invalid levels without dropping valid ones", () =
     "sl",
     "liquidation",
   ]);
+});
+
+test("chart-native drawings preserve the exact price for every position level", () => {
+  assert.equal(OVERLAY_REFRESH_MS, 5_000);
+  for (const guide of guides) {
+    const drawing = getNativeGuideDrawing(guide);
+    assert.deepEqual(drawing.point, { price: guide.price });
+    assert.equal(drawing.options.shape, "horizontal_line");
+    assert.equal(drawing.options.overrides.showPrice, true);
+    assert.match(drawing.options.text, new RegExp(`^${guide.label} `));
+    assert.ok(drawing.options.overrides.linecolor);
+  }
+});
+
+test("TradingView visible price range maps guides after chart zoom", () => {
+  const scale = buildChartPriceScaleSnapshot({
+    frameHeight: 500,
+    paneHeight: 400,
+    range: { from: 75, to: 80 },
+    paneBounds: { paneTop: 50, paneBottom: 450 },
+  });
+  assert.ok(scale);
+  const positioned = positionOverlayGuides([
+    { id: "zoomed-tp", label: "TP", price: 77.75, tone: "tp" },
+  ], scale, 500);
+  assert.equal(positioned[0]?.edge, null);
+  assert.equal(positioned[0]?.top, 46);
+
+  const zoomedScale = buildChartPriceScaleSnapshot({
+    frameHeight: 500,
+    paneHeight: 400,
+    range: { from: 77, to: 78 },
+    paneBounds: { paneTop: 50, paneBottom: 450 },
+  });
+  assert.ok(zoomedScale);
+  assert.equal(positionOverlayGuides([
+    { id: "zoomed-tp", label: "TP", price: 77.75, tone: "tp" },
+  ], zoomedScale, 500)[0]?.top, 30);
 });

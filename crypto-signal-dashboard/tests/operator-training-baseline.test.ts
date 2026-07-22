@@ -25,7 +25,7 @@ test("operator training baseline matches the requested starting parameters", () 
   assert.deepEqual(DEFAULT_SERVER_SIGNAL_PARAMS, OPERATOR_TRAINING_BASELINE.signalParams);
   assert.equal(profile.maximumAllocationPercent, 80);
   assert.equal(profile.takeProfitRoePercent, 25);
-  assert.equal(profile.stopLossRoePercent, 0);
+  assert.equal(profile.stopLossRoePercent, 25);
   assert.equal(profile.leverageCap, 50);
   for (const asset of ["SOL", "ETH", "BTC"] as const) {
     assert.equal(profile.assetAdjustments[asset].trendThreshold, 0.14);
@@ -43,7 +43,7 @@ test("client baseline constants do not import server-only runtime modules", () =
   assert.doesNotMatch(source, /^import (?!type\b)/m);
 });
 
-test("a zero-history baseline adapts its 25% TP without generating an SL", () => {
+test("a zero-history baseline adapts its 25% TP and includes the 25% SL", () => {
   const profile = decisionLearningProfileSchema.parse(
     makeOperatorTrainingBaselineProfile("adaptive-exit-wallet", 1)
   );
@@ -65,14 +65,14 @@ test("a zero-history baseline adapts its 25% TP without generating an SL", () =>
   });
 
   assert.equal(profile.takeProfitRoePercent, 25);
-  assert.equal(profile.stopLossRoePercent, 0);
+  assert.equal(profile.stopLossRoePercent, 25);
   assert.ok(plan.takeProfitPercent >= 25 && plan.takeProfitPercent <= 50);
   assert.ok(plan.takeProfitPercent > profile.takeProfitRoePercent);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
   assert.ok(plan.takeProfitPercent > plan.stopLossPercent);
 });
 
-test("an existing learned profile with zero stored exits receives adaptive TP only", () => {
+test("an existing learned profile with zero stored exits receives the agent SL", () => {
   const profile = decisionLearningProfileSchema.parse({
     ...makeOperatorTrainingBaselineProfile("existing-zero-exit-wallet", 2),
     source: "manual-training",
@@ -97,10 +97,10 @@ test("an existing learned profile with zero stored exits receives adaptive TP on
   });
 
   assert.ok(plan.takeProfitPercent > 0);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
 });
 
-test("agent runtime suppresses a configured SL even before a learning profile exists", () => {
+test("agent runtime applies the 25% SL even before a learning profile exists", () => {
   const plan = applyLearnedTradePlan({
     basePlan: {
       collateralPercent: 25,
@@ -115,5 +115,5 @@ test("agent runtime suppresses a configured SL even before a learning profile ex
   });
 
   assert.equal(plan.takeProfitPercent, 25);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
 });

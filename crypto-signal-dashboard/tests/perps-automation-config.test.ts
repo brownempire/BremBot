@@ -95,3 +95,14 @@ test("saved scalp targets migrate to the $3.50 minimum", () => {
     expectedRevision: 0,
   }).success, false);
 });
+
+test("saved agent stop losses migrate to the 25% ROE safeguard", () => {
+  const input = createInput();
+  const parsed = perpsAutomationConfigWriteSchema.parse({
+    ...input,
+    settings: { ...input.settings, stopLossPercent: 0 },
+    expectedRevision: 0,
+  });
+
+  assert.equal(parsed.settings.stopLossPercent, 25);
+});

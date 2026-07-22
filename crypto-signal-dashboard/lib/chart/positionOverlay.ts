@@ -12,6 +12,7 @@ export type PositionOverlayScale = {
   paneBottom: number;
   minPrice: number;
   maxPrice: number;
+  inverted?: boolean;
 };
 
 export type PositionedOverlayGuide = PositionOverlayGuide & {
@@ -110,7 +111,8 @@ export function positionOverlayGuides(
         ? "below"
         : null;
     const relative = (guide.price - scale.minPrice) / scaleSpan;
-    const unclampedY = scale.paneTop + (1 - relative) * paneHeight;
+    const verticalPosition = scale.inverted ? relative : 1 - relative;
+    const unclampedY = scale.paneTop + verticalPosition * paneHeight;
     const y = Math.min(
       scale.paneBottom - edgeInset,
       Math.max(scale.paneTop + edgeInset, unclampedY)
