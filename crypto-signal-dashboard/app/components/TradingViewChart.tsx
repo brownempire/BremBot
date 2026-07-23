@@ -119,6 +119,7 @@ function readOverlayScaleSnapshot(frameNode: HTMLDivElement | null) {
     paneBottom,
     maxPrice: Math.max(topNode.price, bottomNode.price),
     minPrice: Math.min(topNode.price, bottomNode.price),
+    inverted: topNode.price < bottomNode.price,
   } satisfies PositionOverlayScale;
 }
 

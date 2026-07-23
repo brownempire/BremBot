@@ -1,0 +1,95 @@
+{
+  "capturedAt": "2026-07-20T04:30:00Z",
+  "commit": "ba6ec3fcf8eb787931a364cbdf1c3f74c47dfa55",
+  "startingCapitalUsd": 115.480621,
+  "params": {
+    "trendWindow": 15,
+    "trendThreshold": 0.14,
+    "breakoutPercent": 0.19,
+    "cooldownSeconds": 180
+  },
+  "settings": {
+    "walletPercent": 80,
+    "walletAllocationMode": "percent",
+    "perpsTakeProfitValue": 0,
+    "perpsTakeProfitMode": "percent",
+    "stopLossPercent": 0,
+    "perpsLeverage": 50,
+    "perpsExecutionMode": "smart-trades",
+    "decisionMode": "active",
+    "smartTradeProfile": "aggressive",
+    "mode": "all"
+  },
+  "risk": {
+    "maxUserLeverage": 125,
+    "maxTradePct": 5,
+    "maxExposurePct": 5,
+    "maxDailyLossPct": 0.03
+  },
+  "profile": {
+    "profileId": "frozen-production-profile-v8",
+    "walletAddress": "backtest-wallet",
+    "version": 8,
+    "status": "active",
+    "source": "manual-training",
+    "createdAt": "2026-07-19T00:00:00.000Z",
+    "promotedAt": "2026-07-19T00:00:00.000Z",
+    "learnedFromClosedTrades": 7,
+    "minimumConfidence": 0.621,
+    "leverageCap": 50,
+    "maximumAllocationPercent": 80,
+    "targetWalletRiskPercent": 1.6,
+    "preferredDirection": "balanced",
+    "trendWindow": 15,
+    "cooldownSeconds": 180,
+    "takeProfitRoePercent": 25,
+    "stopLossRoePercent": 0,
+    "minimumRewardRiskRatio": 2,
+    "atrLookback": 14,
+    "atrStopMultiplier": 1.5,
+    "volatilityCeilingPercent": 4.98,
+    "indicatorSettings": {
+      "longRsiMin": 50,
+      "longRsiMax": 72,
+      "shortRsiMin": 28,
+      "shortRsiMax": 50,
+      "minimumAdx": 20,
+      "minimumVolumeRatio": 1.1,
+      "minimumScore": 3
+    },
+    "assetAdjustments": {
+      "SOL": {
+        "trendThreshold": 0.149,
+        "breakoutPercent": 0.181,
+        "leverageMultiplier": 1.015,
+        "allocationMultiplier": 1.01
+      },
+      "ETH": {
+        "trendThreshold": 0.14,
+        "breakoutPercent": 0.19,
+        "leverageMultiplier": 1,
+        "allocationMultiplier": 1
+      },
+      "BTC": {
+        "trendThreshold": 0.14,
+        "breakoutPercent": 0.19,
+        "leverageMultiplier": 1,
+        "allocationMultiplier": 1
+      }
+    },
+    "validation": {
+      "sampleSize": 7,
+      "trainingSize": 7,
+      "validationSize": 0,
+      "winRate": 0.8571,
+      "expectancyUsd": 11.4986,
+      "profitFactor": 26.6338,
+      "maxDrawdownUsd": 3.14,
+      "passed": true,
+      "reasons": [
+        "Frozen from the active Redis profile for as-deployed comparison; the underlying seven outcomes are independently audited in the backtest report."
+      ]
+    },
+    "summary": "Sanitized frozen copy of the active production profile for reproducible research."
+  }
+}

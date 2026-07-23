@@ -30,6 +30,17 @@ test("position overlay maps higher prices above lower prices", () => {
   assert.equal(byId.entry.edge, null);
 });
 
+test("position overlay follows an inverted price scale", () => {
+  const scale = buildPositionOverlayScale({ frameHeight: 520, pricePoints: points, guides, interval: "1" });
+  assert.ok(scale);
+  const positioned = positionOverlayGuides(guides, { ...scale, inverted: true }, 520);
+  const byId = Object.fromEntries(positioned.map((guide) => [guide.id, guide]));
+
+  assert.ok(byId.tp.top > byId.entry.top);
+  assert.ok(byId.entry.top > byId.sl.top);
+  assert.equal(byId.entry.edge, null);
+});
+
 test("position overlay keeps out-of-range levels visible at labeled edges", () => {
   const distantGuides: PositionOverlayGuide[] = [
     { id: "high", label: "TP", price: 150, tone: "tp" },

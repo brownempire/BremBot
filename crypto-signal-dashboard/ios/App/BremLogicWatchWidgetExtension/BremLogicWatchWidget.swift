@@ -30,7 +30,7 @@ struct BremLogicWatchProvider: TimelineProvider {
             // network value arrives, then throttle it to avoid a reload loop.
             let now = Date()
             let interval = BremLogicWatchRefreshPolicy.interval(for: snapshot)
-            let minimumReloadInterval = max(30, interval * 0.8)
+            let minimumReloadInterval = max(15, interval * 0.8)
             let lastReload = UserDefaults.standard.object(forKey: Self.lastRefreshReloadKey) as? Date
             if let lastReload, now.timeIntervalSince(lastReload) < minimumReloadInterval { return }
 
