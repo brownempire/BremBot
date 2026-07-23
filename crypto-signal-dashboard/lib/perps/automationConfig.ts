@@ -12,7 +12,7 @@ export const perpsAutomationSettingsSchema = z.object({
   perpsTakeProfitMode: z.enum(["percent", "usd"]),
   spotTakeProfitValue: z.number().finite().min(0),
   spotTakeProfitMode: z.enum(["percent", "usd"]),
-  stopLossPercent: z.number().finite().min(0),
+  stopLossPercent: z.number().finite().min(0).transform(() => Number(OPERATOR_TRAINING_BASELINE.stopLossRoePercent)),
   perpsLeverage: z.number().finite().min(1).max(250),
   perpsExecutionMode: z.enum(["set-parameters", "smart-trades"]),
   scalpModeEnabled: z.boolean().default(false),

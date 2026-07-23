@@ -31,6 +31,7 @@ private struct BremLogicWatchCandlestickChart: View {
     let entryPrice: Double?
     let markPrice: Double?
     let takeProfitPrice: Double?
+    let stopLossPrice: Double?
     let liquidationPrice: Double?
 
     private let upColor = Color(red: 0.035, green: 0.60, blue: 0.51)
@@ -38,6 +39,7 @@ private struct BremLogicWatchCandlestickChart: View {
     private let entryColor = Color(red: 0.40, green: 0.85, blue: 1.0)
     private let markColor = Color(red: 0.36, green: 0.68, blue: 0.98)
     private let takeProfitColor = Color(red: 0.30, green: 0.89, blue: 0.54)
+    private let stopLossColor = Color(red: 1.0, green: 0.45, blue: 0.45)
     private let liquidationColor = Color(red: 1.0, green: 0.58, blue: 0.22)
 
     private var visibleCandles: [BremLogicWatchCandle] {
@@ -54,6 +56,7 @@ private struct BremLogicWatchCandlestickChart: View {
                 legend("E", entryPrice, entryColor)
                 legend("M", markPrice, markColor)
                 legend("TP", takeProfitPrice, takeProfitColor)
+                legend("SL", stopLossPrice, stopLossColor)
                 legend("L", liquidationPrice, liquidationColor)
             }
             .lineLimit(1)
@@ -68,7 +71,7 @@ private struct BremLogicWatchCandlestickChart: View {
                 Canvas { context, size in
                     let plot = CGRect(x: 3, y: 3, width: max(1, size.width - 6), height: max(1, size.height - 6))
                     let candlePrices = visibleCandles.flatMap { [$0.low, $0.high] }
-                    let levels = [entryPrice, markPrice, takeProfitPrice, liquidationPrice]
+                    let levels = [entryPrice, markPrice, takeProfitPrice, stopLossPrice, liquidationPrice]
                         .compactMap { $0 }
                         .filter { $0.isFinite && $0 > 0 }
                     guard let rawMin = (candlePrices + levels).min(),
@@ -117,6 +120,7 @@ private struct BremLogicWatchCandlestickChart: View {
                         (entryPrice, entryColor, [4, 2]),
                         (markPrice, markColor, []),
                         (takeProfitPrice, takeProfitColor, [2, 2]),
+                        (stopLossPrice, stopLossColor, [3, 2]),
                         (liquidationPrice, liquidationColor, [6, 2]),
                     ]
                     for (price, color, dash) in referenceLines {
@@ -177,6 +181,8 @@ struct BremLogicWatchContentView: View {
                         metric("LIQUIDATION", bremLogicPrice(snapshot.openPerpLiquidationPrice), .orange)
                         metric("TAKE PROFIT", bremLogicPrice(snapshot.openPerpTakeProfitPrice), .green)
                         metric("TP P/L", bremLogicSignedUsd(snapshot.openPerpTakeProfitPnlUsd), .green)
+                        metric("STOP LOSS", bremLogicPrice(snapshot.openPerpStopLossPrice), .red)
+                        metric("SL P/L", bremLogicSignedUsd(snapshot.openPerpStopLossPnlUsd), .red)
                         metric("POSITION", bremLogicWalletUsd(snapshot.openPerpPositionValueUsd))
                         metric("COLLATERAL", bremLogicWalletUsd(snapshot.openPerpCollateralUsd))
                     }
@@ -187,6 +193,7 @@ struct BremLogicWatchContentView: View {
                         entryPrice: snapshot.openPerpEntryPrice,
                         markPrice: snapshot.openPerpMarkPrice,
                         takeProfitPrice: snapshot.openPerpTakeProfitPrice,
+                        stopLossPrice: snapshot.openPerpStopLossPrice,
                         liquidationPrice: snapshot.openPerpLiquidationPrice
                     )
                 } else {
@@ -203,6 +210,7 @@ struct BremLogicWatchContentView: View {
                         entryPrice: nil,
                         markPrice: snapshot.openPerpMarkPrice,
                         takeProfitPrice: nil,
+                        stopLossPrice: nil,
                         liquidationPrice: nil
                     )
                 }

@@ -374,7 +374,7 @@ test("server monitor routes exactly $12 when available USDC is between $12 and $
   assert.equal((routedSignal as PerpsAgentSignal | null)?.marketContext?.availableUsdc, 20);
 });
 
-test("smart monitoring applies adaptive leverage and real 25% TP / 15% SL", async () => {
+test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", async () => {
   let routedSignal: PerpsAgentSignal | null = null;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
@@ -435,11 +435,11 @@ test("smart monitoring applies adaptive leverage and real 25% TP / 15% SL", asyn
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(result.results[0]?.status, "executed");
   assert.ok((routed?.leverage ?? 0) >= 2 && (routed?.leverage ?? 0) <= 10);
-  assert.ok((routed?.collateralUsd ?? 0) <= 20);
+  assert.ok((routed?.collateralUsd ?? 0) <= 12);
   const entryPrice = points.at(-1)?.v ?? 0;
   const leverage = routed?.leverage ?? 1;
   assert.ok(Math.abs((((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * leverage * 100 - 25) < 0.01);
-  assert.ok(Math.abs(((entryPrice - (routed?.stopLossPrice ?? 0)) / entryPrice) * leverage * 100 - 15) < 0.01);
+  assert.ok(Math.abs(((entryPrice - (routed?.stopLossPrice ?? 0)) / entryPrice) * leverage * 100 - 25) < 0.01);
 });
 
 test("server monitor fails closed when an agent position is already open", async () => {

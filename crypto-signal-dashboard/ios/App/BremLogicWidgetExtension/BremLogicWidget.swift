@@ -147,6 +147,7 @@ struct BremLogicWidgetEntryView: View {
             entryPrice: entry.snapshot.openPerpEntryPrice,
             markPrice: entry.snapshot.openPerpMarkPrice,
             takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice,
+            stopLossPrice: entry.snapshot.openPerpStopLossPrice,
             liquidationPrice: entry.snapshot.openPerpLiquidationPrice
         )
         .frame(height: height)
@@ -245,6 +246,7 @@ struct BremLogicWidgetEntryView: View {
                 HStack(spacing: 3) {
                     smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
                     smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                    smallMetric("STOP LOSS", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: .red.opacity(0.9))
                 }
             } else {
                 Text("OPEN PERPS")
@@ -334,6 +336,7 @@ struct BremLogicWidgetEntryView: View {
                                 smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
                                 smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
                                 smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                                smallMetric("STOP LOSS", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: .red.opacity(0.9))
                             }
                         }
                         .frame(width: leftWidth, height: geometry.size.height, alignment: .topLeading)
@@ -487,6 +490,8 @@ struct BremLogicWidgetEntryView: View {
             metricTile("Liquidation", priceLabel(entry.snapshot.openPerpLiquidationPrice), accent: .orange.opacity(0.9))
             metricTile("Take Profit", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
             metricTile("TP P/L", expectedPnlLabel(entry.snapshot.openPerpTakeProfitPnlUsd), accent: Color(red: 0.45, green: 0.92, blue: 0.62))
+            metricTile("Stop Loss", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: Color(red: 1, green: 0.45, blue: 0.45))
+            metricTile("SL P/L", expectedPnlLabel(entry.snapshot.openPerpStopLossPnlUsd), accent: Color(red: 1, green: 0.45, blue: 0.45))
         }
     }
 

@@ -112,7 +112,7 @@ struct BremLogicPositionComplicationView: View {
                 .foregroundStyle(pnlColor)
                 .widgetLabel { Text("B \(market)") }
         case .accessoryInline:
-            Text("B \(snapshot.openPerpLabel ?? market) \(pnl) \(bremLogicPercent(snapshot.openPerpPnlPercent))")
+            Text("B \(snapshot.openPerpLabel ?? market) \(pnl) SL \(bremLogicPrice(snapshot.openPerpStopLossPrice))")
         default:
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 3) {
@@ -144,6 +144,8 @@ struct BremLogicPositionComplicationView: View {
                         Text(bremLogicLeverage(snapshot.openPerpLeverage))
                         Text("•")
                         Text("TP \(bremLogicPrice(snapshot.openPerpTakeProfitPrice))")
+                        Text("•")
+                        Text("SL \(bremLogicPrice(snapshot.openPerpStopLossPrice))")
                     }
                     .font(.system(size: 7.5, weight: .bold, design: .rounded))
                     .lineLimit(1)
@@ -234,7 +236,7 @@ struct BremLogicWatchWidget: Widget {
             BremLogicPositionComplicationView(entry: entry)
         }
         .configurationDisplayName("BremLogic Position")
-        .description("Dense open-position status with P/L, leverage, TP, and BremLogic branding.")
+        .description("Dense open-position status with P/L, leverage, TP, SL, and BremLogic branding.")
         .supportedFamilies([.accessoryRectangular, .accessoryCircular, .accessoryInline, .accessoryCorner])
     }
 }
