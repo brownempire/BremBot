@@ -26,7 +26,7 @@ test("operator training baseline matches the requested starting parameters", () 
   assert.equal(profile.maximumAllocationPercent, 50);
   assert.equal(profile.targetWalletRiskPercent, 3);
   assert.equal(profile.takeProfitRoePercent, 25);
-  assert.equal(profile.stopLossRoePercent, 15);
+  assert.equal(profile.stopLossRoePercent, 25);
   assert.equal(profile.leverageFloor, 2);
   assert.equal(profile.leverageCap, 10);
   for (const asset of ["SOL", "ETH", "BTC"] as const) {
@@ -45,7 +45,7 @@ test("client baseline constants do not import server-only runtime modules", () =
   assert.doesNotMatch(source, /^import (?!type\b)/m);
 });
 
-test("a zero-history baseline enforces risk-sized 25% TP, 15% SL, and adaptive 2-10x leverage", () => {
+test("a zero-history baseline enforces risk-sized 25% TP, 25% SL, and adaptive 2-10x leverage", () => {
   const profile = decisionLearningProfileSchema.parse(
     makeOperatorTrainingBaselineProfile("adaptive-exit-wallet", 1)
   );
@@ -71,11 +71,11 @@ test("a zero-history baseline enforces risk-sized 25% TP, 15% SL, and adaptive 2
   });
 
   assert.equal(profile.takeProfitRoePercent, 25);
-  assert.equal(profile.stopLossRoePercent, 15);
+  assert.equal(profile.stopLossRoePercent, 25);
   assert.equal(plan.takeProfitPercent, 25);
-  assert.equal(plan.stopLossPercent, 15);
+  assert.equal(plan.stopLossPercent, 25);
   assert.equal(plan.leverage, 10);
-  assert.equal(plan.collateralPercent, 20);
+  assert.equal(plan.collateralPercent, 12);
 });
 
 test("weak or volatile setups stay at the researched 2x leverage floor", () => {
@@ -106,11 +106,11 @@ test("weak or volatile setups stay at the researched 2x leverage floor", () => {
   });
 
   assert.equal(plan.leverage, 2);
-  assert.equal(plan.stopLossPercent, 15);
+  assert.equal(plan.stopLossPercent, 25);
   assert.equal(plan.takeProfitPercent, 25);
 });
 
-test("an existing learned profile uses its stored bounded exits", () => {
+test("an existing learned profile cannot suppress the fixed agent SL", () => {
   const profile = decisionLearningProfileSchema.parse({
     ...makeOperatorTrainingBaselineProfile("existing-zero-exit-wallet", 2),
     source: "manual-training",
@@ -135,10 +135,10 @@ test("an existing learned profile uses its stored bounded exits", () => {
   });
 
   assert.equal(plan.takeProfitPercent, 1);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 25);
 });
 
-test("agent runtime preserves a configured SL before a learning profile exists", () => {
+test("agent runtime enforces the fixed SL before a learning profile exists", () => {
   const plan = applyLearnedTradePlan({
     basePlan: {
       collateralPercent: 25,
@@ -153,5 +153,5 @@ test("agent runtime preserves a configured SL before a learning profile exists",
   });
 
   assert.equal(plan.takeProfitPercent, 25);
-  assert.equal(plan.stopLossPercent, 4);
+  assert.equal(plan.stopLossPercent, 25);
 });

@@ -117,6 +117,7 @@ struct BremLogicMacWidgetEntryView: View {
             entryPrice: entry.snapshot.openPerpEntryPrice,
             markPrice: entry.snapshot.openPerpMarkPrice,
             takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice,
+            stopLossPrice: entry.snapshot.openPerpStopLossPrice,
             liquidationPrice: entry.snapshot.openPerpLiquidationPrice
         )
         .frame(height: height)
@@ -250,6 +251,8 @@ struct BremLogicMacWidgetEntryView: View {
             metric("Liquidation", price(entry.snapshot.openPerpLiquidationPrice), color: .orange)
             metric("Take Profit", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
             metric("TP P/L", usd(entry.snapshot.openPerpTakeProfitPnlUsd, signed: true), color: positive)
+            metric("Stop Loss", price(entry.snapshot.openPerpStopLossPrice), color: negative)
+            metric("SL P/L", usd(entry.snapshot.openPerpStopLossPnlUsd, signed: true), color: negative)
         }
     }
 
@@ -312,6 +315,7 @@ struct BremLogicMacWidgetEntryView: View {
                 HStack(spacing: 3) {
                     compactMetric("LEVERAGE", leverage(entry.snapshot.openPerpLeverage))
                     compactMetric("TAKE PROFIT", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
+                    compactMetric("STOP LOSS", price(entry.snapshot.openPerpStopLossPrice), color: negative)
                 }
             } else {
                 Text("OPEN PERPS")
@@ -406,6 +410,7 @@ struct BremLogicMacWidgetEntryView: View {
                                 compactMetric("MARK", price(entry.snapshot.openPerpMarkPrice), color: pnlColor)
                                 compactMetric("LEVERAGE", leverage(entry.snapshot.openPerpLeverage))
                                 compactMetric("TAKE PROFIT", price(entry.snapshot.openPerpTakeProfitPrice), color: mint)
+                                compactMetric("STOP LOSS", price(entry.snapshot.openPerpStopLossPrice), color: negative)
                             }
                             .frame(maxWidth: .infinity, maxHeight: summaryHeight, alignment: .top)
                         }
