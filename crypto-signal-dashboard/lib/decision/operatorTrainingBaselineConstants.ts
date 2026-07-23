@@ -11,7 +11,7 @@ export const OPERATOR_TRAINING_BASELINE = {
   maximumAllocationPercent: 50,
   targetWalletRiskPercent: 3,
   takeProfitRoePercent: 25,
-  stopLossRoePercent: 15,
+  stopLossRoePercent: 25,
   minimumConfidence: 0.68,
   leverageFloor: 2,
   leverageCap: 10,
@@ -19,3 +19,5 @@ export const OPERATOR_TRAINING_BASELINE = {
   leverageVolatilityPenalty: 1.25,
   leverageLossStepdown: 1,
 } as const;
+
+export const AGENT_STOP_LOSS_ROE_PERCENT = OPERATOR_TRAINING_BASELINE.stopLossRoePercent;

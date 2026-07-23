@@ -53,17 +53,17 @@ test("manual training activates the operator-selected baseline before enough out
   assert.equal(result.profile.maximumAllocationPercent, 50);
   assert.equal(result.profile.targetWalletRiskPercent, 3);
   assert.equal(result.profile.takeProfitRoePercent, 25);
-  assert.equal(result.profile.stopLossRoePercent, 15);
+  assert.equal(result.profile.stopLossRoePercent, 25);
   const plan = runtime.applyLearnedTradePlan({
     basePlan: { collateralPercent: 80, leverage: 10, stopLossPercent: 10, takeProfitPercent: 10, volatilityPercent: 2 },
     asset: "SOL",
     points: Array.from({ length: 16 }, (_, index) => ({ t: index * 60_000, v: 100 + index * 0.1 })),
     profile: result.profile,
   });
-  assert.equal(plan.collateralPercent, 20);
+  assert.equal(plan.collateralPercent, 12);
   assert.ok(plan.leverage >= 2 && plan.leverage <= 10);
   assert.equal(plan.takeProfitPercent, 25);
-  assert.equal(plan.stopLossPercent, 15);
+  assert.equal(plan.stopLossPercent, 25);
 });
 
 test("forced manual training replaces an existing pre-sample profile with the current baseline", async () => {
@@ -123,7 +123,7 @@ test("automatic training migrates a legacy active profile before applying new ou
   assert.equal(result.profile.leverageFloor, 2);
   assert.equal(result.profile.leverageCap, 10);
   assert.equal(result.profile.takeProfitRoePercent, 25);
-  assert.equal(result.profile.stopLossRoePercent, 15);
+  assert.equal(result.profile.stopLossRoePercent, 25);
 });
 
 test("each newly closed trade incrementally updates the active wallet profile", async () => {
@@ -237,7 +237,7 @@ test("trained runtime enforces risk sizing, adaptive leverage bounds, and stored
 
   assert.ok(plan.leverage >= 2 && plan.leverage <= 3);
   assert.ok(plan.collateralPercent <= 10);
-  assert.equal(plan.stopLossPercent, 2.5);
+  assert.equal(plan.stopLossPercent, 25);
   assert.ok(plan.takeProfitPercent > 0);
 });
 
@@ -297,7 +297,7 @@ test("profitable chronological holdout history promotes a versioned learned prof
   assert.ok(result.profile.trendWindow >= 120 && result.profile.trendWindow <= 180);
   assert.ok(result.profile.cooldownSeconds >= 27_000 && result.profile.cooldownSeconds <= 43_200);
   assert.ok(result.profile.takeProfitRoePercent >= 20 && result.profile.takeProfitRoePercent <= 30);
-  assert.ok(result.profile.stopLossRoePercent >= 12 && result.profile.stopLossRoePercent <= 20);
+  assert.equal(result.profile.stopLossRoePercent, 25);
   assert.equal(result.profile.targetWalletRiskPercent, 3);
   assert.equal(result.profile.maximumAllocationPercent, 50);
   assert.equal(result.profile.leverageFloor, 2);

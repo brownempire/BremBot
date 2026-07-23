@@ -65,7 +65,19 @@ test("legacy wallet automation configs migrate to revision one", () => {
   assert.equal(parsed?.settings.decisionMode, "active");
   assert.equal(parsed?.settings.scalpModeEnabled, false);
   assert.equal(parsed?.settings.scalpTakeProfitUsd, 3.5);
+  assert.equal(parsed?.settings.stopLossPercent, 25);
   assert.equal(parsed?.walletAddress, walletAddress);
+});
+
+test("saved zero stop losses migrate to the fixed 25% ROE safeguard", () => {
+  const input = createInput();
+  const parsed = perpsAutomationConfigWriteSchema.parse({
+    ...input,
+    settings: { ...input.settings, stopLossPercent: 0 },
+    expectedRevision: 0,
+  });
+
+  assert.equal(parsed.settings.stopLossPercent, 25);
 });
 
 test("wallet automation writes require a non-negative expected revision", () => {
