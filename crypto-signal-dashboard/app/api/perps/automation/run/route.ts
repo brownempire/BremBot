@@ -1,4 +1,5 @@
 import { runLockedAutonomousPerpsMonitor } from "@/lib/perps/autonomousMonitor";
+import { runPerpsTradeNotificationWatch } from "@/lib/perps/tradeNotifications";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 55;
@@ -15,7 +16,14 @@ export async function GET(request: Request) {
 
   try {
     const result = await runLockedAutonomousPerpsMonitor();
-    return Response.json(result, {
+    const notificationResult = await runPerpsTradeNotificationWatch().catch((error) => ({
+      ok: false,
+      error: error instanceof Error ? error.message : "Perps notification watcher failed.",
+      wallets: 0,
+      notifications: 0,
+      sent: 0,
+    }));
+    return Response.json({ ...result, tradeNotifications: notificationResult }, {
       status: result.ok ? 200 : 207,
       headers: { "Cache-Control": "no-store" },
     });

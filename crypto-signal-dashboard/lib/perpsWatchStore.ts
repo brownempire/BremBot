@@ -5,6 +5,7 @@ import type { JupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
 
 export type StoredPerpsWatchState = {
   walletAddress: string;
+  monitoredWalletAddress?: string;
   lastCheckedAt: number;
   snapshot: JupiterPerpsAccountSnapshot;
 };
