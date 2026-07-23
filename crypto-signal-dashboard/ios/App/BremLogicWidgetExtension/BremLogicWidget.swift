@@ -160,6 +160,21 @@ struct BremLogicWidgetEntryView: View {
         }
     }
 
+    private var compactChart: some View {
+        GeometryReader { geometry in
+            BremLogicCandlestickChart(
+                candles: chartCandles,
+                symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
+                entryPrice: entry.snapshot.openPerpEntryPrice,
+                markPrice: entry.snapshot.openPerpMarkPrice,
+                takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice,
+                stopLossPrice: entry.snapshot.openPerpStopLossPrice,
+                liquidationPrice: nil
+            )
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+    }
+
     private var widgetBackground: LinearGradient {
         LinearGradient(
             colors: [
@@ -220,9 +235,33 @@ struct BremLogicWidgetEntryView: View {
             .frame(maxWidth: .infinity)
 
             if hasOpenPerp {
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(openPerpLabel)
                         .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                    Spacer(minLength: 2)
+                    Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                }
+
+                compactChart
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+
+                HStack(spacing: 3) {
+                    smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
+                    smallMetric("TP", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
+                    smallMetric("SL", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: .red.opacity(0.9))
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("NO OPEN PERPS")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
@@ -233,61 +272,13 @@ struct BremLogicWidgetEntryView: View {
                         .lineLimit(1)
                 }
 
-                Text([pnlLabel, pnlPercentLabel].compactMap { $0 }.joined(separator: "  ·  "))
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(pnlColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
+                compactChart
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
 
-                HStack(spacing: 3) {
-                    smallMetric("ENTRY", priceLabel(entry.snapshot.openPerpEntryPrice))
-                    smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: pnlColor)
-                }
-                HStack(spacing: 3) {
-                    smallMetric("LEVERAGE", leverageLabel(entry.snapshot.openPerpLeverage))
-                    smallMetric("TAKE PROFIT", priceLabel(entry.snapshot.openPerpTakeProfitPrice), accent: brandPrimary)
-                    smallMetric("STOP LOSS", priceLabel(entry.snapshot.openPerpStopLossPrice), accent: .red.opacity(0.9))
-                }
-            } else {
-                Text("OPEN PERPS")
-                    .font(.system(size: 8, weight: .semibold, design: .rounded))
-                    .foregroundStyle(brandPrimary)
-                Text(openPerpLabel)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text(openPerpDetail)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
                 HStack(spacing: 3) {
                     smallMetric("AGENT WALLET", balanceLabel(entry.snapshot.agentWalletBalanceUsd ?? entry.snapshot.walletBalanceUsd))
                     smallMetric("MARK", priceLabel(entry.snapshot.openPerpMarkPrice), accent: Color(red: 0.36, green: 0.68, blue: 0.98))
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            HStack(alignment: .center, spacing: 3) {
-                Text(entry.snapshot.perpsAutoTradeStatus ?? "Agent status unavailable")
-                    .font(.system(size: 6, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.56))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                Spacer(minLength: 2)
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
-                            .foregroundStyle(brandPrimary)
-                            .frame(width: 20, height: 18)
-                            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
                 }
             }
         }
