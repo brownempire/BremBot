@@ -257,7 +257,7 @@ function createLearningProfile(): DecisionLearningProfile {
     createdAt: now,
     promotedAt: now,
     learnedFromClosedTrades: 0,
-    strategyBaselineVersion: 2,
+    strategyBaselineVersion: 3,
     minimumConfidence: 0.62,
     leverageCap: 2,
     maximumAllocationPercent: 5,
@@ -334,7 +334,7 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   assert.equal(savedCursor, points[points.length - 1]?.t);
 });
 
-test("smart monitoring applies the active profile's adaptive leverage and real 10% TP/SL", async () => {
+test("smart monitoring applies adaptive leverage and real 25% TP / 15% SL", async () => {
   let routedSignal: PerpsAgentSignal | null = null;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
@@ -354,17 +354,17 @@ test("smart monitoring applies the active profile's adaptive leverage and real 1
   const legacyFixture = createLearningProfile();
   const profile: DecisionLearningProfile = {
     ...legacyFixture,
-    strategyBaselineVersion: 2,
+    strategyBaselineVersion: 3,
     minimumConfidence: 0.68,
     leverageFloor: 2,
     leverageCap: 10,
     leverageQualityExponent: 2.5,
     leverageVolatilityPenalty: 1.25,
     leverageLossStepdown: 1,
-    maximumAllocationPercent: 80,
+    maximumAllocationPercent: 50,
     targetWalletRiskPercent: 3,
-    takeProfitRoePercent: 10,
-    stopLossRoePercent: 10,
+    takeProfitRoePercent: 25,
+    stopLossRoePercent: 15,
     assetAdjustments: {
       ...legacyFixture.assetAdjustments,
       SOL: { trendThreshold: 0.5, breakoutPercent: 0.3, leverageMultiplier: 1, allocationMultiplier: 1 },
@@ -395,11 +395,11 @@ test("smart monitoring applies the active profile's adaptive leverage and real 1
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(result.results[0]?.status, "executed");
   assert.ok((routed?.leverage ?? 0) >= 2 && (routed?.leverage ?? 0) <= 10);
-  assert.ok((routed?.collateralUsd ?? 0) <= 30);
+  assert.ok((routed?.collateralUsd ?? 0) <= 20);
   const entryPrice = points.at(-1)?.v ?? 0;
   const leverage = routed?.leverage ?? 1;
-  assert.ok(Math.abs((((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * leverage * 100 - 10) < 0.01);
-  assert.ok(Math.abs(((entryPrice - (routed?.stopLossPrice ?? 0)) / entryPrice) * leverage * 100 - 10) < 0.01);
+  assert.ok(Math.abs((((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * leverage * 100 - 25) < 0.01);
+  assert.ok(Math.abs(((entryPrice - (routed?.stopLossPrice ?? 0)) / entryPrice) * leverage * 100 - 15) < 0.01);
 });
 
 test("server monitor fails closed when an agent position is already open", async () => {

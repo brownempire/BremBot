@@ -63,6 +63,6 @@ export function makeOperatorTrainingBaselineProfile(
       passed: true,
       reasons: ["Operator-selected baseline activated while BremLogic collects enough closed trades for walk-forward training."],
     },
-    summary: "Research baseline: 145-minute window, 1.65% trend, 0.35% breakout, 7.5-hour cooldown, 80% allocation ceiling, 3% target wallet risk, 10% TP/SL, and quality-adjusted 2–10x leverage.",
+    summary: "Research baseline: 145-minute window, 1.65% trend, 0.35% breakout, 7.5-hour cooldown, 50% allocation ceiling, 3% target wallet risk, 25% TP, 15% SL, and quality-adjusted 2–10x leverage.",
   };
 }

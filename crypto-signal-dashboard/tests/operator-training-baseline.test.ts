@@ -23,10 +23,10 @@ test("operator training baseline matches the requested starting parameters", () 
     cooldownSeconds: 27_000,
   });
   assert.deepEqual(DEFAULT_SERVER_SIGNAL_PARAMS, OPERATOR_TRAINING_BASELINE.signalParams);
-  assert.equal(profile.maximumAllocationPercent, 80);
+  assert.equal(profile.maximumAllocationPercent, 50);
   assert.equal(profile.targetWalletRiskPercent, 3);
-  assert.equal(profile.takeProfitRoePercent, 10);
-  assert.equal(profile.stopLossRoePercent, 10);
+  assert.equal(profile.takeProfitRoePercent, 25);
+  assert.equal(profile.stopLossRoePercent, 15);
   assert.equal(profile.leverageFloor, 2);
   assert.equal(profile.leverageCap, 10);
   for (const asset of ["SOL", "ETH", "BTC"] as const) {
@@ -45,7 +45,7 @@ test("client baseline constants do not import server-only runtime modules", () =
   assert.doesNotMatch(source, /^import (?!type\b)/m);
 });
 
-test("a zero-history baseline enforces risk-sized 10% TP/SL and adaptive 2-10x leverage", () => {
+test("a zero-history baseline enforces risk-sized 25% TP, 15% SL, and adaptive 2-10x leverage", () => {
   const profile = decisionLearningProfileSchema.parse(
     makeOperatorTrainingBaselineProfile("adaptive-exit-wallet", 1)
   );
@@ -70,12 +70,12 @@ test("a zero-history baseline enforces risk-sized 10% TP/SL and adaptive 2-10x l
     volumeRatio: 1.5,
   });
 
-  assert.equal(profile.takeProfitRoePercent, 10);
-  assert.equal(profile.stopLossRoePercent, 10);
-  assert.equal(plan.takeProfitPercent, 10);
-  assert.equal(plan.stopLossPercent, 10);
+  assert.equal(profile.takeProfitRoePercent, 25);
+  assert.equal(profile.stopLossRoePercent, 15);
+  assert.equal(plan.takeProfitPercent, 25);
+  assert.equal(plan.stopLossPercent, 15);
   assert.equal(plan.leverage, 10);
-  assert.equal(plan.collateralPercent, 30);
+  assert.equal(plan.collateralPercent, 20);
 });
 
 test("weak or volatile setups stay at the researched 2x leverage floor", () => {
@@ -106,8 +106,8 @@ test("weak or volatile setups stay at the researched 2x leverage floor", () => {
   });
 
   assert.equal(plan.leverage, 2);
-  assert.equal(plan.stopLossPercent, 10);
-  assert.equal(plan.takeProfitPercent, 10);
+  assert.equal(plan.stopLossPercent, 15);
+  assert.equal(plan.takeProfitPercent, 25);
 });
 
 test("an existing learned profile uses its stored bounded exits", () => {

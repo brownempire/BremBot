@@ -156,8 +156,8 @@ function createLearnedCandidate(
     const value = plannedRoe(outcome, outcome.takeProfitPrice);
     return value ? [value] : [];
   });
-  const stopLossRoePercent = clamp(quantile(stopRoes, 0.5) || OPERATOR_TRAINING_BASELINE.stopLossRoePercent, 8, 15);
-  const takeProfitRoePercent = clamp(quantile(takeProfitRoes, 0.5) || OPERATOR_TRAINING_BASELINE.takeProfitRoePercent, 8, 15);
+  const stopLossRoePercent = clamp(quantile(stopRoes, 0.5) || OPERATOR_TRAINING_BASELINE.stopLossRoePercent, 12, 20);
+  const takeProfitRoePercent = clamp(quantile(takeProfitRoes, 0.5) || OPERATOR_TRAINING_BASELINE.takeProfitRoePercent, 20, 30);
   const volatilityCeilingPercent = clamp(
     quantile(winners.flatMap((outcome) => outcome.volatilityPercent === null ? [] : [outcome.volatilityPercent]), 0.85) || 5,
     2.5,
