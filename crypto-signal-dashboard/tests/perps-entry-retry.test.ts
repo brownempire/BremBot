@@ -35,6 +35,17 @@ test("entry retry ladder reduces collateral and leverage over three attempts", (
   ]);
 });
 
+test("the $12 low-balance override keeps Jupiter-compatible collateral on retries", () => {
+  const lowBalanceSignal = { ...signal(), collateralUsd: 12, sizeUsd: 120, leverage: 10 };
+  const attempts = createPerpsEntryRetrySignals(lowBalanceSignal);
+
+  assert.deepEqual(attempts.map((attempt) => ({ collateral: attempt.collateralUsd, leverage: attempt.leverage })), [
+    { collateral: 12, leverage: 10 },
+    { collateral: 12, leverage: 7.5 },
+    { collateral: 12, leverage: 5 },
+  ]);
+});
+
 test("confirmed build failures retry and return the successful reduced attempt", async () => {
   let buildCalls = 0;
   const result = await executePerpsEntryWithRetries({

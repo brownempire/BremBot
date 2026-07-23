@@ -38,6 +38,8 @@ const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
+const LOW_BALANCE_TRADE_USD = 12;
+const LOW_BALANCE_TRADE_MAX_USDC = 50;
 const MIN_TPSL_EXPECTED_PNL_USD = 1;
 const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = 0.0012;
 
@@ -201,6 +203,17 @@ function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: numb
   return config.settings.walletAllocationMode === "usd"
     ? clamp((config.settings.walletPercent / availableUsdc) * 100, 0, 100)
     : clamp(config.settings.walletPercent, 1, 100);
+}
+
+export function resolveAutonomousCollateralUsd(availableUsdc: number, collateralPercent: number) {
+  const configuredCollateralUsd = Number((availableUsdc * collateralPercent / 100).toFixed(6));
+  if (availableUsdc < LOW_BALANCE_TRADE_USD) {
+    return Math.min(configuredCollateralUsd, MIN_PERPS_COLLATERAL_USD - 0.000001);
+  }
+  if (availableUsdc >= LOW_BALANCE_TRADE_USD && availableUsdc < LOW_BALANCE_TRADE_MAX_USDC) {
+    return LOW_BALANCE_TRADE_USD;
+  }
+  return configuredCollateralUsd;
 }
 
 function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: AutonomousSignal, availableUsdc: number) {
@@ -482,7 +495,7 @@ export async function runAutonomousPerpsMonitor(
         adx: indicators.adx,
         volumeRatio: indicators.volumeRatio,
       });
-      const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
+      const collateralUsd = resolveAutonomousCollateralUsd(availableUsdc, plan.collateralPercent);
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
         continue;

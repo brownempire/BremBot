@@ -115,6 +115,34 @@ test("trade guardrail compares selected collateral with live wallet capital", ()
   assert.match(result.message, /\$8\.5 wallet-allocation guardrail/);
 });
 
+test("the isolated $12 low-balance trade bypasses percentage allocation and exposure limits", () => {
+  const result = evaluateUserScopedPerpsRisk({
+    session,
+    signal: signal({ collateralUsd: 12, leverage: 10, availableUsdc: 20 }),
+    existingExecutions: [],
+    maxLeverage: 125,
+    maxTradePct: 0.1,
+    maxExposurePct: 0.5,
+  });
+
+  assert.equal(result.approved, true);
+  assert.equal(result.code, "APPROVED");
+});
+
+test("the low-balance bypass does not stack on existing committed collateral", () => {
+  const result = evaluateUserScopedPerpsRisk({
+    session,
+    signal: signal({ collateralUsd: 12, leverage: 10, availableUsdc: 20 }),
+    existingExecutions: [execution(2)],
+    maxLeverage: 125,
+    maxTradePct: 0.1,
+    maxExposurePct: 0.5,
+  });
+
+  assert.equal(result.approved, false);
+  assert.equal(result.code, "SIZE_TOO_LARGE");
+});
+
 test("exposure guardrail sums committed collateral instead of leveraged notional", () => {
   const result = evaluateUserScopedPerpsRisk({
     session,

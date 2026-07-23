@@ -17,6 +17,10 @@ export function evaluateUserScopedPerpsRisk(input: {
     .reduce((sum, entry) => sum + entry.collateralUsd, 0);
   const maxTradeCollateralUsd = availableCapitalUsd * input.maxTradePct;
   const maxExposureCollateralUsd = availableCapitalUsd * input.maxExposurePct;
+  const lowBalanceMinimumTrade = availableCapitalUsd >= 12
+    && availableCapitalUsd < 50
+    && Math.abs(input.signal.collateralUsd - 12) < 0.000001
+    && currentCommittedCollateral === 0;
   const roundUsd = (value: number) => Number(value.toFixed(2));
 
   if (input.session.killSwitch) {
@@ -42,7 +46,7 @@ export function evaluateUserScopedPerpsRisk(input: {
     return { approved: false, code: "LEVERAGE_TOO_HIGH", message: `Requested leverage ${input.signal.leverage}x exceeds the configured limit of ${input.maxLeverage}x.` };
   }
 
-  if (input.signal.collateralUsd > maxTradeCollateralUsd) {
+  if (!lowBalanceMinimumTrade && input.signal.collateralUsd > maxTradeCollateralUsd) {
     return {
       approved: false,
       code: "SIZE_TOO_LARGE",
@@ -50,7 +54,7 @@ export function evaluateUserScopedPerpsRisk(input: {
     };
   }
 
-  if (currentCommittedCollateral + input.signal.collateralUsd > maxExposureCollateralUsd) {
+  if (!lowBalanceMinimumTrade && currentCommittedCollateral + input.signal.collateralUsd > maxExposureCollateralUsd) {
     return {
       approved: false,
       code: "EXPOSURE_TOO_HIGH",

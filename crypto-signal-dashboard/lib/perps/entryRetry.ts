@@ -20,7 +20,9 @@ function round(value: number, fractionDigits: number) {
 
 export function createPerpsEntryRetrySignals(signal: PerpsSignalPayload) {
   return RETRY_MULTIPLIERS.map((multiplier, index) => {
-    const collateralUsd = Math.max(0.000001, round(signal.collateralUsd * multiplier, 6));
+    const collateralUsd = signal.collateralUsd === 12
+      ? 12
+      : Math.max(0.000001, round(signal.collateralUsd * multiplier, 6));
     const leverage = Math.max(1, round(signal.leverage * multiplier, 2));
     return {
       ...signal,

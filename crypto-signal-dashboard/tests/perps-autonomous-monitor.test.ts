@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
+import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
 
@@ -106,6 +106,15 @@ test("scalp planning uses 50 percent wallet allocation", () => {
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
+});
+
+test("low-balance collateral uses exactly $12 from $12 up to but not including $50", () => {
+  assert.equal(resolveAutonomousCollateralUsd(11.99, 20), 2.398);
+  assert.equal(resolveAutonomousCollateralUsd(11.99, 100), 9.999999);
+  assert.equal(resolveAutonomousCollateralUsd(12, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(25, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
 });
 
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {
@@ -332,6 +341,37 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   assert.ok(((routedTakeProfit - entryPrice) / entryPrice) * positionSizeUsd >= 1);
   assert.ok(((entryPrice - routedStopLoss) / entryPrice) * positionSizeUsd >= 1);
   assert.equal(savedCursor, points[points.length - 1]?.t);
+});
+
+test("server monitor routes exactly $12 when available USDC is between $12 and $50", async () => {
+  let routedSignal: PerpsAgentSignal | null = null;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 20,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.collateralUsd, 12);
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.marketContext?.availableUsdc, 20);
 });
 
 test("smart monitoring applies adaptive leverage and real 25% TP / 15% SL", async () => {
