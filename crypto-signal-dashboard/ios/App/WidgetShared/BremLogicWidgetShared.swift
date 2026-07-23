@@ -3,6 +3,7 @@ import SwiftUI
 
 let BremLogicWidgetAppGroup = "group.com.bremlogic.signalsbot.shared"
 let BremLogicWidgetSnapshotDefaultsKey = "bremlogic.widget.snapshot.v1"
+let BremLogicWidgetRefreshAttemptDefaultsKey = "bremlogic.widget.refresh-attempt.v1"
 let BremLogicWidgetServerURL = URL(string: "https://app.bremlogic.com/api/widget/summary")!
 
 struct BremLogicWidgetCandle: Codable, Identifiable {
@@ -244,7 +245,7 @@ struct BremLogicCandlestickChart: View {
 }
 
 enum BremLogicWidgetStore {
-    static func load() -> BremLogicWidgetSnapshot {
+    static func loadCached() -> BremLogicWidgetSnapshot? {
         let defaultsCandidates = [
             UserDefaults(suiteName: BremLogicWidgetAppGroup),
             UserDefaults.standard,
@@ -261,7 +262,33 @@ enum BremLogicWidgetStore {
             return snapshot
         }
 
-        return .fallback
+        return nil
+    }
+
+    static func load() -> BremLogicWidgetSnapshot {
+        loadCached() ?? .fallback
+    }
+
+    static func beginRefreshIfNeeded(
+        now: Date = Date(),
+        minimumInterval: TimeInterval = 30
+    ) -> Bool {
+        let defaultsCandidates = [
+            UserDefaults(suiteName: BremLogicWidgetAppGroup),
+            UserDefaults.standard,
+        ].compactMap { $0 }
+
+        for defaults in defaultsCandidates {
+            let lastAttempt = defaults.double(forKey: BremLogicWidgetRefreshAttemptDefaultsKey)
+            if lastAttempt > 0, now.timeIntervalSince1970 - lastAttempt < minimumInterval {
+                return false
+            }
+        }
+
+        for defaults in defaultsCandidates {
+            defaults.set(now.timeIntervalSince1970, forKey: BremLogicWidgetRefreshAttemptDefaultsKey)
+        }
+        return true
     }
 
     static func save(_ snapshot: BremLogicWidgetSnapshot) throws {

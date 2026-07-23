@@ -18,30 +18,43 @@ struct BremLogicMacWidgetProvider: TimelineProvider {
             return
         }
 
-        loadEntry(completion: completion)
+        loadEntry { snapshot in
+            completion(BremLogicMacWidgetEntry(date: Date(), snapshot: snapshot))
+        }
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<BremLogicMacWidgetEntry>) -> Void) {
-        loadEntry { entry in
-            let market = entry.snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
+        loadEntry { snapshot in
+            let entry = BremLogicMacWidgetEntry(date: Date(), snapshot: snapshot)
+            let market = snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
             let hasOpenPerp = market?.isEmpty == false
-                || entry.snapshot.openPerpPositionValueUsd != nil
-                || entry.snapshot.openPerpPnlUsd != nil
-            let refreshInterval: TimeInterval = hasOpenPerp ? 5 * 60 : 15 * 60
+                || snapshot.openPerpPositionValueUsd != nil
+                || snapshot.openPerpPnlUsd != nil
+            let hasCachedSnapshot = BremLogicWidgetStore.loadCached() != nil
+            let refreshInterval: TimeInterval = hasCachedSnapshot ? (hasOpenPerp ? 5 * 60 : 15 * 60) : 30
             completion(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(refreshInterval))))
         }
     }
 
-    private func loadEntry(completion: @escaping (BremLogicMacWidgetEntry) -> Void) {
+    private func loadEntry(completion: @escaping (BremLogicWidgetSnapshot) -> Void) {
+        // Always give WidgetKit real content synchronously. A clean installation
+        // has no cache, and waiting on the first network request can leave every
+        // family stuck on the system placeholder.
+        completion(BremLogicWidgetStore.load())
+        refreshSnapshot()
+    }
+
+    private func refreshSnapshot() {
+        guard BremLogicWidgetStore.beginRefreshIfNeeded() else {
+            return
+        }
+
         Task {
-            let snapshot: BremLogicWidgetSnapshot
-            do {
-                snapshot = try await BremLogicWidgetServerClient.fetch()
-                try? BremLogicWidgetStore.save(snapshot)
-            } catch {
-                snapshot = BremLogicWidgetStore.load()
+            guard let snapshot = try? await BremLogicWidgetServerClient.fetch() else {
+                return
             }
-            completion(BremLogicMacWidgetEntry(date: Date(), snapshot: snapshot))
+            try? BremLogicWidgetStore.save(snapshot)
+            WidgetCenter.shared.reloadTimelines(ofKind: BremLogicMacWidgetIdentity.kind)
         }
     }
 }
@@ -607,6 +620,7 @@ struct BremLogicMacWidgetEntryView: View {
         }
         .padding(family == .systemSmall ? 5 : family == .systemMedium ? 7 : 9)
         .containerBackground(background, for: .widget)
+        .contentShape(Rectangle())
         .widgetURL(URL(string: "https://app.bremlogic.com/signals-bot?tab=perps"))
     }
 }
