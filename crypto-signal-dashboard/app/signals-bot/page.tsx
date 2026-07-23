@@ -5626,7 +5626,7 @@ function DashboardPage() {
             <label>Trend window (min)<StepperNumberInput value={params.trendWindow} min={1} max={180} step={1} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, trendWindow: value }))} /></label>
             <label>Trend threshold %<StepperNumberInput value={params.trendThreshold} min={0.01} max={10} step={0.01} onChange={(value) => setParams((prev) => ({ ...prev, trendThreshold: value }))} /></label>
             <label>Breakout %<StepperNumberInput value={params.breakoutPercent} min={0.01} max={8} step={0.01} onChange={(value) => setParams((prev) => ({ ...prev, breakoutPercent: value }))} /></label>
-            <label>Cooldown (sec)<StepperNumberInput value={params.cooldownSeconds} min={5} max={900} step={5} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, cooldownSeconds: value }))} /></label>
+            <label>Cooldown (sec)<StepperNumberInput value={params.cooldownSeconds} min={5} max={86400} step={300} inputMode="numeric" onChange={(value) => setParams((prev) => ({ ...prev, cooldownSeconds: value }))} /></label>
             <label>
               <span className="allocation-label-row">
                 <span>Auto-trade wallet allocation</span>

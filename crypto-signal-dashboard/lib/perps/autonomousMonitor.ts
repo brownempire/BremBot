@@ -334,21 +334,23 @@ export async function runAutonomousPerpsMonitor(
     try {
       const agentWallet = deps.getAgentWallet(config.walletAddress);
       if (!agentWallet) throw new Error("No autonomous wallet is associated with this primary wallet.");
+      const [snapshot, availableUsdc] = await Promise.all([
+        deps.fetchSnapshot(agentWallet),
+        deps.getUsdcBalance(agentWallet),
+      ]);
+      await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
+      if (config.settings.perpsExecutionMode === "smart-trades" && config.settings.decisionMode === "active") {
+        // This initializes/migrates the researched baseline, immediately consumes newly closed
+        // outcomes, and performs the trainer's interval-gated full holdout pass when due.
+        await deps.autoTrain(config.walletAddress, config).catch(() => undefined);
+      }
       const learningProfile = await deps.getLearningProfile(config.walletAddress);
       const executionProfile = config.settings.perpsExecutionMode === "smart-trades"
         && config.settings.decisionMode === "active"
         ? learningProfile
         : null;
       const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
-      const [snapshot, availableUsdc, points] = await Promise.all([
-        deps.fetchSnapshot(agentWallet),
-        deps.getUsdcBalance(agentWallet),
-        deps.fetchCandles(`${asset}-USD`, Math.max(60, effectiveParams.trendWindow + 35)),
-      ]);
-      const reconciledOutcomeCount = await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
-      if (reconciledOutcomeCount > 0) {
-        await deps.autoTrain(config.walletAddress, config).catch(() => undefined);
-      }
+      const points = await deps.fetchCandles(`${asset}-USD`, Math.max(60, effectiveParams.trendWindow + 35));
       const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
       if (openPositions.length > 0) {
         results.push(skip(config, asset, "POSITION_ALREADY_OPEN", "An agent-owned Perps position is already open."));
@@ -475,6 +477,10 @@ export async function runAutonomousPerpsMonitor(
         asset,
         points: windowPoints,
         profile: strategyClass === "smart" ? executionProfile : null,
+        signalConfidence: signal.confidence,
+        indicatorScore: indicatorScore.score,
+        adx: indicators.adx,
+        volumeRatio: indicators.volumeRatio,
       });
       const collateralUsd = Number((availableUsdc * plan.collateralPercent / 100).toFixed(6));
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {

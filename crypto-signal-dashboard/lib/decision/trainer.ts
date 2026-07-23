@@ -13,6 +13,7 @@ import type {
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
 import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 
 const MIN_TRAINING_SAMPLE = 50;
@@ -20,9 +21,9 @@ const MIN_VALIDATION_SAMPLE = 10;
 const AUTO_RETRAIN_INTERVAL_MS = 24 * 60 * 60 * 1_000;
 
 const BASE_THRESHOLDS: Record<LearningAsset, { trend: number; breakout: number }> = {
-  BTC: { trend: 1, breakout: 0.8 },
-  ETH: { trend: 1.2, breakout: 1 },
-  SOL: { trend: 1.5, breakout: 1.2 },
+  BTC: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
+  ETH: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
+  SOL: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -93,10 +94,10 @@ function deriveAssetAdjustment(asset: LearningAsset, outcomes: TradeLearningOutc
   });
   const stats = calculateStats(assetOutcomes);
   return {
-    trendThreshold: Number(clamp(quantile(trendMagnitudes, 0.25) || base.trend, base.trend * 0.8, base.trend * 1.6).toFixed(2)),
-    breakoutPercent: Number(clamp(quantile(breakoutMagnitudes, 0.25) || base.breakout, base.breakout * 0.8, base.breakout * 1.6).toFixed(2)),
-    leverageMultiplier: Number(clamp((quantile(winners.map((outcome) => outcome.leverage), 0.6) || leverageCap) / leverageCap, 0.65, 1).toFixed(3)),
-    allocationMultiplier: Number(clamp(stats.profitFactor >= 1.25 ? 1 : stats.profitFactor >= 1 ? 0.9 : 0.75, 0.5, 1).toFixed(3)),
+    trendThreshold: Number(clamp(quantile(trendMagnitudes, 0.25) || base.trend, 1.4, 2).toFixed(2)),
+    breakoutPercent: Number(clamp(quantile(breakoutMagnitudes, 0.25) || base.breakout, 0.3, 0.5).toFixed(2)),
+    leverageMultiplier: Number(clamp((quantile(winners.map((outcome) => outcome.leverage), 0.6) || leverageCap) / leverageCap, 0.75, 1).toFixed(3)),
+    allocationMultiplier: Number(clamp(stats.profitFactor >= 1.25 ? 1 : stats.profitFactor >= 1 ? 0.9 : 0.8, 0.75, 1).toFixed(3)),
   };
 }
 
@@ -144,9 +145,9 @@ function createLearnedCandidate(
   const winnerConfidence = mean(winners.flatMap((outcome) => outcome.signalConfidence === null ? [] : [outcome.signalConfidence]));
   const loserConfidence = mean(losers.flatMap((outcome) => outcome.signalConfidence === null ? [] : [outcome.signalConfidence]));
   const minimumConfidence = winnerConfidence > 0 && loserConfidence > 0
-    ? clamp((winnerConfidence + loserConfidence) / 2, 0.58, 0.75)
-    : 0.62;
-  const leverageCap = clamp(quantile(winners.map((outcome) => outcome.leverage), 0.75) || 3, 1, 3);
+    ? clamp((winnerConfidence + loserConfidence) / 2, 0.62, 0.75)
+    : OPERATOR_TRAINING_BASELINE.minimumConfidence;
+  const leverageCap = OPERATOR_TRAINING_BASELINE.leverageCap;
   const stopRoes = training.flatMap((outcome) => {
     const value = plannedRoe(outcome, outcome.stopLossPrice);
     return value ? [value] : [];
@@ -155,15 +156,25 @@ function createLearnedCandidate(
     const value = plannedRoe(outcome, outcome.takeProfitPrice);
     return value ? [value] : [];
   });
-  const stopLossRoePercent = clamp(quantile(stopRoes, 0.5) || 2.5, 1.5, 4);
-  const takeProfitRoePercent = clamp(Math.max(quantile(takeProfitRoes, 0.5) || 6, stopLossRoePercent * 2), 4, 8);
+  const stopLossRoePercent = clamp(quantile(stopRoes, 0.5) || OPERATOR_TRAINING_BASELINE.stopLossRoePercent, 8, 15);
+  const takeProfitRoePercent = clamp(quantile(takeProfitRoes, 0.5) || OPERATOR_TRAINING_BASELINE.takeProfitRoePercent, 8, 15);
   const volatilityCeilingPercent = clamp(
     quantile(winners.flatMap((outcome) => outcome.volatilityPercent === null ? [] : [outcome.volatilityPercent]), 0.85) || 5,
     2.5,
     7
   );
-  const trendWindow = Math.round(clamp(quantile(winners.flatMap((outcome) => outcome.trendWindow === null ? [] : [outcome.trendWindow]), 0.5) || 30, 15, 60));
-  const cooldownSeconds = Math.round(clamp(quantile(winners.flatMap((outcome) => outcome.cooldownSeconds === null ? [] : [outcome.cooldownSeconds]), 0.5) || 600, 300, 900));
+  const trendWindow = Math.round(clamp(
+    quantile(winners.flatMap((outcome) => outcome.trendWindow === null ? [] : [outcome.trendWindow]), 0.5)
+      || OPERATOR_TRAINING_BASELINE.signalParams.trendWindow,
+    120,
+    180
+  ));
+  const cooldownSeconds = Math.round(clamp(
+    quantile(winners.flatMap((outcome) => outcome.cooldownSeconds === null ? [] : [outcome.cooldownSeconds]), 0.5)
+      || OPERATOR_TRAINING_BASELINE.signalParams.cooldownSeconds,
+    OPERATOR_TRAINING_BASELINE.signalParams.cooldownSeconds,
+    43_200
+  ));
   const preferredDirection = derivePreferredDirection(training);
   const indicatorSettings = deriveIndicatorSettings(training);
 
@@ -192,16 +203,22 @@ function createLearnedCandidate(
     createdAt: now,
     promotedAt: null,
     learnedFromClosedTrades: training.length + validation.length,
+    strategyBaselineVersion: OPERATOR_TRAINING_BASELINE.version,
     minimumConfidence: Number(minimumConfidence.toFixed(4)),
+    leverageFloor: OPERATOR_TRAINING_BASELINE.leverageFloor,
     leverageCap: Number(leverageCap.toFixed(2)),
-    maximumAllocationPercent: 10,
-    targetWalletRiskPercent: 0.35,
+    leverageQualityExponent: OPERATOR_TRAINING_BASELINE.leverageQualityExponent,
+    leverageVolatilityPenalty: OPERATOR_TRAINING_BASELINE.leverageVolatilityPenalty,
+    leverageLossStepdown: OPERATOR_TRAINING_BASELINE.leverageLossStepdown,
+    consecutiveLosses: 0,
+    maximumAllocationPercent: OPERATOR_TRAINING_BASELINE.maximumAllocationPercent,
+    targetWalletRiskPercent: OPERATOR_TRAINING_BASELINE.targetWalletRiskPercent,
     preferredDirection,
     trendWindow,
     cooldownSeconds,
     takeProfitRoePercent: Number(takeProfitRoePercent.toFixed(2)),
     stopLossRoePercent: Number(stopLossRoePercent.toFixed(2)),
-    minimumRewardRiskRatio: 2,
+    minimumRewardRiskRatio: 1,
     atrLookback: 14,
     atrStopMultiplier: 1.5,
     volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
@@ -237,28 +254,31 @@ function createIncrementalProfile(
   const newOutcomes = outcomes.slice(active.learnedFromClosedTrades);
   let minimumConfidence = active.minimumConfidence;
   let volatilityCeilingPercent = active.volatilityCeilingPercent;
+  let consecutiveLosses = active.consecutiveLosses ?? 0;
   const assetAdjustments = structuredClone(active.assetAdjustments);
 
   for (const outcome of newOutcomes) {
     const adjustment = assetAdjustments[outcome.asset];
     if (outcome.netPnlUsd > 0) {
-      minimumConfidence = clamp(minimumConfidence - 0.0005, 0.55, 0.78);
-      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier + 0.005, 0.5, 1.25);
-      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier + 0.005, 0.5, 1.1);
+      consecutiveLosses = 0;
+      minimumConfidence = clamp(minimumConfidence - 0.0005, 0.62, 0.75);
+      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier + 0.005, 0.75, 1);
+      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier + 0.005, 0.75, 1);
       if (outcome.trendStrengthPercent != null) {
         const observed = Math.abs(outcome.trendStrengthPercent);
-        adjustment.trendThreshold += clamp(observed - adjustment.trendThreshold, -0.02, 0.02) * 0.1;
+        adjustment.trendThreshold = clamp(adjustment.trendThreshold + clamp(observed - adjustment.trendThreshold, -0.02, 0.02) * 0.1, 1.4, 2);
       }
       if (outcome.breakoutStrengthPercent != null) {
         const observed = Math.abs(outcome.breakoutStrengthPercent);
-        adjustment.breakoutPercent += clamp(observed - adjustment.breakoutPercent, -0.02, 0.02) * 0.1;
+        adjustment.breakoutPercent = clamp(adjustment.breakoutPercent + clamp(observed - adjustment.breakoutPercent, -0.02, 0.02) * 0.1, 0.3, 0.5);
       }
     } else {
-      minimumConfidence = clamp(minimumConfidence + 0.004, 0.55, 0.78);
-      adjustment.trendThreshold = clamp(adjustment.trendThreshold * 1.005, 0.01, 10);
-      adjustment.breakoutPercent = clamp(adjustment.breakoutPercent * 1.005, 0.01, 8);
-      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier - 0.015, 0.5, 1.25);
-      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier - 0.02, 0.5, 1.1);
+      consecutiveLosses = Math.min(3, consecutiveLosses + 1);
+      minimumConfidence = clamp(minimumConfidence + 0.004, 0.62, 0.75);
+      adjustment.trendThreshold = clamp(adjustment.trendThreshold * 1.005, 1.4, 2);
+      adjustment.breakoutPercent = clamp(adjustment.breakoutPercent * 1.005, 0.3, 0.5);
+      adjustment.leverageMultiplier = clamp(adjustment.leverageMultiplier - 0.015, 0.75, 1);
+      adjustment.allocationMultiplier = clamp(adjustment.allocationMultiplier - 0.02, 0.75, 1);
       if (outcome.volatilityPercent != null && outcome.volatilityPercent <= volatilityCeilingPercent) {
         volatilityCeilingPercent = clamp(volatilityCeilingPercent - 0.02, 1.5, 10);
       }
@@ -283,7 +303,16 @@ function createIncrementalProfile(
     createdAt: now,
     promotedAt: null,
     learnedFromClosedTrades: outcomes.length,
+    strategyBaselineVersion: OPERATOR_TRAINING_BASELINE.version,
     minimumConfidence: Number(minimumConfidence.toFixed(4)),
+    leverageFloor: OPERATOR_TRAINING_BASELINE.leverageFloor,
+    leverageCap: OPERATOR_TRAINING_BASELINE.leverageCap,
+    leverageQualityExponent: OPERATOR_TRAINING_BASELINE.leverageQualityExponent,
+    leverageVolatilityPenalty: OPERATOR_TRAINING_BASELINE.leverageVolatilityPenalty,
+    leverageLossStepdown: OPERATOR_TRAINING_BASELINE.leverageLossStepdown,
+    consecutiveLosses,
+    maximumAllocationPercent: OPERATOR_TRAINING_BASELINE.maximumAllocationPercent,
+    targetWalletRiskPercent: OPERATOR_TRAINING_BASELINE.targetWalletRiskPercent,
     preferredDirection: derivePreferredDirection(outcomes),
     volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
     assetAdjustments,
@@ -314,6 +343,45 @@ export async function trainWalletDecisionProfile(input: {
     listTradeLearningOutcomes(input.walletAddress),
   ]);
   const version = Math.max(0, ...history.map((profile) => profile.version)) + 1;
+  if (active && (active.strategyBaselineVersion ?? 1) < OPERATOR_TRAINING_BASELINE.version) {
+    const migratedBaseline = await saveDecisionLearningProfile(
+      makeOperatorTrainingBaselineProfile(input.walletAddress, version),
+      true
+    );
+    if (outcomes.length === 0) {
+      return { profile: migratedBaseline, activated: true, outcomeCount: 0, skipped: false, migrated: true };
+    }
+    if (outcomes.length >= MIN_TRAINING_SAMPLE) {
+      const splitIndex = Math.max(MIN_TRAINING_SAMPLE - MIN_VALIDATION_SAMPLE, Math.floor(outcomes.length * 0.8));
+      const candidate = createLearnedCandidate(
+        input.walletAddress,
+        version + 1,
+        input.source,
+        outcomes.slice(0, splitIndex),
+        outcomes.slice(splitIndex)
+      );
+      const profile = await saveDecisionLearningProfile(candidate, candidate.validation.passed);
+      return {
+        profile,
+        activated: candidate.validation.passed,
+        outcomeCount: outcomes.length,
+        skipped: false,
+        migrated: true,
+        activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+      };
+    }
+    const incremental = createIncrementalProfile(migratedBaseline, version + 1, input.source, outcomes);
+    const profile = await saveDecisionLearningProfile(incremental, true);
+    return {
+      profile,
+      activated: true,
+      outcomeCount: outcomes.length,
+      skipped: false,
+      incremental: true,
+      migrated: true,
+      activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+    };
+  }
   if (!input.force && active && outcomes.length > active.learnedFromClosedTrades) {
     const incremental = createIncrementalProfile(active, version, input.source, outcomes);
     const profile = await saveDecisionLearningProfile(incremental, true);

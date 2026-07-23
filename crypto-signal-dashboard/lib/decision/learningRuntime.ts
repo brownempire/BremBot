@@ -45,52 +45,53 @@ export function applyLearnedTradePlan(input: {
   asset: LearningAsset;
   points: PricePoint[];
   profile: DecisionLearningProfile | null;
+  signalConfidence?: number;
+  indicatorScore?: number;
+  adx?: number | null;
+  volumeRatio?: number | null;
 }) {
   if (!input.profile) {
     return {
       ...input.basePlan,
-      stopLossPercent: 0,
       atrPercent: computeAtrPercent(input.points),
       profileId: null,
     };
   }
   const adjustment = input.profile.assetAdjustments[input.asset];
+  const atrPercent = computeAtrPercent(input.points, input.profile.atrLookback);
+  const leverageFloor = Math.min(input.profile.leverageFloor ?? 1, input.profile.leverageCap);
+  const confidenceQuality = clamp(((input.signalConfidence ?? input.profile.minimumConfidence) - 0.55) / 0.3, 0, 1);
+  const indicatorQuality = clamp(((input.indicatorScore ?? 3) - 3) / 3, 0, 1);
+  const adxQuality = clamp(((input.adx ?? 20) - 20) / 20, 0, 1);
+  const volumeQuality = clamp(((input.volumeRatio ?? 1) - 1) / 0.5, 0, 1);
+  const atrPenalty = clamp((atrPercent - 0.35) / 0.65, 0, 1);
+  const rawQuality = clamp(
+    confidenceQuality * 0.35
+      + indicatorQuality * 0.3
+      + adxQuality * 0.2
+      + volumeQuality * 0.15
+      - atrPenalty * (input.profile.leverageVolatilityPenalty ?? 0),
+    0,
+    1
+  );
+  const quality = rawQuality ** (input.profile.leverageQualityExponent ?? 1);
+  const qualityLeverage = leverageFloor + (input.profile.leverageCap - leverageFloor) * quality;
+  const lossMultiplier = (input.profile.leverageLossStepdown ?? 1) ** Math.min(3, input.profile.consecutiveLosses ?? 0);
   const leverage = clamp(
-    input.basePlan.leverage * adjustment.leverageMultiplier,
-    1,
+    qualityLeverage * lossMultiplier * adjustment.leverageMultiplier,
+    leverageFloor,
     input.profile.leverageCap
   );
-  const atrPercent = computeAtrPercent(input.points, input.profile.atrLookback);
-  const atrStopRoe = atrPercent * input.profile.atrStopMultiplier * leverage;
   const riskReferencePercent = clamp(
-    Math.max(input.profile.stopLossRoePercent, atrStopRoe),
+    input.profile.stopLossRoePercent,
     0.5,
-    5.5
+    50
   );
-  const estimatedRoundTripFeeRoe = 0.12 * leverage;
-  const feeAdjustedRewardTarget = input.profile.minimumRewardRiskRatio
-    * (riskReferencePercent + estimatedRoundTripFeeRoe)
-    + estimatedRoundTripFeeRoe;
   const takeProfitPercent = clamp(
-    Math.max(input.profile.takeProfitRoePercent, feeAdjustedRewardTarget),
+    input.profile.takeProfitRoePercent,
     1,
     50
   );
-  if (input.profile.source === "operator-baseline" && input.profile.learnedFromClosedTrades === 0) {
-    return {
-      collateralPercent: Number(clamp(
-        Math.min(input.basePlan.collateralPercent, input.profile.maximumAllocationPercent) * adjustment.allocationMultiplier,
-        1,
-        input.profile.maximumAllocationPercent
-      ).toFixed(2)),
-      leverage: Number(leverage.toFixed(2)),
-      stopLossPercent: 0,
-      takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
-      volatilityPercent: input.basePlan.volatilityPercent,
-      atrPercent: Number(atrPercent.toFixed(4)),
-      profileId: input.profile.profileId,
-    };
-  }
   const riskSizedAllocation = input.profile.targetWalletRiskPercent / riskReferencePercent * 100;
   const collateralPercent = clamp(
     Math.min(
@@ -104,7 +105,7 @@ export function applyLearnedTradePlan(input: {
   return {
     collateralPercent: Number(collateralPercent.toFixed(2)),
     leverage: Number(leverage.toFixed(2)),
-    stopLossPercent: 0,
+    stopLossPercent: Number(input.profile.stopLossRoePercent.toFixed(2)),
     takeProfitPercent: Number(takeProfitPercent.toFixed(2)),
     volatilityPercent: input.basePlan.volatilityPercent,
     atrPercent: Number(atrPercent.toFixed(4)),

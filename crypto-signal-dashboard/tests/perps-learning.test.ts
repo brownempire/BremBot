@@ -42,27 +42,28 @@ test("manual training activates the operator-selected baseline before enough out
 
   assert.equal(result.activated, true);
   assert.equal(result.profile.source, "operator-baseline");
-  assert.equal(result.profile.trendWindow, 15);
+  assert.equal(result.profile.trendWindow, 145);
   for (const asset of ["SOL", "ETH", "BTC"] as const) {
-    assert.equal(result.profile.assetAdjustments[asset].trendThreshold, 0.14);
-    assert.equal(result.profile.assetAdjustments[asset].breakoutPercent, 0.19);
+    assert.equal(result.profile.assetAdjustments[asset].trendThreshold, 1.65);
+    assert.equal(result.profile.assetAdjustments[asset].breakoutPercent, 0.35);
   }
-  assert.equal(result.profile.cooldownSeconds, 180);
-  assert.equal(result.profile.leverageCap, 50);
+  assert.equal(result.profile.cooldownSeconds, 27_000);
+  assert.equal(result.profile.leverageFloor, 2);
+  assert.equal(result.profile.leverageCap, 10);
   assert.equal(result.profile.maximumAllocationPercent, 80);
-  assert.equal(result.profile.takeProfitRoePercent, 25);
-  assert.equal(result.profile.stopLossRoePercent, 0);
+  assert.equal(result.profile.targetWalletRiskPercent, 3);
+  assert.equal(result.profile.takeProfitRoePercent, 10);
+  assert.equal(result.profile.stopLossRoePercent, 10);
   const plan = runtime.applyLearnedTradePlan({
-    basePlan: { collateralPercent: 80, leverage: 50, stopLossPercent: 0, takeProfitPercent: 0, volatilityPercent: 2 },
+    basePlan: { collateralPercent: 80, leverage: 10, stopLossPercent: 10, takeProfitPercent: 10, volatilityPercent: 2 },
     asset: "SOL",
     points: Array.from({ length: 16 }, (_, index) => ({ t: index * 60_000, v: 100 + index * 0.1 })),
     profile: result.profile,
   });
-  assert.equal(plan.collateralPercent, 80);
-  assert.equal(plan.leverage, 50);
-  assert.ok(plan.takeProfitPercent >= 25 && plan.takeProfitPercent <= 50);
-  assert.equal(plan.stopLossPercent, 0);
-  assert.ok(plan.takeProfitPercent > plan.stopLossPercent);
+  assert.equal(plan.collateralPercent, 30);
+  assert.ok(plan.leverage >= 2 && plan.leverage <= 10);
+  assert.equal(plan.takeProfitPercent, 10);
+  assert.equal(plan.stopLossPercent, 10);
 });
 
 test("forced manual training replaces an existing pre-sample profile with the current baseline", async () => {
@@ -84,8 +85,44 @@ test("forced manual training replaces an existing pre-sample profile with the cu
   assert.equal(reset.skipped, false);
   assert.equal(reset.profile.version, first.profile.version + 1);
   assert.notEqual(reset.profile.profileId, first.profile.profileId);
-  assert.equal(reset.profile.assetAdjustments.SOL.trendThreshold, 0.14);
+  assert.equal(reset.profile.assetAdjustments.SOL.trendThreshold, 1.65);
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, reset.profile.profileId);
+});
+
+test("automatic training migrates a legacy active profile before applying new outcomes", async () => {
+  const walletAddress = "learning-wallet-legacy-migration";
+  const seeded = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  const legacy = learningTypes.decisionLearningProfileSchema.parse({
+    ...seeded.profile,
+    profileId: "legacy-profile",
+    strategyBaselineVersion: 1,
+    trendWindow: 15,
+    cooldownSeconds: 180,
+    leverageFloor: 1,
+    leverageCap: 50,
+    stopLossRoePercent: 0,
+  });
+  await learningStore.saveDecisionLearningProfile(legacy, true);
+
+  const result = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+
+  assert.equal(result.activated, true);
+  assert.equal(result.migrated, true);
+  assert.equal(result.profile.strategyBaselineVersion, 2);
+  assert.equal(result.profile.trendWindow, 145);
+  assert.equal(result.profile.cooldownSeconds, 27_000);
+  assert.equal(result.profile.leverageFloor, 2);
+  assert.equal(result.profile.leverageCap, 10);
+  assert.equal(result.profile.stopLossRoePercent, 10);
 });
 
 test("each newly closed trade incrementally updates the active wallet profile", async () => {
@@ -148,7 +185,7 @@ test("each newly closed trade incrementally updates the active wallet profile", 
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
 });
 
-test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted reward risk", () => {
+test("trained runtime enforces risk sizing, adaptive leverage bounds, and stored TP/SL", () => {
   const baseline = learningTypes.decisionLearningProfileSchema.parse({
     profileId: "profile-runtime",
     walletAddress: "wallet-runtime",
@@ -159,7 +196,11 @@ test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted r
     promotedAt: new Date().toISOString(),
     learnedFromClosedTrades: 0,
     minimumConfidence: 0.62,
+    leverageFloor: 2,
     leverageCap: 3,
+    leverageQualityExponent: 2.5,
+    leverageVolatilityPenalty: 1.25,
+    leverageLossStepdown: 1,
     maximumAllocationPercent: 10,
     targetWalletRiskPercent: 0.35,
     preferredDirection: "balanced",
@@ -193,9 +234,9 @@ test("trained runtime enforces ATR risk sizing, leverage cap, and fee-adjusted r
     profile: baseline,
   });
 
-  assert.equal(plan.leverage, 3);
+  assert.ok(plan.leverage >= 2 && plan.leverage <= 3);
   assert.ok(plan.collateralPercent <= 10);
-  assert.equal(plan.stopLossPercent, 0);
+  assert.equal(plan.stopLossPercent, 2.5);
   assert.ok(plan.takeProfitPercent > 0);
 });
 
@@ -251,6 +292,15 @@ test("profitable chronological holdout history promotes a versioned learned prof
   assert.equal(result.profile.source, "manual-training");
   assert.equal(result.profile.validation.passed, true);
   assert.equal(result.profile.learnedFromClosedTrades, 60);
+  assert.equal(result.profile.strategyBaselineVersion, 2);
+  assert.ok(result.profile.trendWindow >= 120 && result.profile.trendWindow <= 180);
+  assert.ok(result.profile.cooldownSeconds >= 27_000 && result.profile.cooldownSeconds <= 43_200);
+  assert.ok(result.profile.takeProfitRoePercent >= 8 && result.profile.takeProfitRoePercent <= 15);
+  assert.ok(result.profile.stopLossRoePercent >= 8 && result.profile.stopLossRoePercent <= 15);
+  assert.equal(result.profile.targetWalletRiskPercent, 3);
+  assert.equal(result.profile.maximumAllocationPercent, 80);
+  assert.equal(result.profile.leverageFloor, 2);
+  assert.equal(result.profile.leverageCap, 10);
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
 });
 
