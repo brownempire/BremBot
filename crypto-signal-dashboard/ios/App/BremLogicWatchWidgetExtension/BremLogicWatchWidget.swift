@@ -76,12 +76,97 @@ struct BremLogicComplicationBrand: View {
     }
 }
 
+private struct BremLogicRectangularCandlestickChart: View {
+    let candles: [BremLogicWatchCandle]
+    let entryPrice: Double?
+    let markPrice: Double?
+    let takeProfitPrice: Double?
+    let stopLossPrice: Double?
+
+    private let upColor = Color(red: 0.24, green: 0.92, blue: 0.66)
+    private let downColor = Color(red: 1.0, green: 0.36, blue: 0.42)
+    private let entryColor = Color(red: 1.0, green: 0.72, blue: 0.24)
+    private let markColor = Color(red: 0.36, green: 0.68, blue: 0.98)
+    private let takeProfitColor = Color(red: 0.30, green: 0.89, blue: 0.54)
+    private let stopLossColor = Color(red: 1.0, green: 0.45, blue: 0.45)
+
+    private var visibleCandles: [BremLogicWatchCandle] {
+        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(32))
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            guard !visibleCandles.isEmpty else { return }
+
+            let plot = CGRect(x: 1, y: 1, width: max(1, size.width - 2), height: max(1, size.height - 2))
+            let candlePrices = visibleCandles.flatMap { [$0.low, $0.high] }
+            let levels = [entryPrice, markPrice, takeProfitPrice, stopLossPrice]
+                .compactMap { $0 }
+                .filter { $0.isFinite && $0 > 0 }
+            guard let rawMin = (candlePrices + levels).min(),
+                  let rawMax = (candlePrices + levels).max()
+            else { return }
+
+            let rawRange = max(rawMax - rawMin, rawMax * 0.0005)
+            let minimum = rawMin - rawRange * 0.06
+            let maximum = rawMax + rawRange * 0.06
+            let range = max(maximum - minimum, 0.000_001)
+
+            func y(_ price: Double) -> CGFloat {
+                plot.maxY - CGFloat((price - minimum) / range) * plot.height
+            }
+
+            let referenceLines: [(Double?, Color, [CGFloat])] = [
+                (entryPrice, entryColor, [3, 2]),
+                (markPrice, markColor, []),
+                (takeProfitPrice, takeProfitColor, [2, 2]),
+                (stopLossPrice, stopLossColor, [2, 2]),
+            ]
+            for (price, color, dash) in referenceLines {
+                guard let price, price.isFinite, price > 0 else { continue }
+                var line = Path()
+                line.move(to: CGPoint(x: plot.minX, y: y(price)))
+                line.addLine(to: CGPoint(x: plot.maxX, y: y(price)))
+                context.stroke(
+                    line,
+                    with: .color(color.opacity(0.8)),
+                    style: StrokeStyle(lineWidth: 0.65, dash: dash)
+                )
+            }
+
+            let step = plot.width / CGFloat(visibleCandles.count)
+            let bodyWidth = max(1, min(2.5, step * 0.62))
+            for (index, candle) in visibleCandles.enumerated() {
+                let x = plot.minX + (CGFloat(index) + 0.5) * step
+                let color = candle.close >= candle.open ? upColor : downColor
+                var wick = Path()
+                wick.move(to: CGPoint(x: x, y: y(candle.high)))
+                wick.addLine(to: CGPoint(x: x, y: y(candle.low)))
+                context.stroke(wick, with: .color(color), lineWidth: 0.55)
+
+                let openY = y(candle.open)
+                let closeY = y(candle.close)
+                var body = Path()
+                body.addRect(CGRect(
+                    x: x - bodyWidth / 2,
+                    y: min(openY, closeY),
+                    width: bodyWidth,
+                    height: max(0.8, abs(closeY - openY))
+                ))
+                context.fill(body, with: .color(color))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 struct BremLogicPositionComplicationView: View {
     let entry: BremLogicWatchEntry
     @Environment(\.widgetFamily) private var family
 
     private var snapshot: BremLogicWatchSnapshot { entry.snapshot }
     private var market: String { snapshot.openPerpMarket ?? "PERPS" }
+    private var chartMarket: String { snapshot.chartSymbol ?? snapshot.openPerpMarket ?? "SOL" }
     private var pnl: String { bremLogicSignedUsd(snapshot.openPerpPnlUsd) }
     private var pnlColor: Color {
         guard let value = snapshot.openPerpPnlUsd else { return .secondary }
@@ -114,47 +199,56 @@ struct BremLogicPositionComplicationView: View {
         case .accessoryInline:
             Text("B \(snapshot.openPerpLabel ?? market) \(pnl) SL \(bremLogicPrice(snapshot.openPerpStopLossPrice))")
         default:
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 3) {
-                    BremLogicComplicationBrand()
-                    Spacer(minLength: 2)
-                    Circle()
-                        .fill(snapshot.perpsSessionState == "Clocked In" ? Color.green : Color.secondary)
-                        .frame(width: 4, height: 4)
-                    Text(snapshot.perpsSessionState == "Clocked In" ? "LIVE" : "IDLE")
-                        .font(.system(size: 6.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 1.5) {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text(snapshot.hasOpenPerp ? (snapshot.openPerpLabel ?? market) : "AGENT MONITORING")
-                        .font(.system(size: 11, weight: .black, design: .rounded))
+                    Text(snapshot.hasOpenPerp ? (snapshot.openPerpLabel ?? market) : "\(chartMarket) MONITORING")
+                        .font(.system(size: 9, weight: .black, design: .rounded))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(0.65)
                     Spacer(minLength: 2)
-                    Text(pnl)
-                        .font(.system(size: 11, weight: .black, design: .rounded))
-                        .foregroundStyle(pnlColor)
+                    Text(snapshot.hasOpenPerp ? pnl : bremLogicWalletUsd(snapshot.agentWalletBalanceUsd ?? snapshot.walletBalanceUsd))
+                        .font(.system(size: 8.5, weight: .black, design: .rounded))
+                        .foregroundStyle(snapshot.hasOpenPerp ? pnlColor : .secondary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.55)
                 }
-                if snapshot.hasOpenPerp {
-                    HStack(spacing: 3) {
-                        Text(bremLogicPercent(snapshot.openPerpPnlPercent)).foregroundStyle(pnlColor)
-                        Text("•")
-                        Text(bremLogicLeverage(snapshot.openPerpLeverage))
-                        Text("•")
-                        Text("TP \(bremLogicPrice(snapshot.openPerpTakeProfitPrice))")
-                        Text("•")
-                        Text("SL \(bremLogicPrice(snapshot.openPerpStopLossPrice))")
-                    }
-                    .font(.system(size: 7.5, weight: .bold, design: .rounded))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+
+                if let candles = snapshot.chartCandles, !candles.isEmpty {
+                    BremLogicRectangularCandlestickChart(
+                        candles: candles,
+                        entryPrice: snapshot.hasOpenPerp ? snapshot.openPerpEntryPrice : nil,
+                        markPrice: snapshot.openPerpMarkPrice,
+                        takeProfitPrice: snapshot.hasOpenPerp ? snapshot.openPerpTakeProfitPrice : nil,
+                        stopLossPrice: snapshot.hasOpenPerp ? snapshot.openPerpStopLossPrice : nil
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
                 } else {
-                    Text("Wallet \(bremLogicWalletUsd(snapshot.agentWalletBalanceUsd ?? snapshot.walletBalanceUsd))")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                    Text("Chart waiting for market data")
+                        .font(.system(size: 7, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+
+                HStack(spacing: 3) {
+                    Text("M \(bremLogicPrice(snapshot.openPerpMarkPrice))")
+                    if snapshot.hasOpenPerp {
+                        Text("TP \(bremLogicPrice(snapshot.openPerpTakeProfitPrice))")
+                            .foregroundStyle(.green)
+                        Text("SL \(bremLogicPrice(snapshot.openPerpStopLossPrice))")
+                            .foregroundStyle(.red)
+                    } else {
+                        Spacer(minLength: 2)
+                        Circle()
+                            .fill(snapshot.perpsSessionState == "Clocked In" ? Color.green : Color.secondary)
+                            .frame(width: 3.5, height: 3.5)
+                        Text(snapshot.perpsSessionState == "Clocked In" ? "LIVE" : "IDLE")
+                    }
+                }
+                .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
             }
         }
     }
