@@ -42,8 +42,10 @@ const LOW_BALANCE_TRADE_USD = 12;
 const LOW_BALANCE_TRADE_MAX_USDC = 50;
 const MIN_TPSL_EXPECTED_PNL_USD = 1;
 const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = 0.0012;
+export const SCALP_SIGNAL_COOLDOWN_SECONDS = 25 * 60;
 
 type AutonomousSignal = Omit<Signal, "type"> & { type: Signal["type"] | "scalp" };
+type StrategyClass = "smart" | "scalp";
 
 type MonitorExecutionResult = {
   walletAddress: string;
@@ -79,8 +81,8 @@ type MonitorDependencies = {
   reconcileLearningHistory: (walletAddress: string, snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>) => Promise<number>;
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
-  readLastSignal: (walletAddress: string, asset: string) => Promise<number | null>;
-  writeLastSignal: (walletAddress: string, asset: string, timestamp: number) => Promise<void>;
+  readLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass) => Promise<number | null>;
+  writeLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass, timestamp: number) => Promise<void>;
 };
 
 const defaultDependencies: MonitorDependencies = {
@@ -107,17 +109,23 @@ const defaultDependencies: MonitorDependencies = {
     await trainWalletDecisionProfile({ walletAddress, config, source: "automatic" });
   },
   disableScalpMode: disablePerpsScalpMode,
-  readLastSignal: async (walletAddress, asset) => {
+  readLastSignal: async (walletAddress, asset, strategyClass) => {
     const redis = await getRedisClient();
     if (!redis) return null;
-    const value = await redis.hGet(LAST_SIGNAL_KEY, `${walletAddress}:${asset}`);
+    const cursorKey = strategyClass === "scalp"
+      ? `${walletAddress}:${asset}:scalp`
+      : `${walletAddress}:${asset}`;
+    const value = await redis.hGet(LAST_SIGNAL_KEY, cursorKey);
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
   },
-  writeLastSignal: async (walletAddress, asset, timestamp) => {
+  writeLastSignal: async (walletAddress, asset, strategyClass, timestamp) => {
     const redis = await getRedisClient();
     if (!redis) throw new Error("Redis is unavailable while saving the autonomous signal cursor.");
-    await redis.hSet(LAST_SIGNAL_KEY, `${walletAddress}:${asset}`, String(timestamp));
+    const cursorKey = strategyClass === "scalp"
+      ? `${walletAddress}:${asset}:scalp`
+      : `${walletAddress}:${asset}`;
+    await redis.hSet(LAST_SIGNAL_KEY, cursorKey, String(timestamp));
   },
 };
 
@@ -382,7 +390,10 @@ export async function runAutonomousPerpsMonitor(
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
         continue;
       }
-      const lastSignalAt = await deps.readLastSignal(config.walletAddress, asset);
+      const [lastSmartSignalAt, lastScalpSignalAt] = await Promise.all([
+        deps.readLastSignal(config.walletAddress, asset, "smart"),
+        deps.readLastSignal(config.walletAddress, asset, "scalp"),
+      ]);
       const volatilityPercent = computeVolatilityPercent(windowPoints);
       const signalMetrics = computeSignalMetrics(windowPoints);
       const smartSignalCandidate = detectSignals({
@@ -394,7 +405,7 @@ export async function runAutonomousPerpsMonitor(
         symbol: `${asset}/USD`,
         points: windowPoints,
         params: effectiveParams,
-        lastSignalAt: lastSignalAt ?? undefined,
+        lastSignalAt: lastSmartSignalAt ?? undefined,
       })[0];
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
@@ -403,8 +414,8 @@ export async function runAutonomousPerpsMonitor(
             symbol: `${asset}/USD`,
             points: windowPoints,
             indicators,
-            cooldownSeconds: effectiveParams.cooldownSeconds,
-            lastSignalAt,
+            cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
+            lastSignalAt: lastScalpSignalAt,
           })
         : null;
       const signal = smartSignal ?? scalpSignal;
@@ -415,7 +426,7 @@ export async function runAutonomousPerpsMonitor(
           asset,
           smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
           smartSignalCandidate
-            ? "A trend or breakout candidate was detected, but the shared signal cooldown is still active. Scalp Mode remains enabled until a smart trade is taken."
+            ? "A trend or breakout candidate was detected, but the Smart Trade cooldown is still active. Scalp Mode remains enabled until a smart trade is taken."
             : config.settings.scalpModeEnabled
               ? "No qualifying smart or sideways-market scalp signal was detected in the latest candle window."
               : "No qualifying signal was detected in the latest candle window."
@@ -440,7 +451,7 @@ export async function runAutonomousPerpsMonitor(
         && indicators.macdHistogram !== null
         && indicators.adx !== null;
       if (strategyClass === "smart" && indicatorsReady && !indicatorScore.qualified) {
-        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(
           config,
           asset,
@@ -460,13 +471,13 @@ export async function runAutonomousPerpsMonitor(
         const trendDirection = signalMetrics.trend.changePercent >= 0 ? "bullish" : "bearish";
         const breakoutDirection = breakoutMetric >= 0 ? "bullish" : "bearish";
         if (!trendQualified || !breakoutQualified || trendDirection !== breakoutDirection || signal.direction !== trendDirection) {
-          await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "LEARNED_CONFIRMATION_SKIP", "The signal did not have matching trend and breakout confirmation under the active trained profile."));
           continue;
         }
       }
       if (config.settings.mode === "buy-only" && signal.direction === "bearish") {
-        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
         continue;
       }
@@ -476,7 +487,7 @@ export async function runAutonomousPerpsMonitor(
         && executionProfile.preferredDirection !== "balanced"
         && signal.direction !== executionProfile.preferredDirection
       ) {
-        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(config, asset, "LEARNED_DIRECTION_SKIP", `The active trained profile currently prefers ${executionProfile.preferredDirection} setups.`));
         continue;
       }
@@ -501,7 +512,7 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       if (collateralUsd < MIN_PERPS_COLLATERAL_USD) {
-        await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(
           config,
           asset,
@@ -544,7 +555,9 @@ export async function runAutonomousPerpsMonitor(
           trendWindow: effectiveParams.trendWindow,
           trendThreshold: effectiveParams.trendThreshold,
           breakoutPercent: effectiveParams.breakoutPercent,
-          cooldownSeconds: effectiveParams.cooldownSeconds,
+          cooldownSeconds: strategyClass === "scalp"
+            ? SCALP_SIGNAL_COOLDOWN_SECONDS
+            : effectiveParams.cooldownSeconds,
           trendStrengthPercent: signalMetrics.trend.changePercent,
           breakoutStrengthPercent: signalMetrics.breakoutChange,
           atrPercent: plan.atrPercent,
@@ -577,7 +590,7 @@ export async function runAutonomousPerpsMonitor(
           recentPriceChangePercent,
         },
       });
-      await deps.writeLastSignal(config.walletAddress, asset, signal.timestamp);
+      await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
       if (routed.ok && strategyClass === "smart" && config.settings.scalpModeEnabled) {
         await deps.disableScalpMode(config.walletAddress);
       }

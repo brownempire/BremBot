@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor } from "../lib/perps/autonomousMonitor";
+import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
 
@@ -81,6 +81,49 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
 
   assert.equal(signal?.type, "scalp");
   assert.equal(signal?.direction, "bullish");
+});
+
+test("scalp detection uses an independent 25-minute cooldown", () => {
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.1, 100.05, 99.95, 99.9].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const indicators = {
+    emaFast: 99.98,
+    emaSlow: 100,
+    emaSpreadPercent: -0.02,
+    emaSlopePercent: -0.01,
+    rsi: 39,
+    macdLine: -0.01,
+    macdSignal: -0.01,
+    macdHistogram: 0,
+    macdHistogramChange: 0,
+    adx: 14,
+    plusDi: 18,
+    minusDi: 20,
+    atrPercent: 0.08,
+    volumeRatio: 1,
+    bollingerBandwidthPercent: 0.6,
+    bollingerPosition: 0.12,
+  };
+  const latestTimestamp = points[points.length - 1]!.t;
+
+  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 1_500);
+  assert.equal(detectScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators,
+    cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
+    lastSignalAt: latestTimestamp - (SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000 - 1),
+  }), null);
+  assert.equal(detectScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators,
+    cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
+    lastSignalAt: latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000,
+  })?.type, "scalp");
 });
 
 test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net target", () => {
@@ -324,7 +367,8 @@ test("server monitor routes a qualifying signal while the app is closed", async 
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
     readLastSignal: async () => null,
-    writeLastSignal: async (_wallet, _asset, timestamp) => {
+    writeLastSignal: async (_wallet, _asset, strategyClass, timestamp) => {
+      assert.equal(strategyClass, "smart");
       savedCursor = timestamp;
     },
   });
@@ -596,7 +640,7 @@ test("server monitor skips allocations below Jupiter's collateral minimum", asyn
     reconcileLearningHistory: async () => 0,
     autoTrain: async () => undefined,
     readLastSignal: async () => null,
-    writeLastSignal: async (_wallet, _asset, timestamp) => {
+    writeLastSignal: async (_wallet, _asset, _strategyClass, timestamp) => {
       savedCursor = timestamp;
     },
   });
@@ -640,7 +684,7 @@ test("parameter candidates are skipped when the RSI indicator reaches the config
     reconcileLearningHistory: async () => 0,
     autoTrain: async () => undefined,
     readLastSignal: async () => null,
-    writeLastSignal: async (_wallet, _asset, timestamp) => { savedCursor = timestamp; },
+    writeLastSignal: async (_wallet, _asset, _strategyClass, timestamp) => { savedCursor = timestamp; },
   });
 
   assert.equal(routeCalls, 0);
