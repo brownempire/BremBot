@@ -61,7 +61,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AB5000010000000000000001"
             BuildableName = "BremLogicWatch.app"
-            BlueprintName = "BremLogicWatch"
             ReferencedContainer = "container:BremLogic.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -78,7 +77,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AB5000010000000000000001"
             BuildableName = "BremLogicWatch.app"
-            BlueprintName = "BremLogicWatch"
             ReferencedContainer = "container:BremLogic.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

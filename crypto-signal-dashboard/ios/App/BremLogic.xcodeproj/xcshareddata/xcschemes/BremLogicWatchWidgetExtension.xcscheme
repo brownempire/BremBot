@@ -77,7 +77,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AB5000020000000000000002"
             BuildableName = "BremLogicWatchWidgetExtension.appex"
-            BlueprintName = "BremLogicWatchWidgetExtension"
             ReferencedContainer = "container:BremLogic.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -120,7 +119,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AB5000020000000000000002"
             BuildableName = "BremLogicWatchWidgetExtension.appex"
-            BlueprintName = "BremLogicWatchWidgetExtension"
             ReferencedContainer = "container:BremLogic.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
