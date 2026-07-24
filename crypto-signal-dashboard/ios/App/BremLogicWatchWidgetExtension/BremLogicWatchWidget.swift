@@ -289,31 +289,51 @@ struct BremLogicWalletComplicationView: View {
     }
 }
 
-struct BremLogicAgentComplicationView: View {
+struct BremLogicPnlComplicationView: View {
     let entry: BremLogicWatchEntry
     @Environment(\.widgetFamily) private var family
-    private var clockedIn: Bool { entry.snapshot.perpsSessionState == "Clocked In" }
+    private var snapshot: BremLogicWatchSnapshot { entry.snapshot }
+    private var pnl: String { bremLogicSignedUsd(snapshot.openPerpPnlUsd) }
+    private var pnlPercent: String { bremLogicPercent(snapshot.openPerpPnlPercent) }
+    private var pnlColor: Color {
+        guard let value = snapshot.openPerpPnlUsd else { return .secondary }
+        return value >= 0
+            ? Color(red: 0.45, green: 0.92, blue: 0.62)
+            : Color(red: 1, green: 0.45, blue: 0.45)
+    }
 
     var body: some View {
         Group {
             switch family {
             case .accessoryInline:
-                Text("B Agent \(clockedIn ? "Clocked In" : "Clocked Out")")
+                if snapshot.hasOpenPerp {
+                    Text("B PnL \(pnl) \(pnlPercent)")
+                } else {
+                    Text("B PnL No open position")
+                }
             case .accessoryCorner:
-                Text(clockedIn ? "ON" : "OFF")
-                    .font(.system(size: 14, weight: .black, design: .rounded))
-                    .foregroundStyle(clockedIn ? .green : .secondary)
-                    .widgetLabel { Text("B AGENT") }
+                Text(snapshot.hasOpenPerp ? pnl : "--")
+                    .font(.system(size: 12, weight: .black, design: .rounded))
+                    .foregroundStyle(pnlColor)
+                    .minimumScaleFactor(0.5)
+                    .widgetLabel { Text("B PNL") }
             default:
                 ZStack {
                     AccessoryWidgetBackground()
-                    VStack(spacing: 1) {
-                        BremLogicComplicationBrand(compact: true)
-                        Image(systemName: clockedIn ? "bolt.fill" : "pause.fill")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(clockedIn ? .green : .secondary)
-                        Text(clockedIn ? "ACTIVE" : "IDLE")
+                    VStack(spacing: 0) {
+                        Text("PNL")
                             .font(.system(size: 6, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Text(snapshot.hasOpenPerp ? pnl : "--")
+                            .font(.system(size: 11, weight: .black, design: .rounded))
+                            .foregroundStyle(pnlColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.42)
+                        Text(snapshot.hasOpenPerp ? pnlPercent : "NO TRADE")
+                            .font(.system(size: 6.5, weight: .bold, design: .rounded))
+                            .foregroundStyle(snapshot.hasOpenPerp ? pnlColor : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
                     }
                 }
             }
@@ -349,14 +369,16 @@ struct BremLogicWalletWatchWidget: Widget {
 }
 
 struct BremLogicAgentWatchWidget: Widget {
+    // Preserve the original kind so an Agent complication already placed on a
+    // watch face is upgraded to PnL without requiring the user to add it again.
     let kind = "BremLogicAgentWatchWidget"
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: BremLogicWatchProvider()) { entry in
-            BremLogicAgentComplicationView(entry: entry)
+            BremLogicPnlComplicationView(entry: entry)
         }
-        .configurationDisplayName("BremLogic Agent")
-        .description("Shows whether the Perps agent is clocked in and active.")
+        .configurationDisplayName("BremLogic PnL")
+        .description("Live unrealized position PnL in dollars and percent.")
         .supportedFamilies([.accessoryCircular, .accessoryInline, .accessoryCorner])
     }
 }
