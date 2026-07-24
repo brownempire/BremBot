@@ -12,9 +12,18 @@ test("Watch complications request faster open-position and monitoring refreshes"
     path.join(process.cwd(), "ios/App/BremLogicWatchWidgetExtension/BremLogicWatchWidget.swift"),
     "utf8"
   );
+  const watchAppSource = fs.readFileSync(
+    path.join(process.cwd(), "ios/App/BremLogicWatchApp/BremLogicWatchContentView.swift"),
+    "utf8"
+  );
 
   assert.match(sharedSource, /openPositionInterval: TimeInterval = 30/);
   assert.match(sharedSource, /monitoringInterval: TimeInterval = 2 \* 60/);
   assert.match(widgetSource, /minimumReloadInterval = max\(15, interval \* 0\.8\)/);
   assert.match(widgetSource, /policy: \.after\(Date\(\)\.addingTimeInterval\(refreshInterval\)\)/);
+  assert.match(watchAppSource, /\.onChange\(of: scenePhase\)/);
+  assert.match(watchAppSource, /guard phase == \.active/);
+  assert.match(watchAppSource, /reloadTimelines\(ofKind: "BremLogicWatchWidget"\)/);
+  assert.match(watchAppSource, /reloadTimelines\(ofKind: "BremLogicWalletWatchWidget"\)/);
+  assert.match(watchAppSource, /reloadTimelines\(ofKind: "BremLogicAgentWatchWidget"\)/);
 });

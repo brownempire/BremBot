@@ -157,6 +157,7 @@ private struct BremLogicWatchCandlestickChart: View {
 }
 
 struct BremLogicWatchContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var snapshot = BremLogicWatchSnapshot.fallback
     @State private var isLoading = true
 
@@ -226,6 +227,11 @@ struct BremLogicWatchContentView: View {
         }
         .task { await runRefreshLoop() }
         .refreshable { await reload() }
+        .onChange(of: scenePhase) { phase in
+            guard phase == .active else { return }
+            reloadComplications()
+            Task { await reload() }
+        }
     }
 
     private var brandedHeader: some View {
@@ -312,9 +318,15 @@ struct BremLogicWatchContentView: View {
             snapshot = .previewPosition
         } else if let next = try? await BremLogicWatchServerClient.fetch() {
             snapshot = next
-            WidgetCenter.shared.reloadAllTimelines()
+            reloadComplications()
         }
         isLoading = false
+    }
+
+    private func reloadComplications() {
+        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicWatchWidget")
+        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicWalletWatchWidget")
+        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicAgentWatchWidget")
     }
 
     @MainActor

@@ -21,6 +21,7 @@ export async function POST(request: Request) {
     title: payload.title,
     body: payload.body,
     url: payload.url,
+    sound: payload.sound,
     subscription: body?.subscription ?? null,
     walletAddress: typeof body?.walletAddress === "string" ? body.walletAddress : null,
     nativeToken: typeof body?.nativeToken === "string" ? body.nativeToken : null,

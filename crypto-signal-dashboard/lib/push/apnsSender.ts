@@ -9,6 +9,13 @@ const APNS_BUNDLE_ID = process.env.APNS_BUNDLE_ID?.trim() || "com.bremlogic.sign
 const APNS_PRIVATE_KEY = process.env.APNS_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
 const APNS_USE_SANDBOX = (process.env.APNS_USE_SANDBOX ?? "true").trim().toLowerCase() !== "false";
 
+export type ApnsNotificationPayload = {
+  title: string;
+  body: string;
+  url?: string;
+  sound?: string;
+};
+
 function encodeBase64Url(input: Buffer | string) {
   return Buffer.from(input)
     .toString("base64")
@@ -37,14 +44,42 @@ export function getApnsConfigError() {
   return null;
 }
 
+export function apnsTopicForDevice(_device: Pick<NativePushDeviceRecord, "platform">) {
+  return APNS_BUNDLE_ID;
+}
+
+export function buildApnsRequest(
+  device: Pick<NativePushDeviceRecord, "token" | "platform">,
+  payload: ApnsNotificationPayload,
+  now = Date.now()
+) {
+  return {
+    headers: {
+      ":method": "POST",
+      ":path": `/3/device/${device.token}`,
+      "apns-push-type": "alert",
+      "apns-priority": "10",
+      "apns-topic": apnsTopicForDevice(device),
+      // Keep important trade events available if a device is briefly offline.
+      "apns-expiration": String(Math.floor(now / 1000) + 24 * 60 * 60),
+    },
+    body: {
+      aps: {
+        alert: {
+          title: payload.title,
+          body: payload.body,
+        },
+        sound: payload.sound ?? "default",
+        "thread-id": "bremlogic-trading",
+      },
+      url: payload.url ?? "/signals-bot",
+    },
+  };
+}
+
 export async function sendApnsPayload(
   devices: NativePushDeviceRecord[],
-  payload: {
-    title: string;
-    body: string;
-    url?: string;
-    sound?: string;
-  }
+  payload: ApnsNotificationPayload
 ) {
   const jwt = createJwt();
   if (!jwt) {
@@ -56,13 +91,10 @@ export async function sendApnsPayload(
 
   const results = await Promise.all(
     devices.map((device) => new Promise<{ token: string; ok: boolean; statusCode: number }>((resolve) => {
+      const apnsRequest = buildApnsRequest(device, payload);
       const request = client.request({
-        ":method": "POST",
-        ":path": `/3/device/${device.token}`,
+        ...apnsRequest.headers,
         authorization: `bearer ${jwt}`,
-        "apns-push-type": "alert",
-        "apns-priority": "10",
-        "apns-topic": APNS_BUNDLE_ID,
       });
 
       let statusCode = 0;
@@ -88,16 +120,7 @@ export async function sendApnsPayload(
         resolve({ token: device.token, ok: false, statusCode: 0 });
       });
 
-      request.write(JSON.stringify({
-        aps: {
-          alert: {
-            title: payload.title,
-            body: payload.body,
-          },
-          sound: payload.sound ?? "default",
-        },
-        url: payload.url ?? "/signals-bot",
-      }));
+      request.write(JSON.stringify(apnsRequest.body));
       request.end();
     }))
   );
