@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+#if os(iOS) && canImport(ActivityKit)
+import ActivityKit
+#endif
 
 let BremLogicWidgetAppGroup = "group.com.bremlogic.signalsbot.shared"
 let BremLogicWidgetSnapshotDefaultsKey = "bremlogic.widget.snapshot.v1"
@@ -28,6 +31,7 @@ struct BremLogicWidgetSnapshot: Codable {
     var openPerpPnlPercent: Double?
     var openPerpMarket: String?
     var openPerpSide: String?
+    var openPerpStrategy: String?
     var openPerpPositionValueUsd: Double?
     var openPerpCollateralUsd: Double?
     var openPerpEntryPrice: Double?
@@ -63,6 +67,7 @@ struct BremLogicWidgetSnapshot: Codable {
         openPerpPnlPercent: nil,
         openPerpMarket: nil,
         openPerpSide: nil,
+        openPerpStrategy: nil,
         openPerpPositionValueUsd: nil,
         openPerpCollateralUsd: nil,
         openPerpEntryPrice: nil,
@@ -87,6 +92,57 @@ struct BremLogicWidgetSnapshot: Codable {
         targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals"
     )
 }
+
+#if os(iOS) && canImport(ActivityKit)
+@available(iOS 16.2, *)
+struct BremLogicTradeActivityAttributes: ActivityAttributes {
+    struct ContentState: Codable, Hashable {
+        var positionLabel: String
+        var market: String
+        var side: String
+        var strategy: String
+        var pnlUsd: Double?
+        var pnlPercent: Double?
+        var markPrice: Double?
+        var takeProfitPrice: Double?
+        var stopLossPrice: Double?
+        var updatedAt: Double
+        var targetURL: String
+    }
+
+    var positionKey: String
+}
+
+@available(iOS 16.2, *)
+extension BremLogicTradeActivityAttributes.ContentState {
+    init(snapshot: BremLogicWidgetSnapshot) {
+        let market = snapshot.openPerpMarket?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let side = snapshot.openPerpSide?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let strategy = snapshot.openPerpStrategy?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+
+        self.init(
+            positionLabel: snapshot.openPerpLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+                ?? [market, side].compactMap { $0 }.joined(separator: " "),
+            market: market?.isEmpty == false ? market! : "PERPS",
+            side: side?.isEmpty == false ? side! : "OPEN",
+            strategy: strategy?.isEmpty == false ? strategy! : "PERPS",
+            pnlUsd: snapshot.openPerpPnlUsd,
+            pnlPercent: snapshot.openPerpPnlPercent,
+            markPrice: snapshot.openPerpMarkPrice,
+            takeProfitPrice: snapshot.openPerpTakeProfitPrice,
+            stopLossPrice: snapshot.openPerpStopLossPrice,
+            updatedAt: snapshot.updatedAt,
+            targetURL: snapshot.targetURL
+        )
+    }
+}
+#endif
 
 struct BremLogicCandlestickChart: View {
     let candles: [BremLogicWidgetCandle]

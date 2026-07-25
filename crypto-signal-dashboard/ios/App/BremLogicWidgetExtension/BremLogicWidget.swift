@@ -1,6 +1,9 @@
 import SwiftUI
 import UIKit
 import WidgetKit
+#if canImport(ActivityKit)
+import ActivityKit
+#endif
 
 struct BremLogicWidgetEntry: TimelineEntry {
     let date: Date
@@ -658,6 +661,26 @@ struct BremLogicLockScreenWidgetEntryView: View {
         return "\(prefix)$\(String(format: "%.2f", abs(pnl)))"
     }
 
+    private var pnlPercentLabel: String {
+        guard let percent = entry.snapshot.openPerpPnlPercent else { return "--" }
+        let prefix = percent >= 0 ? "+" : "-"
+        return "\(prefix)\(String(format: "%.1f", abs(percent)))%"
+    }
+
+    private var strategyLabel: String {
+        let strategy = entry.snapshot.openPerpStrategy?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        return strategy?.isEmpty == false ? strategy! : "PERPS"
+    }
+
+    private func priceLabel(_ value: Double?) -> String {
+        guard let value, value.isFinite, value > 0 else { return "--" }
+        return value >= 1_000
+            ? String(format: "$%.0f", value)
+            : String(format: "$%.2f", value)
+    }
+
     private var walletLabel: String {
         let balance = entry.snapshot.agentWalletBalanceUsd
             ?? entry.snapshot.walletBalanceUsd
@@ -688,35 +711,39 @@ struct BremLogicLockScreenWidgetEntryView: View {
 
     @ViewBuilder
     private var rectangularContent: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
-                lockScreenLogo
-                Spacer(minLength: 2)
-                if #available(iOS 17.0, *) {
-                    Button(intent: BremLogicWidgetRefreshIntent()) {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 10, weight: .bold))
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh BremLogic widget")
-                }
-            }
+        if entry.snapshot.openPerpMarket?.isEmpty == false || entry.snapshot.openPerpPnlUsd != nil {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(positionLabel) • \(strategyLabel)")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
 
-            Text(positionLabel)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                Text("\(pnlLabel)  (\(pnlPercentLabel))")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Text(
+                    "M \(priceLabel(entry.snapshot.openPerpMarkPrice))"
+                    + " • TP \(priceLabel(entry.snapshot.openPerpTakeProfitPrice))"
+                    + " • SL \(priceLabel(entry.snapshot.openPerpStopLossPrice))"
+                )
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
-
-            HStack(spacing: 5) {
-                Text("PnL \(pnlLabel)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .minimumScaleFactor(0.62)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("NO OPEN PERPS")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
                     .lineLimit(1)
-                Spacer(minLength: 2)
                 Text("Wallet \(walletLabel)")
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .lineLimit(1)
+                Text("Monitoring • Updated \(Date(timeIntervalSince1970: entry.snapshot.updatedAt), style: .time)")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
     }
@@ -768,6 +795,136 @@ struct BremLogicLockScreenWidgetEntryView: View {
         .widgetURL(URL(string: entry.snapshot.targetURL))
     }
 }
+
+#if canImport(ActivityKit)
+@available(iOS 16.2, *)
+struct BremLogicTradeLiveActivityWidget: Widget {
+    private let positive = Color(red: 0.38, green: 0.92, blue: 0.62)
+    private let negative = Color(red: 1.0, green: 0.38, blue: 0.42)
+    private let mark = Color(red: 0.36, green: 0.68, blue: 0.98)
+
+    private func signedUsd(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(value >= 0 ? "+" : "-")$\(String(format: "%.2f", abs(value)))"
+    }
+
+    private func percent(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return "\(value >= 0 ? "+" : "-")\(String(format: "%.1f", abs(value)))%"
+    }
+
+    private func price(_ value: Double?) -> String {
+        guard let value, value.isFinite, value > 0 else { return "--" }
+        return value >= 1_000 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
+    }
+
+    private func pnlColor(_ state: BremLogicTradeActivityAttributes.ContentState) -> Color {
+        guard let pnl = state.pnlUsd else { return .secondary }
+        return pnl >= 0 ? positive : negative
+    }
+
+    @ViewBuilder
+    private func metric(_ label: String, _ value: String, color: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func lockScreenView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
+        let state = context.state
+        VStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("BREMLOGIC • \(state.strategy)")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(positive)
+                    Text(state.positionLabel)
+                        .font(.system(size: 22, weight: .heavy, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(signedUsd(state.pnlUsd))
+                        .font(.system(size: 22, weight: .heavy, design: .rounded))
+                        .foregroundStyle(pnlColor(state))
+                    Text(percent(state.pnlPercent))
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor(state))
+                }
+            }
+
+            HStack(spacing: 8) {
+                metric("MARK", price(state.markPrice), color: mark)
+                metric("TAKE PROFIT", price(state.takeProfitPrice), color: positive)
+                metric("STOP LOSS", price(state.stopLossPrice), color: negative)
+            }
+        }
+        .padding(14)
+        .activityBackgroundTint(Color(red: 0.045, green: 0.06, blue: 0.095))
+        .activitySystemActionForegroundColor(.white)
+        .widgetURL(URL(string: state.targetURL))
+    }
+
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: BremLogicTradeActivityAttributes.self) { context in
+            lockScreenView(context)
+        } dynamicIsland: { context in
+            let state = context.state
+            return DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(state.strategy)
+                            .font(.caption2.bold())
+                            .foregroundStyle(positive)
+                        Text(state.positionLabel)
+                            .font(.headline)
+                            .lineLimit(1)
+                    }
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(signedUsd(state.pnlUsd))
+                            .font(.headline)
+                            .foregroundStyle(pnlColor(state))
+                        Text(percent(state.pnlPercent))
+                            .font(.caption2.bold())
+                            .foregroundStyle(pnlColor(state))
+                    }
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack(spacing: 8) {
+                        metric("MARK", price(state.markPrice), color: mark)
+                        metric("TP", price(state.takeProfitPrice), color: positive)
+                        metric("SL", price(state.stopLossPrice), color: negative)
+                    }
+                }
+            } compactLeading: {
+                Text(state.market)
+                    .font(.caption2.bold())
+            } compactTrailing: {
+                Text(signedUsd(state.pnlUsd))
+                    .font(.caption2.bold())
+                    .foregroundStyle(pnlColor(state))
+            } minimal: {
+                Image(systemName: state.pnlUsd ?? 0 >= 0 ? "arrow.up.right" : "arrow.down.right")
+                    .foregroundStyle(pnlColor(state))
+            }
+            .widgetURL(URL(string: state.targetURL))
+            .keylineTint(pnlColor(state))
+        }
+    }
+}
+#endif
 
 @available(iOS 16.0, *)
 struct BremLogicLockScreenWidget: Widget {

@@ -16,6 +16,7 @@
 		AA1000070000000000000007 /* BremLogicWidgetShared.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000030000000000000003 /* BremLogicWidgetShared.swift */; };
 		AA1000080000000000000008 /* BremLogicLogo.png in Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
 		AA1000090000000000000010 /* BremLogicWidgetRefreshIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2000100000000000000010 /* BremLogicWidgetRefreshIntent.swift */; };
+		AE1000010000000000000001 /* BremLogicLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE2000010000000000000001 /* BremLogicLiveActivityManager.swift */; };
 		AB1000010000000000000001 /* BremLogicWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000030000000000000003 /* BremLogicWatchApp.swift */; };
 		AB1000020000000000000002 /* BremLogicWatchContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000040000000000000004 /* BremLogicWatchContentView.swift */; };
 		AB1000030000000000000003 /* BremLogicWatchSnapshot.swift in Watch App Sources */ = {isa = PBXBuildFile; fileRef = AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */; };
@@ -143,6 +144,7 @@
 		AA2000080000000000000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA2000090000000000000009 /* BremLogicLogo.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = BremLogicLogo.png; sourceTree = "<group>"; };
 		AA2000100000000000000010 /* BremLogicWidgetRefreshIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWidgetRefreshIntent.swift; sourceTree = "<group>"; };
+		AE2000010000000000000001 /* BremLogicLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicLiveActivityManager.swift; sourceTree = "<group>"; };
 		AB2000010000000000000001 /* BremLogicWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BremLogicWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB2000020000000000000002 /* BremLogicWatchWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BremLogicWatchWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB2000030000000000000003 /* BremLogicWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicWatchApp.swift; sourceTree = "<group>"; };
@@ -271,6 +273,7 @@
 				AA2000010000000000000001 /* BremBridgeViewController.swift */,
 				504EC3091FED79650016851F /* BremLogic.entitlements */,
 				AA2000020000000000000002 /* WidgetSyncPlugin.swift */,
+				AE2000010000000000000001 /* BremLogicLiveActivityManager.swift */,
 				4D22ABEF2AF431CB00220026 /* brem_approval.wav */,
 				4D22ABF02AF431CB00220026 /* brem_open.wav */,
 				4D22ABF12AF431CB00220026 /* brem_signal.wav */,
@@ -616,6 +619,7 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				5C1000010000000000000001 /* SceneDelegate.swift in Sources */,
 				AA1000020000000000000002 /* WidgetSyncPlugin.swift in Sources */,
+				AE1000010000000000000001 /* BremLogicLiveActivityManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

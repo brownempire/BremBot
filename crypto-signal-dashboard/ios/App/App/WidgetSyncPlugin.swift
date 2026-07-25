@@ -16,6 +16,7 @@ public class WidgetSyncPlugin: CAPPlugin, CAPBridgedPlugin {
             let snapshot = try call.decode(BremLogicWidgetSnapshot.self)
             try BremLogicWidgetStore.save(snapshot)
             reloadTimelinesIfNeeded()
+            BremLogicLiveActivityManager.refreshFromServer()
             call.resolve(["ok": true])
         } catch {
             call.reject("Unable to save widget snapshot.", nil, error)
@@ -28,6 +29,7 @@ public class WidgetSyncPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func reloadTimelines(_ call: CAPPluginCall) {
         WidgetCenter.shared.reloadAllTimelines()
+        BremLogicLiveActivityManager.refreshFromServer()
         call.resolve(["ok": true])
     }
 

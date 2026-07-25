@@ -1,7 +1,8 @@
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
 import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
 import { getPerpsSession } from "@/lib/perps/sessionStore";
-import type { PerpsAutomationSession } from "@/lib/perps/sessionTypes";
+import type { PerpsAutomationSession, PerpsUserExecution } from "@/lib/perps/sessionTypes";
+import { listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
@@ -22,6 +23,7 @@ export type WidgetServerSnapshot = {
   openPerpPnlPercent: number | null;
   openPerpMarket: string | null;
   openPerpSide: "long" | "short" | null;
+  openPerpStrategy: "smart" | "scalp" | null;
   openPerpPositionValueUsd: number | null;
   openPerpCollateralUsd: number | null;
   openPerpEntryPrice: number | null;
@@ -51,6 +53,7 @@ type WidgetSnapshotInput = {
   mainAvailableUsdc: number | null;
   agentAvailableUsdc: number | null;
   session: PerpsAutomationSession | null;
+  executions?: PerpsUserExecution[];
   chartSymbol?: string | null;
   chartPoints?: PricePoint[];
   now?: Date;
@@ -126,12 +129,41 @@ function calculatePerpsWalletEquity(availableUsdc: number | null, positions: Jup
     : null;
 }
 
+function marketAsset(market: string) {
+  const normalized = market.toUpperCase();
+  if (normalized.includes("BTC")) return "BTC";
+  if (normalized.includes("ETH")) return "ETH";
+  return "SOL";
+}
+
+function findPositionExecution(
+  position: JupiterPerpsPosition | null,
+  executions: PerpsUserExecution[] = []
+) {
+  if (!position) return null;
+  const direct = position.accountRef
+    ? executions.find((execution) => execution.positionPubkey === position.accountRef)
+    : null;
+  if (direct) return direct;
+
+  const asset = marketAsset(position.marketSymbol);
+  return executions
+    .filter((execution) => (
+      execution.asset === asset
+      && execution.side === position.side
+      && ["prepared", "submitted", "confirmed"].includes(execution.status)
+    ))
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]
+    ?? null;
+}
+
 export function buildWidgetServerSnapshot({
   agentPositions,
   mainPositions = [],
   mainAvailableUsdc,
   agentAvailableUsdc,
   session,
+  executions = [],
   chartSymbol = null,
   chartPoints = [],
   now = new Date(),
@@ -139,6 +171,7 @@ export function buildWidgetServerSnapshot({
   const liveAgentPositions = getLivePositions(agentPositions);
   const liveMainPositions = getLivePositions(mainPositions);
   const position = liveAgentPositions[0] ?? liveMainPositions[0] ?? null;
+  const positionExecution = findPositionExecution(position, executions);
   const positionPnl = finiteOrNull(position?.unrealizedPnl);
   const positionCollateral = finiteOrNull(position?.collateralValue);
   const pnlPercent = positionPnl !== null && positionCollateral !== null && positionCollateral > 0
@@ -178,6 +211,7 @@ export function buildWidgetServerSnapshot({
     openPerpPnlPercent: finiteOrNull(pnlPercent),
     openPerpMarket: position ? position.marketSymbol.replace(/\s+/g, "").toUpperCase() : null,
     openPerpSide: position?.side ?? null,
+    openPerpStrategy: positionExecution?.strategyClass ?? null,
     openPerpPositionValueUsd: finiteOrNull(position?.positionValue),
     openPerpCollateralUsd: positionCollateral,
     openPerpEntryPrice: finiteOrNull(position?.entryPrice),
@@ -211,12 +245,13 @@ export async function loadWidgetServerSnapshot() {
     throw new Error("The server widget wallet association is not configured.");
   }
 
-  const [agentPortfolioResult, mainPortfolioResult, mainBalanceResult, agentBalanceResult, sessionResult] = await Promise.allSettled([
+  const [agentPortfolioResult, mainPortfolioResult, mainBalanceResult, agentBalanceResult, sessionResult, executionsResult] = await Promise.allSettled([
     fetchJupiterPerpsAccountSnapshot(agentWallet),
     fetchJupiterPerpsAccountSnapshot(ownerWallet),
     getWalletUsdcBalance(ownerWallet),
     getWalletUsdcBalance(agentWallet),
     getPerpsSession(ownerWallet),
+    listUserPerpsExecutions(ownerWallet),
   ]);
 
   if (agentPortfolioResult.status === "rejected" && mainPortfolioResult.status === "rejected") {
@@ -238,6 +273,7 @@ export async function loadWidgetServerSnapshot() {
     mainAvailableUsdc: mainBalanceResult.status === "fulfilled" ? mainBalanceResult.value : null,
     agentAvailableUsdc: agentBalanceResult.status === "fulfilled" ? agentBalanceResult.value : null,
     session: sessionResult.status === "fulfilled" ? sessionResult.value : null,
+    executions: executionsResult.status === "fulfilled" ? executionsResult.value : [],
     chartSymbol,
     chartPoints,
   });

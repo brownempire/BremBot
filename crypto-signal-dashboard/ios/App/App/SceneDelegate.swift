@@ -23,6 +23,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         handleUserActivity(userActivity)
     }
 
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        BremLogicLiveActivityManager.refreshFromServer()
+    }
+
     private func handleURLContexts(_ contexts: Set<UIOpenURLContext>) {
         for context in contexts {
             var options: [UIApplication.OpenURLOptionsKey: Any] = [

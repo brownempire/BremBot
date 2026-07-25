@@ -22,3 +22,22 @@ test("Apple position widgets render stop-loss price and expected P/L", () => {
   assert.match(sharedChart, /let stopLossPrice: Double\?/);
   assert.match(sharedChart, /legendItem\("SL", stopLossPrice/);
 });
+
+test("iPhone Lock Screen rectangle and Live Activity expose the requested trade summary", () => {
+  const phoneWidget = read("ios/App/BremLogicWidgetExtension/BremLogicWidget.swift");
+  const widgetBundle = read("ios/App/BremLogicWidgetExtension/BremLogicWidgetBundle.swift");
+  const activityManager = read("ios/App/App/BremLogicLiveActivityManager.swift");
+  const infoPlist = read("ios/App/App/Info.plist");
+
+  assert.ok(phoneWidget.includes('Text("\\(positionLabel) • \\(strategyLabel)")'));
+  assert.match(phoneWidget, /pnlPercentLabel/);
+  assert.match(phoneWidget, /M .*openPerpMarkPrice/);
+  assert.match(phoneWidget, /TP .*openPerpTakeProfitPrice/);
+  assert.match(phoneWidget, /SL .*openPerpStopLossPrice/);
+  assert.match(phoneWidget, /ActivityConfiguration\(for: BremLogicTradeActivityAttributes\.self\)/);
+  assert.match(widgetBundle, /BremLogicTradeLiveActivityWidget\(\)/);
+  assert.match(activityManager, /Activity<BremLogicTradeActivityAttributes>\.request/);
+  assert.match(activityManager, /matchingActivity\.update/);
+  assert.match(activityManager, /activity\.end/);
+  assert.match(infoPlist, /<key>NSSupportsLiveActivities<\/key>\s*<true\/>/);
+});

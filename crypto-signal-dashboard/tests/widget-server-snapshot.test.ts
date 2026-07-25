@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
-import type { PerpsAutomationSession } from "../lib/perps/sessionTypes";
+import type { PerpsAutomationSession, PerpsUserExecution } from "../lib/perps/sessionTypes";
 import { buildWidgetServerSnapshot } from "../lib/widget/serverSnapshot";
 
 const liveSession: PerpsAutomationSession = {
@@ -57,12 +57,39 @@ const position: JupiterPerpsPosition = {
   lastUpdated: 1_752_667_200_000,
 };
 
+const smartExecution: PerpsUserExecution = {
+  executionId: "execution-widget",
+  sessionId: liveSession.sessionId,
+  walletAddress: liveSession.walletAddress,
+  signalId: "signal-widget",
+  symbol: "SOL",
+  summary: "Smart SOL setup",
+  side: "long",
+  asset: "SOL",
+  mode: "live",
+  executionModel: "delegated-ready",
+  status: "confirmed",
+  reasonCode: "EXECUTED",
+  reasonMessage: "Position opened",
+  collateralUsd: 100,
+  sizeUsd: 310,
+  leverage: 3.1,
+  takeProfitPrice: 175,
+  stopLossPrice: 135,
+  txid: "private-transaction",
+  positionPubkey: position.accountRef,
+  strategyClass: "smart",
+  createdAt: "2026-07-16T12:30:00.000Z",
+  updatedAt: "2026-07-16T12:30:00.000Z",
+};
+
 test("widget summary contains display-safe position data and agent equity", () => {
   const snapshot = buildWidgetServerSnapshot({
     agentPositions: [position],
     mainAvailableUsdc: 75,
     agentAvailableUsdc: 250,
     session: liveSession,
+    executions: [smartExecution],
     now: new Date("2026-07-16T12:34:56.000Z"),
     chartSymbol: "SOL",
     chartPoints: Array.from({ length: 65 }, (_, index) => ({
@@ -80,6 +107,7 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpPnlPercent, 10);
   assert.equal(snapshot.openPerpMarket, "SOL/USD");
   assert.equal(snapshot.openPerpSide, "long");
+  assert.equal(snapshot.openPerpStrategy, "smart");
   assert.equal(snapshot.openPerpPositionValueUsd, 310);
   assert.equal(snapshot.openPerpCollateralUsd, 100);
   assert.equal(snapshot.openPerpEntryPrice, 150);
