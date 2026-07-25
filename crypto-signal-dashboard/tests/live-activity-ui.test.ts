@@ -39,3 +39,11 @@ test("Live Activity refresh cadence shares the open-position widget interval", (
   assert.match(managerSource, /Task\.sleep\([\s\S]*BremLogicOpenPositionRefreshInterval/);
   assert.match(sceneSource, /BremLogicLiveActivityManager\.startScheduledRefresh\(\)/);
 });
+
+test("iPhone Live Activities request and register ActivityKit push tokens", () => {
+  assert.match(sharedSource, /api\/push\/live-activity\/subscribe/);
+  assert.match(managerSource, /pushType: \.token/);
+  assert.match(managerSource, /activity\.pushTokenUpdates/);
+  assert.match(managerSource, /"positionKey": positionKey/);
+  assert.match(managerSource, /URLSession\.shared\.data\(for: request\)/);
+});

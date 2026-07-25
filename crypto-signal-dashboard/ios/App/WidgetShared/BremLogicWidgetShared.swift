@@ -8,6 +8,7 @@ let BremLogicWidgetAppGroup = "group.com.bremlogic.signalsbot.shared"
 let BremLogicWidgetSnapshotDefaultsKey = "bremlogic.widget.snapshot.v1"
 let BremLogicWidgetRefreshAttemptDefaultsKey = "bremlogic.widget.refresh-attempt.v1"
 let BremLogicWidgetServerURL = URL(string: "https://app.bremlogic.com/api/widget/summary")!
+let BremLogicLiveActivityRegistrationURL = URL(string: "https://app.bremlogic.com/api/push/live-activity/subscribe")!
 let BremLogicOpenPositionRefreshInterval: TimeInterval = 5 * 60
 
 struct BremLogicWidgetCandle: Codable, Identifiable {

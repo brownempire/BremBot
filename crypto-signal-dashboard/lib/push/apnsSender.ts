@@ -24,7 +24,7 @@ function encodeBase64Url(input: Buffer | string) {
     .replace(/=+$/g, "");
 }
 
-function createJwt() {
+export function createApnsJwt() {
   if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_PRIVATE_KEY) return null;
 
   const header = encodeBase64Url(JSON.stringify({ alg: "ES256", kid: APNS_KEY_ID }));
@@ -33,8 +33,19 @@ function createJwt() {
   const signer = crypto.createSign("SHA256");
   signer.update(signingInput);
   signer.end();
-  const signature = signer.sign(APNS_PRIVATE_KEY);
+  const signature = signer.sign({
+    key: APNS_PRIVATE_KEY,
+    dsaEncoding: "ieee-p1363",
+  });
   return `${signingInput}.${encodeBase64Url(signature)}`;
+}
+
+export function getApnsAuthority() {
+  return APNS_USE_SANDBOX ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
+}
+
+export function getApnsBundleId() {
+  return APNS_BUNDLE_ID;
 }
 
 export function getApnsConfigError() {
@@ -81,13 +92,12 @@ export async function sendApnsPayload(
   devices: NativePushDeviceRecord[],
   payload: ApnsNotificationPayload
 ) {
-  const jwt = createJwt();
+  const jwt = createApnsJwt();
   if (!jwt) {
     return { sent: 0, results: devices.map((device) => ({ token: device.token, ok: false, statusCode: 0 })) };
   }
 
-  const authority = APNS_USE_SANDBOX ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
-  const client = http2.connect(authority);
+  const client = http2.connect(getApnsAuthority());
 
   const results = await Promise.all(
     devices.map((device) => new Promise<{ token: string; ok: boolean; statusCode: number }>((resolve) => {

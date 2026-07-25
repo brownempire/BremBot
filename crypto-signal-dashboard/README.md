@@ -81,6 +81,7 @@ For live feed setup:
 - `POST /api/perps/agent/close` closes an agent-owned position after verifying the primary-to-agent association.
 - `GET/PUT /api/perps/automation/config` syncs the authenticated wallet's automation settings to Redis with atomic revisions, preventing stale devices from overwriting newer settings.
 - `GET /api/perps/automation/run` is the `CRON_SECRET`-protected once-per-minute Vercel worker.
+- Active iPhone Live Activities register an ActivityKit token with the server. The worker uses Redis plus the configured `APNS_*` credentials to update Entry, Mark, TP, SL, and PnL through APNs at most once every five minutes, and ends obsolete position activities.
 - `GET /api/perps/automation/status` reports the most recent server monitor result for the authenticated wallet.
 - `GET/POST /api/perps/training` reads the active wallet-scoped learning profile or reconciles closed Jupiter trades and trains a new version. Profiles and fee-aware outcomes are durable in Redis; failed holdout candidates are retained for audit but never replace the active profile.
 - Paper mode simulates user-scoped Perps actions without moving funds.
