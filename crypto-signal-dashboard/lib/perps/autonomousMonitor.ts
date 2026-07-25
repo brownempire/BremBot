@@ -7,14 +7,20 @@ import {
   type PerpsAutomationConfig,
 } from "@/lib/perps/automationConfig";
 import { disablePerpsScalpMode, listPerpsAutomationConfigs } from "@/lib/perps/automationConfigStore";
-import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
+import { assertAgentWalletSigner, getAgentWalletForOwner } from "@/lib/perps/agentWallet";
+import {
+  calculatePerpsPositionRoePercent,
+  evaluatePerpsProfitLock,
+  type PerpsProfitLockState,
+} from "@/lib/perps/profitLock";
 import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
 import { listPerpsSessions } from "@/lib/perps/sessionStore";
 import type { PerpsAutomationSession } from "@/lib/perps/sessionTypes";
+import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
 import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
 import { listUserPerpsExecutions, reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
-import { fetchJupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
+import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
 import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
@@ -36,6 +42,7 @@ import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const LAST_RUN_KEY = "brembot:perps:automation:last-run";
+const PROFIT_LOCK_STATE_KEY = "brembot:perps:automation:profit-lock";
 const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const LOW_BALANCE_TRADE_USD = 12;
@@ -81,6 +88,10 @@ type MonitorDependencies = {
   reconcileLearningHistory: (walletAddress: string, snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>) => Promise<number>;
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
+  closePosition: (walletAddress: string, position: JupiterPerpsPosition) => Promise<{ txid: string }>;
+  readProfitLockState: (walletAddress: string) => Promise<PerpsProfitLockState | null>;
+  writeProfitLockState: (walletAddress: string, state: PerpsProfitLockState) => Promise<void>;
+  clearProfitLockState: (walletAddress: string) => Promise<void>;
   readLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass) => Promise<number | null>;
   writeLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass, timestamp: number) => Promise<void>;
 };
@@ -109,6 +120,46 @@ const defaultDependencies: MonitorDependencies = {
     await trainWalletDecisionProfile({ walletAddress, config, source: "automatic" });
   },
   disableScalpMode: disablePerpsScalpMode,
+  closePosition: async (walletAddress, position) => {
+    assertAgentWalletSigner(walletAddress);
+    if (!position.accountRef) throw new Error("The live Jupiter position is missing its close reference.");
+    const receiveToken = position.collateralSymbol === "BTC"
+      || position.collateralSymbol === "ETH"
+      || position.collateralSymbol === "SOL"
+      ? position.collateralSymbol
+      : "USDC";
+    const {
+      buildPerpsCloseTransaction,
+      executeSignedPerpsTransaction,
+    } = await import("@/lib/perps/jupiterAdapter");
+    const built = await buildPerpsCloseTransaction(position.accountRef, receiveToken, "100");
+    const signed = signSerializedPerpsTransaction(built.serializedTxBase64);
+    const submitted = await executeSignedPerpsTransaction("decrease-position", signed.signedSerializedTxBase64);
+    const txid = submitted.txid?.trim();
+    if (!txid) throw new Error("Jupiter did not return a profit-lock close transaction signature.");
+    return { txid };
+  },
+  readProfitLockState: async (walletAddress) => {
+    const redis = await getRedisClient();
+    if (!redis) return null;
+    const raw = await redis.hGet(PROFIT_LOCK_STATE_KEY, walletAddress);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as PerpsProfitLockState;
+    } catch {
+      return null;
+    }
+  },
+  writeProfitLockState: async (walletAddress, state) => {
+    const redis = await getRedisClient();
+    if (!redis) throw new Error("Redis is unavailable while saving the Perps profit lock.");
+    await redis.hSet(PROFIT_LOCK_STATE_KEY, walletAddress, JSON.stringify(state));
+  },
+  clearProfitLockState: async (walletAddress) => {
+    const redis = await getRedisClient();
+    if (!redis) return;
+    await redis.hDel(PROFIT_LOCK_STATE_KEY, walletAddress);
+  },
   readLastSignal: async (walletAddress, asset, strategyClass) => {
     const redis = await getRedisClient();
     if (!redis) return null;
@@ -359,6 +410,68 @@ export async function runAutonomousPerpsMonitor(
         deps.fetchSnapshot(agentWallet),
         deps.getUsdcBalance(agentWallet),
       ]);
+      const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
+      if (openPositions.length > 0) {
+        const position = openPositions[0]!;
+        const positionPubkey = position.accountRef;
+        const currentRoePercent = calculatePerpsPositionRoePercent(position);
+        if (!positionPubkey || currentRoePercent === null) {
+          results.push(skip(
+            config,
+            asset,
+            "POSITION_PROFIT_LOCK_UNAVAILABLE",
+            "An agent-owned position is open, but Jupiter has not returned the live position reference and collateral ROE needed for its profit lock."
+          ));
+          continue;
+        }
+
+        const previousState = await deps.readProfitLockState(config.walletAddress);
+        const profitLock = evaluatePerpsProfitLock({
+          positionPubkey,
+          currentRoePercent,
+          previousState,
+        });
+        await deps.writeProfitLockState(config.walletAddress, profitLock.state);
+
+        if (profitLock.action === "close") {
+          const closed = await deps.closePosition(config.walletAddress, position);
+          await deps.writeProfitLockState(config.walletAddress, {
+            ...profitLock.state,
+            closeTxid: closed.txid,
+            closeSubmittedAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          results.push({
+            walletAddress: config.walletAddress,
+            asset,
+            status: "executed",
+            code: "PROFIT_LOCK_CLOSE_SUBMITTED",
+            message: `Profit lock closed the position after ROE retreated to ${currentRoePercent.toFixed(2)}% from a ${profitLock.state.peakRoePercent.toFixed(2)}% peak. Close transaction: ${closed.txid}.`,
+          });
+          continue;
+        }
+
+        if (profitLock.action === "close-pending") {
+          results.push(skip(
+            config,
+            asset,
+            "PROFIT_LOCK_CLOSE_PENDING",
+            `A profit-lock close is already pending for this position after its ${profitLock.state.peakRoePercent.toFixed(2)}% peak.`
+          ));
+          continue;
+        }
+
+        results.push(skip(
+          config,
+          asset,
+          profitLock.action === "armed" ? "POSITION_PROFIT_LOCK_ARMED" : "POSITION_ALREADY_OPEN",
+          profitLock.action === "armed"
+            ? `Profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches 20% or lower.`
+            : `An agent-owned Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The profit lock arms at 25%.`
+        ));
+        continue;
+      }
+      await deps.clearProfitLockState(config.walletAddress);
       await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       if (config.settings.perpsExecutionMode === "smart-trades" && config.settings.decisionMode === "active") {
         // This initializes/migrates the researched baseline, immediately consumes newly closed
@@ -372,11 +485,6 @@ export async function runAutonomousPerpsMonitor(
         : null;
       const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
       const points = await deps.fetchCandles(`${asset}-USD`, Math.max(60, effectiveParams.trendWindow + 35));
-      const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
-      if (openPositions.length > 0) {
-        results.push(skip(config, asset, "POSITION_ALREADY_OPEN", "An agent-owned Perps position is already open."));
-        continue;
-      }
       await deps.reconcileNoOpenPosition(config.walletAddress);
       if (availableUsdc === null || availableUsdc <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The autonomous wallet has no available USDC collateral."));

@@ -4,6 +4,14 @@ import test from "node:test";
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
 import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
+import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
+import {
+  calculatePerpsPositionRoePercent,
+  evaluatePerpsProfitLock,
+  PROFIT_LOCK_ARM_ROE_PERCENT,
+  PROFIT_LOCK_EXIT_ROE_PERCENT,
+  type PerpsProfitLockState,
+} from "../lib/perps/profitLock";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
 
 type RouteSignal = typeof import("../lib/perps/tradingAgent").routePerpsSignalForUser;
@@ -298,6 +306,39 @@ function createSession(): PerpsAutomationSession {
   };
 }
 
+function createOpenPosition(roePercent: number): JupiterPerpsPosition {
+  return {
+    id: "live-position-sol",
+    source: "live-api",
+    platformId: "jupiter-exchange",
+    marketSymbol: "SOL",
+    marketName: "Solana Perps",
+    marketAddress: "market",
+    custodyAddress: "custody",
+    collateralCustodyAddress: "collateral-custody",
+    collateralSymbol: "USDC",
+    imageUri: null,
+    side: "long",
+    entryPrice: 100,
+    markPrice: 102,
+    positionSize: 2,
+    positionValue: 204,
+    collateralValue: 100,
+    leverage: 2,
+    unrealizedPnl: roePercent,
+    realizedPnl: null,
+    liquidationPrice: 60,
+    fundingSnapshot: null,
+    borrowSnapshot: null,
+    takeProfit: 115,
+    stopLoss: 90,
+    markPriceIsLive: true,
+    liquidationPriceIsEstimated: false,
+    accountRef: "position-pubkey",
+    lastUpdated: Date.now(),
+  };
+}
+
 function createLearningProfile(): DecisionLearningProfile {
   const now = new Date().toISOString();
   return {
@@ -342,6 +383,64 @@ function createLearningProfile(): DecisionLearningProfile {
     summary: "Test profile",
   };
 }
+
+test("profit lock arms at 25% ROE and closes on a retreat to 20%", () => {
+  assert.equal(PROFIT_LOCK_ARM_ROE_PERCENT, 25);
+  assert.equal(PROFIT_LOCK_EXIT_ROE_PERCENT, 20);
+  assert.equal(calculatePerpsPositionRoePercent(createOpenPosition(25)), 25);
+
+  const armed = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 25,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(armed.action, "armed");
+  assert.equal(armed.state.peakRoePercent, 25);
+
+  const retreat = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 20,
+    previousState: armed.state,
+    now: 2_000,
+  });
+  assert.equal(retreat.action, "close");
+  assert.equal(retreat.state.peakRoePercent, 25);
+});
+
+test("profit lock does not close at 20% unless the same position first reached 25%", () => {
+  const evaluation = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 20,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(evaluation.action, "track");
+  assert.equal(evaluation.state.armedAt, null);
+});
+
+test("a submitted profit-lock close is not duplicated while it is pending", () => {
+  const previousState: PerpsProfitLockState = {
+    positionPubkey: "position-pubkey",
+    peakRoePercent: 30,
+    armedAt: 1_000,
+    closeTxid: "close-tx",
+    closeSubmittedAt: 2_000,
+    updatedAt: 2_000,
+  };
+  assert.equal(evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 18,
+    previousState,
+    now: 60_000,
+  }).action, "close-pending");
+  assert.equal(evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 18,
+    previousState,
+    now: 130_000,
+  }).action, "close");
+});
 
 test("server monitor routes a qualifying signal while the app is closed", async () => {
   let routedSignal: PerpsAgentSignal | null = null;
@@ -488,12 +587,13 @@ test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", asyn
 
 test("server monitor fails closed when an agent position is already open", async () => {
   let routeCalls = 0;
+  let profitLockState: PerpsProfitLockState | null = null;
   const result = await runAutonomousPerpsMonitor({
     listConfigs: async () => [createConfig()],
     listSessions: async () => [createSession()],
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => [],
-    fetchSnapshot: (async () => ({ positions: [{ source: "live-api" }], pendingTriggers: [], recentTrades: [] })) as never,
+    fetchSnapshot: async () => ({ positions: [createOpenPosition(10)], pendingTriggers: [], recentTrades: [] }),
     getUsdcBalance: async () => 100,
     routeSignal: (async () => {
       routeCalls += 1;
@@ -502,12 +602,86 @@ test("server monitor fails closed when an agent position is already open", async
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
+    readProfitLockState: async () => profitLockState,
+    writeProfitLockState: async (_address, state) => {
+      profitLockState = state;
+    },
     readLastSignal: async () => null,
     writeLastSignal: async () => undefined,
   });
 
   assert.equal(routeCalls, 0);
   assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
+});
+
+test("server monitor closes an armed profitable position at 20% even with pending TP and SL", async () => {
+  let profitLockState: PerpsProfitLockState | null = null;
+  let closeCalls = 0;
+  const run = (roePercent: number) => runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: (async () => ({
+      positions: [createOpenPosition(roePercent)],
+      pendingTriggers: [
+        { kind: "take-profit", positionPubkey: "position-pubkey" },
+        { kind: "stop-loss", positionPubkey: "position-pubkey" },
+      ],
+      recentTrades: [],
+    })) as never,
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({ ok: true, message: "unexpected" })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    closePosition: async (_address, position) => {
+      closeCalls += 1;
+      assert.equal(position.accountRef, "position-pubkey");
+      return { txid: "profit-lock-close-tx" };
+    },
+    readProfitLockState: async () => profitLockState,
+    writeProfitLockState: async (_address, state) => {
+      profitLockState = state;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const armed = await run(27);
+  assert.equal(armed.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.equal(closeCalls, 0);
+
+  const closed = await run(20);
+  assert.equal(closed.results[0]?.status, "executed");
+  assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
+  assert.equal(closeCalls, 1);
+  assert.equal(profitLockState?.closeTxid, "profit-lock-close-tx");
+});
+
+test("server monitor clears stale profit-lock state after the position closes", async () => {
+  let clearCalls = 0;
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({ ok: true, message: "unexpected" })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    clearProfitLockState: async () => {
+      clearCalls += 1;
+    },
+    getLearningProfile: async () => null,
+    reconcileLearningHistory: async () => 0,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(clearCalls, 1);
 });
 
 test("set-parameter monitoring uses saved settings while still loading learning history", async () => {

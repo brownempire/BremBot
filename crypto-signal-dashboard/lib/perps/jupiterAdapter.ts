@@ -34,6 +34,7 @@ function usdToAtomicUsdcString(value: number) {
 }
 
 type PerpsTradingClient = Pick<typeof perps.trading, "increasePosition" | "createTpsl">;
+type PerpsCloseTradingClient = Pick<typeof perps.trading, "decreasePosition">;
 type PerpsPositionsClient = Pick<typeof perps.positions, "get">;
 
 function getAssetForMarket(market: string): Asset {
@@ -108,6 +109,24 @@ export async function buildPerpsTpslTransactionForSignal(
   const tpsl = getStandalonePositionTpsl(signal, livePosition, minimumNetProfitUsd);
   if (tpsl.length === 0) return null;
   return tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
+}
+
+export async function buildPerpsCloseTransaction(
+  positionPubkey: string,
+  receiveToken: InputToken = "USDC",
+  maxSlippageBps = "100",
+  tradingClient: PerpsCloseTradingClient = perps.trading
+) {
+  const response = await tradingClient.decreasePosition({
+    positionPubkey,
+    receiveToken,
+    maxSlippageBps,
+    entirePosition: true,
+  });
+  if (!response.serializedTxBase64) {
+    throw new PerpsExecutionError("MISSING_SERIALIZED_TX", "Jupiter Perps did not return a close transaction.", 502);
+  }
+  return response;
 }
 
 export async function executeSignedPerpsTransaction(action: TransactionAction, serializedTxBase64: string) {
