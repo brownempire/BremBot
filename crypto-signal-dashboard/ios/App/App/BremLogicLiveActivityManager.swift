@@ -6,6 +6,7 @@ import ActivityKit
 @available(iOS 16.2, *)
 actor BremLogicLiveActivityCoordinator {
     static let shared = BremLogicLiveActivityCoordinator()
+    private var scheduledRefreshTask: Task<Void, Never>?
 
     private func hasOpenPosition(_ snapshot: BremLogicWidgetSnapshot) -> Bool {
         let market = snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,8 +28,26 @@ actor BremLogicLiveActivityCoordinator {
     private func content(for snapshot: BremLogicWidgetSnapshot) -> ActivityContent<BremLogicTradeActivityAttributes.ContentState> {
         ActivityContent(
             state: BremLogicTradeActivityAttributes.ContentState(snapshot: snapshot),
-            staleDate: Date().addingTimeInterval(6 * 60)
+            staleDate: Date().addingTimeInterval(BremLogicOpenPositionRefreshInterval + 60)
         )
+    }
+
+    func startScheduledRefresh() {
+        guard scheduledRefreshTask == nil else { return }
+        scheduledRefreshTask = Task {
+            await refreshFromServer()
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(
+                        nanoseconds: UInt64(BremLogicOpenPositionRefreshInterval * 1_000_000_000)
+                    )
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await refreshFromServer()
+            }
+        }
     }
 
     func refreshFromServer() async {
@@ -86,6 +105,13 @@ actor BremLogicLiveActivityCoordinator {
 }
 
 enum BremLogicLiveActivityManager {
+    static func startScheduledRefresh() {
+        guard #available(iOS 16.2, *) else { return }
+        Task {
+            await BremLogicLiveActivityCoordinator.shared.startScheduledRefresh()
+        }
+    }
+
     static func refreshFromServer() {
         guard #available(iOS 16.2, *) else { return }
         Task {
@@ -102,6 +128,7 @@ enum BremLogicLiveActivityManager {
 }
 #else
 enum BremLogicLiveActivityManager {
+    static func startScheduledRefresh() {}
     static func refreshFromServer() {}
     static func reconcile(with snapshot: BremLogicWidgetSnapshot) {}
 }

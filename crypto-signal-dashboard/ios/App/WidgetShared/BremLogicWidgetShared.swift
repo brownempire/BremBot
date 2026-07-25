@@ -8,6 +8,7 @@ let BremLogicWidgetAppGroup = "group.com.bremlogic.signalsbot.shared"
 let BremLogicWidgetSnapshotDefaultsKey = "bremlogic.widget.snapshot.v1"
 let BremLogicWidgetRefreshAttemptDefaultsKey = "bremlogic.widget.refresh-attempt.v1"
 let BremLogicWidgetServerURL = URL(string: "https://app.bremlogic.com/api/widget/summary")!
+let BremLogicOpenPositionRefreshInterval: TimeInterval = 5 * 60
 
 struct BremLogicWidgetCandle: Codable, Identifiable {
     var timestamp: Double
@@ -103,6 +104,7 @@ struct BremLogicTradeActivityAttributes: ActivityAttributes {
         var strategy: String
         var pnlUsd: Double?
         var pnlPercent: Double?
+        var entryPrice: Double?
         var markPrice: Double?
         var takeProfitPrice: Double?
         var stopLossPrice: Double?
@@ -134,6 +136,7 @@ extension BremLogicTradeActivityAttributes.ContentState {
             strategy: strategy?.isEmpty == false ? strategy! : "PERPS",
             pnlUsd: snapshot.openPerpPnlUsd,
             pnlPercent: snapshot.openPerpPnlPercent,
+            entryPrice: snapshot.openPerpEntryPrice,
             markPrice: snapshot.openPerpMarkPrice,
             takeProfitPrice: snapshot.openPerpTakeProfitPrice,
             stopLossPrice: snapshot.openPerpStopLossPrice,

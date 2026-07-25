@@ -24,7 +24,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
-        BremLogicLiveActivityManager.refreshFromServer()
+        BremLogicLiveActivityManager.startScheduledRefresh()
     }
 
     private func handleURLContexts(_ contexts: Set<UIOpenURLContext>) {

@@ -16,7 +16,7 @@ struct BremLogicWidgetProvider: TimelineProvider {
         let hasOpenPerp = market?.isEmpty == false
             || snapshot.openPerpPositionValueUsd != nil
             || snapshot.openPerpPnlUsd != nil
-        return hasOpenPerp ? 5 * 60 : 15 * 60
+        return hasOpenPerp ? BremLogicOpenPositionRefreshInterval : 15 * 60
     }
 
     func placeholder(in context: Context) -> BremLogicWidgetEntry {
@@ -864,6 +864,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
             }
 
             HStack(spacing: 8) {
+                metric("ENTRY", price(state.entryPrice), color: .white)
                 metric("MARK", price(state.markPrice), color: mark)
                 metric("TAKE PROFIT", price(state.takeProfitPrice), color: positive)
                 metric("STOP LOSS", price(state.stopLossPrice), color: negative)
@@ -882,14 +883,11 @@ struct BremLogicTradeLiveActivityWidget: Widget {
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(state.strategy)
-                            .font(.caption2.bold())
-                            .foregroundStyle(positive)
-                        Text(state.positionLabel)
-                            .font(.headline)
-                            .lineLimit(1)
-                    }
+                    Text(state.market)
+                        .font(.caption2.bold())
+                        .foregroundStyle(positive)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 1) {
@@ -902,11 +900,28 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 8) {
-                        metric("MARK", price(state.markPrice), color: mark)
-                        metric("TP", price(state.takeProfitPrice), color: positive)
-                        metric("SL", price(state.stopLossPrice), color: negative)
+                    VStack(spacing: 7) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(state.positionLabel)
+                                .font(.system(size: 16, weight: .heavy, design: .rounded))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                            Spacer(minLength: 4)
+                            Text(state.strategy)
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .foregroundStyle(positive)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.72)
+                        }
+
+                        HStack(spacing: 4) {
+                            metric("ENTRY", price(state.entryPrice), color: .white)
+                            metric("MARK", price(state.markPrice), color: mark)
+                            metric("TP", price(state.takeProfitPrice), color: positive)
+                            metric("SL", price(state.stopLossPrice), color: negative)
+                        }
                     }
+                    .padding(.horizontal, 4)
                 }
             } compactLeading: {
                 Text(state.market)

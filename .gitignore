@@ -16,6 +16,7 @@ out/
 dist/
 coverage/
 *.tsbuildinfo
+.build/
 
 # Logs
 *.log
