@@ -8,6 +8,7 @@ actor BremLogicLiveActivityCoordinator {
     static let shared = BremLogicLiveActivityCoordinator()
     private var scheduledRefreshTask: Task<Void, Never>?
     private var pushTokenTasks: [String: Task<Void, Never>] = [:]
+    private var localOnlyActivityIDs: Set<String> = []
 
     private func hasOpenPosition(_ snapshot: BremLogicWidgetSnapshot) -> Bool {
         let market = snapshot.openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,6 +72,7 @@ actor BremLogicLiveActivityCoordinator {
     private func stopObservingPushTokens(for activity: Activity<BremLogicTradeActivityAttributes>) {
         pushTokenTasks[activity.id]?.cancel()
         pushTokenTasks[activity.id] = nil
+        localOnlyActivityIDs.remove(activity.id)
     }
 
     func startScheduledRefresh() {
@@ -130,13 +132,17 @@ actor BremLogicLiveActivityCoordinator {
         }
 
         if let matchingActivity {
-            if matchingActivity.pushToken == nil, pushTokenTasks[matchingActivity.id] == nil {
+            if matchingActivity.pushToken == nil,
+               pushTokenTasks[matchingActivity.id] == nil,
+               !localOnlyActivityIDs.contains(matchingActivity.id) {
                 await matchingActivity.end(nil, dismissalPolicy: .immediate)
                 stopObservingPushTokens(for: matchingActivity)
                 await createActivity(key: key, content: nextContent)
                 return
             }
-            observePushTokens(for: matchingActivity)
+            if !localOnlyActivityIDs.contains(matchingActivity.id) {
+                observePushTokens(for: matchingActivity)
+            }
             await matchingActivity.update(nextContent)
             return
         }
@@ -156,8 +162,17 @@ actor BremLogicLiveActivityCoordinator {
             )
             observePushTokens(for: activity)
         } catch {
-            // Live Activities are optional. Widget sync must remain functional
-            // when the user disables them or the system declines a request.
+            do {
+                let localActivity = try Activity<BremLogicTradeActivityAttributes>.request(
+                    attributes: BremLogicTradeActivityAttributes(positionKey: key),
+                    content: content,
+                    pushType: nil
+                )
+                localOnlyActivityIDs.insert(localActivity.id)
+            } catch {
+                // Live Activities are optional. Widget sync must remain
+                // functional when the user disables them entirely.
+            }
         }
     }
 }

@@ -47,3 +47,10 @@ test("iPhone Live Activities request and register ActivityKit push tokens", () =
   assert.match(managerSource, /"positionKey": positionKey/);
   assert.match(managerSource, /URLSession\.shared\.data\(for: request\)/);
 });
+
+test("free Apple signing falls back to a local-only Live Activity", () => {
+  assert.match(managerSource, /private var localOnlyActivityIDs: Set<String>/);
+  assert.match(managerSource, /pushType: \.token[\s\S]*catch \{[\s\S]*pushType: nil/);
+  assert.match(managerSource, /localOnlyActivityIDs\.insert\(localActivity\.id\)/);
+  assert.match(managerSource, /!localOnlyActivityIDs\.contains\(matchingActivity\.id\)/);
+});
