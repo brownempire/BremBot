@@ -491,18 +491,29 @@ function NewPerpComposer({
 function PositionMetric({
   label,
   value,
+  secondaryValue,
   positive,
   negative,
 }: {
   label: string;
   value: string;
+  secondaryValue?: string | null;
   positive?: boolean;
   negative?: boolean;
 }) {
+  const toneClass = positive ? "pnl-positive" : negative ? "pnl-negative" : undefined;
+
   return (
     <div className="perps-metric">
       <span>{label}</span>
-      <strong className={positive ? "pnl-positive" : negative ? "pnl-negative" : undefined}>{value}</strong>
+      {secondaryValue ? (
+        <div className={`perps-metric-value-row${toneClass ? ` ${toneClass}` : ""}`}>
+          <strong>{value}</strong>
+          <small className="perps-metric-value-secondary">{secondaryValue}</small>
+        </div>
+      ) : (
+        <strong className={toneClass}>{value}</strong>
+      )}
     </div>
   );
 }
@@ -699,6 +710,18 @@ function PositionCard({
   const pnlValue = position.unrealizedPnl;
   const isPositive = typeof pnlValue === "number" && pnlValue > 0;
   const isNegative = typeof pnlValue === "number" && pnlValue < 0;
+  const pnlPercent = (
+    typeof pnlValue === "number"
+    && Number.isFinite(pnlValue)
+    && typeof position.collateralValue === "number"
+    && Number.isFinite(position.collateralValue)
+    && position.collateralValue > 0
+  )
+    ? (pnlValue / position.collateralValue) * 100
+    : null;
+  const pnlPercentLabel = pnlPercent === null
+    ? null
+    : `(${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%)`;
   const closePubkey = position.accountRef;
   const showCloseButton = position.source !== "mock";
   const canClose = writeEnabled && typeof closePubkey === "string" && closePubkey.length > 0;
@@ -779,6 +802,7 @@ function PositionCard({
         <PositionMetric
           label="Unrealized PnL"
           value={position.unrealizedPnl === null ? "-" : formatUsd(position.unrealizedPnl)}
+          secondaryValue={pnlPercentLabel}
           positive={isPositive}
           negative={isNegative}
         />
