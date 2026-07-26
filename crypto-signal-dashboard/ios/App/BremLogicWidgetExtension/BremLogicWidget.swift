@@ -842,6 +842,28 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     }
 
     @ViewBuilder
+    private var activityBrand: some View {
+        if let image = UIImage(named: "BremLogicLogo")
+            ?? BremLogicWidgetAssetLoader.logoImage() {
+            Image(uiImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 82, height: 22, alignment: .leading)
+        } else {
+            Text("BremLogic")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(positive)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
+    private func strategyLabel(_ value: String) -> String {
+        value.uppercased()
+    }
+
+    @ViewBuilder
     private func metric(_ label: String, _ value: String, color: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
@@ -860,16 +882,8 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     private func lockScreenView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
         let state = context.state
         VStack(spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("BREMLOGIC • \(state.strategy)")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(positive)
-                    Text(state.positionLabel)
-                        .font(.system(size: 22, weight: .heavy, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
+            HStack(alignment: .center) {
+                activityBrand
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(signedUsd(state.pnlUsd))
@@ -879,6 +893,19 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(pnlColor(state))
                 }
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(state.positionLabel)
+                    .font(.system(size: 22, weight: .heavy, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(strategyLabel(state.strategy))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(positive)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 0)
             }
 
             HStack(spacing: 8) {
@@ -921,6 +948,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .multilineTextAlignment(.trailing)
+                    .padding(.trailing, 12)
                 }
                 .contentMargins(.trailing, 27)
                 DynamicIslandExpandedRegion(.bottom) {
@@ -931,7 +959,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
                             Spacer(minLength: 4)
-                            Text(state.strategy)
+                            Text(strategyLabel(state.strategy))
                                 .font(.system(size: 10, weight: .bold, design: .rounded))
                                 .foregroundStyle(positive)
                                 .lineLimit(1)

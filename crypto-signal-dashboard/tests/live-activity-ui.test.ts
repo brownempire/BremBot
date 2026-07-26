@@ -38,9 +38,16 @@ test("expanded Dynamic Island content respects the curved safe edges", () => {
   assert.match(widgetSource, /private var islandBrand[\s\S]*Text\("BremLogic"\)/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.leading\)[\s\S]*islandBrand/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.leading\)[\s\S]*\.contentMargins\(\.leading, 27\)/);
-  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.trailing\)[\s\S]*\.frame\(maxWidth: \.infinity, alignment: \.trailing\)[\s\S]*\.contentMargins\(\.trailing, 27\)/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.trailing\)[\s\S]*\.frame\(maxWidth: \.infinity, alignment: \.trailing\)[\s\S]*\.padding\(\.trailing, 12\)[\s\S]*\.contentMargins\(\.trailing, 27\)/);
   assert.match(widgetSource, /Text\(signedUsd\(state\.pnlUsd\)\)[\s\S]*\.monospacedDigit\(\)[\s\S]*Text\(percent\(state\.pnlPercent\)\)[\s\S]*\.monospacedDigit\(\)/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*\.padding\(\.horizontal, 12\)/);
+});
+
+test("Lock Screen Live Activity uses the logo and keeps strategy beside the position", () => {
+  assert.match(widgetSource, /private var activityBrand[\s\S]*Image\(uiImage: image\)[\s\S]*frame\(width: 82, height: 22/);
+  assert.doesNotMatch(widgetSource, /Text\("BREMLOGIC •/);
+  assert.match(widgetSource, /HStack\(alignment: \.firstTextBaseline, spacing: 8\)[\s\S]*Text\(state\.positionLabel\)[\s\S]*Text\(strategyLabel\(state\.strategy\)\)/);
+  assert.match(widgetSource, /private func strategyLabel\(_ value: String\) -> String \{\s*value\.uppercased\(\)\s*\}/);
 });
 
 test("Live Activity refresh cadence shares the open-position widget interval", () => {
