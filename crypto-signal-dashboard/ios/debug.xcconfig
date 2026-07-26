@@ -1,4 +1,6 @@
 CAPACITOR_DEBUG = true
-// Personal Team-safe Debug entitlements. This omits Push + App Groups so Xcode can sign locally.
+// Personal Team-safe Debug entitlements. WatchConnectivity updates the local
+// Live Activity without Push Notifications or App Groups, which Apple rejects
+// for Personal Team provisioning. Release retains the full entitlements.
 APP_ENTITLEMENTS = App/BremLogicDebug.entitlements
 WIDGET_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtensionDebug.entitlements

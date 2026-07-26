@@ -1,6 +1,78 @@
 import SwiftUI
 import ImageIO
 import WidgetKit
+#if canImport(WatchConnectivity)
+import WatchConnectivity
+#endif
+
+#if canImport(WatchConnectivity)
+final class BremLogicWatchConnectivityRelay: NSObject, WCSessionDelegate {
+    static let shared = BremLogicWatchConnectivityRelay()
+    private let stateQueue = DispatchQueue(label: "com.bremlogic.watch-connectivity")
+    private var pendingPayload: [String: Any]?
+
+    private override init() {
+        super.init()
+    }
+
+    func activate() {
+        stateQueue.async {
+            self.activateSessionIfNeeded()
+        }
+    }
+
+    func sendRefresh(snapshotTimestamp: Double) {
+        guard snapshotTimestamp.isFinite else { return }
+        let payload: [String: Any] = [
+            "bremLogicSnapshotUpdatedAt": snapshotTimestamp,
+            "bremLogicWatchRefresh": true,
+        ]
+
+        stateQueue.async {
+            self.pendingPayload = payload
+            self.activateSessionIfNeeded()
+            self.deliverPendingPayloadIfPossible()
+        }
+    }
+
+    private func activateSessionIfNeeded() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        session.delegate = self
+        if session.activationState != .activated {
+            session.activate()
+        }
+    }
+
+    private func deliverPendingPayloadIfPossible() {
+        let session = WCSession.default
+        guard session.activationState == .activated,
+              let payload = pendingPayload
+        else {
+            return
+        }
+
+        // Application context preserves the newest refresh for background
+        // delivery. The message path gives an immediate update when reachable.
+        try? session.updateApplicationContext(payload)
+        if session.isReachable {
+            session.sendMessage(payload, replyHandler: nil, errorHandler: nil)
+        }
+        pendingPayload = nil
+    }
+
+    func session(
+        _ session: WCSession,
+        activationDidCompleteWith activationState: WCSessionActivationState,
+        error: Error?
+    ) {
+        guard activationState == .activated else { return }
+        stateQueue.async {
+            self.deliverPendingPayloadIfPossible()
+        }
+    }
+}
+#endif
 
 private struct BremLogicOfficialLogo: View {
     let width: CGFloat
@@ -347,6 +419,11 @@ struct BremLogicWatchContentView: View {
         } else if let next = try? await BremLogicWatchServerClient.fetch() {
             snapshot = next
             reloadComplications()
+#if canImport(WatchConnectivity)
+            BremLogicWatchConnectivityRelay.shared.sendRefresh(
+                snapshotTimestamp: next.updatedAt
+            )
+#endif
         }
         isLoading = false
     }

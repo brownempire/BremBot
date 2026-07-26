@@ -19,6 +19,22 @@ const sceneSource = fs.readFileSync(
   path.join(process.cwd(), "ios/App/App/SceneDelegate.swift"),
   "utf8"
 );
+const appDelegateSource = fs.readFileSync(
+  path.join(process.cwd(), "ios/App/App/AppDelegate.swift"),
+  "utf8"
+);
+const watchAppSource = fs.readFileSync(
+  path.join(process.cwd(), "ios/App/BremLogicWatchApp/BremLogicWatchContentView.swift"),
+  "utf8"
+);
+const debugEntitlementsSource = fs.readFileSync(
+  path.join(process.cwd(), "ios/App/App/BremLogicDebug.entitlements"),
+  "utf8"
+);
+const releaseEntitlementsSource = fs.readFileSync(
+  path.join(process.cwd(), "ios/App/App/BremLogic.entitlements"),
+  "utf8"
+);
 
 test("Live Activity state carries the actual open-position entry price", () => {
   assert.match(sharedSource, /var entryPrice: Double\?/);
@@ -81,6 +97,25 @@ test("iPhone Live Activities request and register ActivityKit push tokens", () =
   assert.match(managerSource, /activity\.pushTokenUpdates/);
   assert.match(managerSource, /"positionKey": positionKey/);
   assert.match(managerSource, /URLSession\.shared\.data\(for: request\)/);
+});
+
+test("Watch refreshes wake the iPhone Live Activity coordinator", () => {
+  assert.match(watchAppSource, /import WatchConnectivity/);
+  assert.match(watchAppSource, /updateApplicationContext\(payload\)/);
+  assert.match(watchAppSource, /session\.sendMessage\(payload/);
+  assert.match(watchAppSource, /sendRefresh\(\s*snapshotTimestamp: next\.updatedAt/);
+  assert.match(managerSource, /BremLogicWatchConnectivityReceiver/);
+  assert.match(managerSource, /didReceiveApplicationContext/);
+  assert.match(managerSource, /didReceiveMessage message/);
+  assert.match(managerSource, /BremLogicLiveActivityCoordinator\.shared\.refreshFromServer\(\)/);
+  assert.match(appDelegateSource, /startWatchConnectivityRelay\(\)/);
+});
+
+test("signing preserves Personal Team installs and paid-team remote pushes", () => {
+  assert.match(debugEntitlementsSource, /<dict\/>/);
+  assert.match(releaseEntitlementsSource, /<key>aps-environment<\/key>\s*<string>development<\/string>/);
+  assert.match(releaseEntitlementsSource, /<key>com\.apple\.security\.application-groups<\/key>/);
+  assert.match(releaseEntitlementsSource, /group\.com\.bremlogic\.signalsbot\.shared/);
 });
 
 test("free Apple signing falls back to a local-only Live Activity", () => {

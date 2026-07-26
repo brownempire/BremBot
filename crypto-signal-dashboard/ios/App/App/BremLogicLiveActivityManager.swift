@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(WatchConnectivity)
+import WatchConnectivity
+#endif
+
 #if canImport(ActivityKit)
 import ActivityKit
 
@@ -177,7 +181,86 @@ actor BremLogicLiveActivityCoordinator {
     }
 }
 
+#if canImport(WatchConnectivity)
+@available(iOS 16.2, *)
+private actor BremLogicWatchRelayHandler {
+    static let shared = BremLogicWatchRelayHandler()
+    private var newestHandledSnapshotTimestamp: Double = 0
+
+    func handle(snapshotTimestamp: Double) async {
+        guard snapshotTimestamp.isFinite,
+              snapshotTimestamp > newestHandledSnapshotTimestamp
+        else {
+            return
+        }
+
+        newestHandledSnapshotTimestamp = snapshotTimestamp
+        await BremLogicLiveActivityCoordinator.shared.refreshFromServer()
+    }
+}
+
+private final class BremLogicWatchConnectivityReceiver: NSObject, WCSessionDelegate {
+    static let shared = BremLogicWatchConnectivityReceiver()
+
+    private override init() {
+        super.init()
+    }
+
+    func activate() {
+        guard WCSession.isSupported() else { return }
+        let session = WCSession.default
+        session.delegate = self
+        if session.activationState != .activated {
+            session.activate()
+        }
+    }
+
+    private func receive(_ payload: [String: Any]) {
+        guard #available(iOS 16.2, *),
+              let value = payload["bremLogicSnapshotUpdatedAt"] as? NSNumber
+        else {
+            return
+        }
+
+        Task {
+            await BremLogicWatchRelayHandler.shared.handle(
+                snapshotTimestamp: value.doubleValue
+            )
+        }
+    }
+
+    func session(
+        _ session: WCSession,
+        activationDidCompleteWith activationState: WCSessionActivationState,
+        error: Error?
+    ) {}
+
+    func sessionDidBecomeInactive(_ session: WCSession) {}
+
+    func sessionDidDeactivate(_ session: WCSession) {
+        session.activate()
+    }
+
+    func session(
+        _ session: WCSession,
+        didReceiveApplicationContext applicationContext: [String: Any]
+    ) {
+        receive(applicationContext)
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        receive(message)
+    }
+}
+#endif
+
 enum BremLogicLiveActivityManager {
+    static func startWatchConnectivityRelay() {
+#if canImport(WatchConnectivity)
+        BremLogicWatchConnectivityReceiver.shared.activate()
+#endif
+    }
+
     static func startScheduledRefresh() {
         guard #available(iOS 16.2, *) else { return }
         Task {
@@ -201,6 +284,7 @@ enum BremLogicLiveActivityManager {
 }
 #else
 enum BremLogicLiveActivityManager {
+    static func startWatchConnectivityRelay() {}
     static func startScheduledRefresh() {}
     static func refreshFromServer() {}
     static func reconcile(with snapshot: BremLogicWidgetSnapshot) {}
