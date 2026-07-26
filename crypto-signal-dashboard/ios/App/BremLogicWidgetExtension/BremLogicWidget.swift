@@ -831,7 +831,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()
-                .frame(width: 64, height: 14, alignment: .leading)
+                .frame(width: 68, height: 17, alignment: .leading)
         } else {
             Text("BremLogic")
                 .font(.system(size: 9, weight: .bold, design: .rounded))
@@ -903,18 +903,26 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                 DynamicIslandExpandedRegion(.leading) {
                     islandBrand
                 }
-                .contentMargins(.leading, 16)
+                .contentMargins(.leading, 27)
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(signedUsd(state.pnlUsd))
                             .font(.headline)
                             .foregroundStyle(pnlColor(state))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .monospacedDigit()
                         Text(percent(state.pnlPercent))
                             .font(.caption2.bold())
                             .foregroundStyle(pnlColor(state))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .monospacedDigit()
                     }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .multilineTextAlignment(.trailing)
                 }
-                .contentMargins(.trailing, 16)
+                .contentMargins(.trailing, 27)
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 7) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
