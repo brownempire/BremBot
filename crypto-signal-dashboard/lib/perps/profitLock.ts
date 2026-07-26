@@ -1,7 +1,7 @@
 import type { JupiterPerpsPosition } from "@/lib/jupiterPerps";
 
-export const PROFIT_LOCK_ARM_ROE_PERCENT = 25;
-export const PROFIT_LOCK_EXIT_ROE_PERCENT = 20;
+export const PROFIT_LOCK_ARM_ROE_PERCENT = 20;
+export const PROFIT_LOCK_EXIT_ROE_PERCENT = 15;
 export const PROFIT_LOCK_CLOSE_RETRY_MS = 2 * 60_000;
 
 export type PerpsProfitLockState = {

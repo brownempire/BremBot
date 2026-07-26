@@ -490,39 +490,76 @@ function createLearningProfile(): DecisionLearningProfile {
   };
 }
 
-test("profit lock arms at 25% ROE and closes on a retreat to 20%", () => {
-  assert.equal(PROFIT_LOCK_ARM_ROE_PERCENT, 25);
-  assert.equal(PROFIT_LOCK_EXIT_ROE_PERCENT, 20);
-  assert.equal(calculatePerpsPositionRoePercent(createOpenPosition(25)), 25);
+test("profit lock arms at 20% ROE and closes on a retreat to 15%", () => {
+  assert.equal(PROFIT_LOCK_ARM_ROE_PERCENT, 20);
+  assert.equal(PROFIT_LOCK_EXIT_ROE_PERCENT, 15);
+  assert.equal(calculatePerpsPositionRoePercent(createOpenPosition(20)), 20);
 
   const armed = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 25,
+    currentRoePercent: 20,
     previousState: null,
     now: 1_000,
   });
   assert.equal(armed.action, "armed");
-  assert.equal(armed.state.peakRoePercent, 25);
+  assert.equal(armed.state.peakRoePercent, 20);
 
   const retreat = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 20,
+    currentRoePercent: 15,
     previousState: armed.state,
     now: 2_000,
   });
   assert.equal(retreat.action, "close");
-  assert.equal(retreat.state.peakRoePercent, 25);
+  assert.equal(retreat.state.peakRoePercent, 20);
 });
 
-test("profit lock does not close at 20% unless the same position first reached 25%", () => {
+test("profit lock does not close at 15% unless the same position first reached 20%", () => {
   const evaluation = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 20,
+    currentRoePercent: 15,
     previousState: null,
     now: 1_000,
   });
   assert.equal(evaluation.action, "track");
   assert.equal(evaluation.state.armedAt, null);
+});
+
+test("the new threshold arms a current position from its Redis-tracked 20% peak", () => {
+  const evaluation = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 17,
+    previousState: {
+      positionPubkey: "position-pubkey",
+      peakRoePercent: 21,
+      armedAt: null,
+      closeTxid: null,
+      closeSubmittedAt: null,
+      updatedAt: 1_000,
+    },
+    now: 2_000,
+  });
+  assert.equal(evaluation.action, "armed");
+  assert.equal(evaluation.state.armedAt, 2_000);
+  assert.equal(evaluation.state.peakRoePercent, 21);
+});
+
+test("the new threshold immediately closes a current position below 15% after a Redis-tracked 20% peak", () => {
+  const evaluation = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 14,
+    previousState: {
+      positionPubkey: "position-pubkey",
+      peakRoePercent: 21,
+      armedAt: null,
+      closeTxid: null,
+      closeSubmittedAt: null,
+      updatedAt: 1_000,
+    },
+    now: 2_000,
+  });
+  assert.equal(evaluation.action, "close");
+  assert.equal(evaluation.state.armedAt, 2_000);
 });
 
 test("a submitted profit-lock close is not duplicated while it is pending", () => {
@@ -536,13 +573,13 @@ test("a submitted profit-lock close is not duplicated while it is pending", () =
   };
   assert.equal(evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 18,
+    currentRoePercent: 14,
     previousState,
     now: 60_000,
   }).action, "close-pending");
   assert.equal(evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 18,
+    currentRoePercent: 14,
     previousState,
     now: 130_000,
   }).action, "close");
@@ -720,7 +757,7 @@ test("server monitor fails closed when an agent position is already open", async
   assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
 });
 
-test("server monitor closes an armed profitable position at 20% even with pending TP and SL", async () => {
+test("server monitor closes an armed profitable position at 15% even with pending TP and SL", async () => {
   let profitLockState: PerpsProfitLockState | null = null;
   let closeCalls = 0;
   const run = (roePercent: number) => runAutonomousPerpsMonitor({
@@ -754,11 +791,11 @@ test("server monitor closes an armed profitable position at 20% even with pendin
     writeLastSignal: async () => undefined,
   });
 
-  const armed = await run(27);
+  const armed = await run(22);
   assert.equal(armed.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
   assert.equal(closeCalls, 0);
 
-  const closed = await run(20);
+  const closed = await run(15);
   assert.equal(closed.results[0]?.status, "executed");
   assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
   assert.equal(closeCalls, 1);
