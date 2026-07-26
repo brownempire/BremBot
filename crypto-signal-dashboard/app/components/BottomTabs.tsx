@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { scrollAppToTop } from "@/lib/navigation/appScroll";
 
 const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
 const AI_PANEL_TOGGLE_EVENT = "bremlogic:ai-panel-toggle";
@@ -219,7 +220,7 @@ export function BottomTabs() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
-    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    scrollAppToTop();
     if (pathname !== "/signals-bot") {
       router.push("/signals-bot?tab=signals&ai=open");
       return;

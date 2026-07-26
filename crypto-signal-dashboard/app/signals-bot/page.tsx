@@ -38,6 +38,7 @@ import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
 import { MAX_SIGNAL_HISTORY, normalizeSignalHistory, VISIBLE_SIGNAL_ROWS } from "@/lib/signal/history";
+import { scrollAppToTop } from "@/lib/navigation/appScroll";
 import { formatUsd } from "@/lib/utils";
 
 const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -1373,7 +1374,7 @@ function DashboardPage() {
     const syncActiveTabAtTop = () => {
       syncActiveTab();
       window.requestAnimationFrame(() => {
-        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        scrollAppToTop();
       });
     };
 
