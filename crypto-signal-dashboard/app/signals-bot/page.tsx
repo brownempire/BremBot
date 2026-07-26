@@ -1370,12 +1370,19 @@ function DashboardPage() {
       setActiveSignalsTab("signals");
     };
 
+    const syncActiveTabAtTop = () => {
+      syncActiveTab();
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      });
+    };
+
     syncActiveTab();
-    window.addEventListener("popstate", syncActiveTab);
-    window.addEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
+    window.addEventListener("popstate", syncActiveTabAtTop);
+    window.addEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTabAtTop);
     return () => {
-      window.removeEventListener("popstate", syncActiveTab);
-      window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTab);
+      window.removeEventListener("popstate", syncActiveTabAtTop);
+      window.removeEventListener(SIGNALS_BOT_TAB_EVENT, syncActiveTabAtTop);
     };
   }, [router]);
 

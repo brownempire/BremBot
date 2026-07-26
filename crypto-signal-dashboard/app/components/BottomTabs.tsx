@@ -219,6 +219,7 @@ export function BottomTabs() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     if (pathname !== "/signals-bot") {
       router.push("/signals-bot?tab=signals&ai=open");
       return;
