@@ -326,12 +326,18 @@ struct BremLogicWatchContentView: View {
             .padding(.bottom, 6)
         }
         .task {
-            BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: scenePhase == .active)
+            if scenePhase == .active {
+                BremLogicLaunchSoundPlayer.shared.handleEveryForegroundActivation(isActive: true)
+            }
             await runRefreshLoop()
         }
         .refreshable { await reload() }
         .onChange(of: scenePhase) { phase in
-            BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: phase == .active)
+            if phase == .active {
+                BremLogicLaunchSoundPlayer.shared.handleEveryForegroundActivation(isActive: true)
+            } else if phase == .background {
+                BremLogicLaunchSoundPlayer.shared.handleEveryForegroundActivation(isActive: false)
+            }
             guard phase == .active else { return }
             reloadComplications()
             Task { await reload() }

@@ -17,6 +17,14 @@ final class BremLogicLaunchSoundPlayer: NSObject, AVAudioPlayerDelegate {
         playLaunchSound(remainingAttempts: 2)
     }
 
+    func handleEveryForegroundActivation(isActive: Bool) {
+        let becameActive = isActive && !isForegroundActive
+        isForegroundActive = isActive
+        guard becameActive else { return }
+
+        playLaunchSound(remainingAttempts: 2)
+    }
+
     private func playLaunchSound(remainingAttempts: Int) {
         guard isForegroundActive, remainingAttempts > 0 else { return }
         guard let soundURL = Bundle.main.url(forResource: "brem_open", withExtension: "wav") else {

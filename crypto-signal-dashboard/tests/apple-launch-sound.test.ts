@@ -32,9 +32,19 @@ test("native launch playback retries during startup and retains the player", () 
   assert.match(playerSource, /asyncAfter\(deadline: \.now\(\) \+ 0\.35\)/);
 });
 
-test("watch app uses the same cold-launch sound without replaying ordinary resumes", () => {
-  assert.match(watchSource, /\.task \{[\s\S]*handleForegroundState\(isActive: scenePhase == \.active\)/);
-  assert.match(watchSource, /\.onChange\(of: scenePhase\)[\s\S]*handleForegroundState\(isActive: phase == \.active\)/);
+test("watch app sounds on every background-to-foreground activation", () => {
+  assert.match(playerSource, /func handleEveryForegroundActivation\(isActive: Bool\)/);
+  assert.match(playerSource, /let becameActive = isActive && !isForegroundActive/);
+  assert.match(playerSource, /guard becameActive else \{ return \}[\s\S]*playLaunchSound\(remainingAttempts: 2\)/);
+  assert.match(watchSource, /\.task \{[\s\S]*handleEveryForegroundActivation\(isActive: true\)/);
+  assert.match(
+    watchSource,
+    /\.onChange\(of: scenePhase\)[\s\S]*phase == \.active[\s\S]*handleEveryForegroundActivation\(isActive: true\)[\s\S]*phase == \.background[\s\S]*handleEveryForegroundActivation\(isActive: false\)/,
+  );
+  assert.doesNotMatch(
+    watchSource,
+    /phase == \.inactive[\s\S]*handleEveryForegroundActivation\(isActive: false\)/,
+  );
   assert.match(projectSource, /BremLogicLaunchSoundPlayer\.swift in iPhone Sources/);
   assert.match(projectSource, /BremLogicLaunchSoundPlayer\.swift in Watch App Sources/);
   assert.match(projectSource, /brem_open\.wav in Watch Resources/);
