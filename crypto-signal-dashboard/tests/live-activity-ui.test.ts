@@ -23,14 +23,31 @@ const sceneSource = fs.readFileSync(
 test("Live Activity state carries the actual open-position entry price", () => {
   assert.match(sharedSource, /var entryPrice: Double\?/);
   assert.match(sharedSource, /entryPrice: snapshot\.openPerpEntryPrice/);
+  assert.match(sharedSource, /var chartCandles: \[BremLogicWidgetCandle\]\?/);
+  assert.match(sharedSource, /suffix\(24\)/);
 });
 
-test("Lock Screen and expanded Island show Entry, Mark, TP, and SL", () => {
-  for (const label of ["ENTRY", "MARK", "TP", "SL"]) {
-    assert.match(widgetSource, new RegExp(`metric\\("${label}"`));
+test("Lock Screen and expanded Island charts show Entry, Mark, TP, and SL", () => {
+  for (const property of [
+    "entryPrice",
+    "markPrice",
+    "takeProfitPrice",
+    "stopLossPrice",
+  ]) {
+    assert.match(widgetSource, new RegExp(`${property}: state\\.${property}`));
   }
+  assert.match(widgetSource, /private func activityChart[\s\S]*BremLogicCandlestickChart/);
+  assert.match(widgetSource, /lockScreenView[\s\S]*activityChart\(state\)/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*Text\(state\.positionLabel\)/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*activityChart\(state\)/);
   assert.match(widgetSource, /\.padding\(\.horizontal, 12\)/);
+});
+
+test("Live Activity presentations consume the 160-point allowance without overflow", () => {
+  assert.match(widgetSource, /private let liveActivityMaximumHeight: CGFloat = 160/);
+  assert.match(widgetSource, /lockScreenView[\s\S]*\.frame\(height: liveActivityMaximumHeight\)[\s\S]*\.clipped\(\)/);
+  assert.match(widgetSource, /private let expandedIslandBottomHeight: CGFloat = 120/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*\.frame\(height: expandedIslandBottomHeight\)[\s\S]*\.clipped\(\)/);
 });
 
 test("expanded Dynamic Island content respects the curved safe edges", () => {

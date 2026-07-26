@@ -11,7 +11,7 @@ let BremLogicWidgetServerURL = URL(string: "https://app.bremlogic.com/api/widget
 let BremLogicLiveActivityRegistrationURL = URL(string: "https://app.bremlogic.com/api/push/live-activity/subscribe")!
 let BremLogicOpenPositionRefreshInterval: TimeInterval = 5 * 60
 
-struct BremLogicWidgetCandle: Codable, Identifiable {
+struct BremLogicWidgetCandle: Codable, Hashable, Identifiable {
     var timestamp: Double
     var open: Double
     var high: Double
@@ -109,6 +109,7 @@ struct BremLogicTradeActivityAttributes: ActivityAttributes {
         var markPrice: Double?
         var takeProfitPrice: Double?
         var stopLossPrice: Double?
+        var chartCandles: [BremLogicWidgetCandle]?
         var updatedAt: Double
         var targetURL: String
     }
@@ -141,6 +142,9 @@ extension BremLogicTradeActivityAttributes.ContentState {
             markPrice: snapshot.openPerpMarkPrice,
             takeProfitPrice: snapshot.openPerpTakeProfitPrice,
             stopLossPrice: snapshot.openPerpStopLossPrice,
+            chartCandles: snapshot.chartCandles.map {
+                Array($0.sorted { $0.timestamp < $1.timestamp }.suffix(24))
+            },
             updatedAt: snapshot.updatedAt,
             targetURL: snapshot.targetURL
         )

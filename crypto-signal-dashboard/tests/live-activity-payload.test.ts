@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   buildLiveActivityApnsRequest,
   buildLiveActivityContentState,
+  LIVE_ACTIVITY_CHART_CANDLE_LIMIT,
   liveActivityPositionKey,
 } from "../lib/push/liveActivitySender";
 import {
@@ -34,7 +35,13 @@ const snapshot: WidgetServerSnapshot = {
   openPerpTakeProfitPnlUsd: 5,
   openPerpStopLossPnlUsd: -4,
   chartSymbol: "SOL",
-  chartCandles: [],
+  chartCandles: Array.from({ length: 30 }, (_, index) => ({
+    timestamp: 1_784_999_000 + index * 60,
+    open: 75 + index * 0.01,
+    high: 75.05 + index * 0.01,
+    low: 74.95 + index * 0.01,
+    close: 75.02 + index * 0.01,
+  })),
   walletBalanceUsd: 30,
   mainWalletBalanceUsd: 100,
   agentWalletBalanceUsd: 30,
@@ -56,6 +63,8 @@ test("Live Activity state uses the actual position entry and protection prices",
   assert.equal(state.takeProfitPrice, 73.5);
   assert.equal(state.stopLossPrice, 76.4);
   assert.equal(state.pnlUsd, 4.25);
+  assert.equal(state.chartCandles.length, LIVE_ACTIVITY_CHART_CANDLE_LIMIT);
+  assert.equal(state.chartCandles[0]?.timestamp, snapshot.chartCandles[6]?.timestamp);
 });
 
 test("Live Activity APNs update has the required topic, timing, and content state", () => {
@@ -79,6 +88,10 @@ test("Live Activity APNs update has the required topic, timing, and content stat
   assert.equal(request.body.aps["stale-date"], now / 1_000 + 6 * 60);
   assert.deepEqual(request.body.aps["content-state"], state);
   assert.equal(request.body.aps.event, "update");
+  assert.ok(
+    Buffer.byteLength(JSON.stringify(request.body), "utf8") < 4_096,
+    "Live Activity APNs payload must remain below Apple's 4 KB limit"
+  );
 });
 
 test("Live Activity end payload dismisses an obsolete position", () => {

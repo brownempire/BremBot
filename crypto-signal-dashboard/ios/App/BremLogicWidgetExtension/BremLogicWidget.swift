@@ -801,7 +801,11 @@ struct BremLogicLockScreenWidgetEntryView: View {
 struct BremLogicTradeLiveActivityWidget: Widget {
     private let positive = Color(red: 0.38, green: 0.92, blue: 0.62)
     private let negative = Color(red: 1.0, green: 0.38, blue: 0.42)
-    private let mark = Color(red: 0.36, green: 0.68, blue: 0.98)
+    private let liveActivityMaximumHeight: CGFloat = 160
+    // The expanded Island reserves about 37 points for the TrueDepth row.
+    // A 120-point bottom region fills the remaining 160-point presentation
+    // allowance while retaining a small system-safe buffer.
+    private let expandedIslandBottomHeight: CGFloat = 120
 
     private func signedUsd(_ value: Double?) -> String {
         guard let value else { return "--" }
@@ -811,11 +815,6 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     private func percent(_ value: Double?) -> String {
         guard let value else { return "--" }
         return "\(value >= 0 ? "+" : "-")\(String(format: "%.1f", abs(value)))%"
-    }
-
-    private func price(_ value: Double?) -> String {
-        guard let value, value.isFinite, value > 0 else { return "--" }
-        return value >= 1_000 ? String(format: "$%.0f", value) : String(format: "$%.2f", value)
     }
 
     private func pnlColor(_ state: BremLogicTradeActivityAttributes.ContentState) -> Color {
@@ -864,24 +863,24 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     }
 
     @ViewBuilder
-    private func metric(_ label: String, _ value: String, color: Color = .primary) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .font(.system(size: 9, weight: .semibold, design: .rounded))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .foregroundStyle(color)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private func activityChart(
+        _ state: BremLogicTradeActivityAttributes.ContentState
+    ) -> some View {
+        BremLogicCandlestickChart(
+            candles: state.chartCandles ?? [],
+            symbol: state.market,
+            entryPrice: state.entryPrice,
+            markPrice: state.markPrice,
+            takeProfitPrice: state.takeProfitPrice,
+            stopLossPrice: state.stopLossPrice,
+            liquidationPrice: nil
+        )
     }
 
     @ViewBuilder
     private func lockScreenView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
         let state = context.state
-        VStack(spacing: 10) {
+        VStack(spacing: 5) {
             HStack(alignment: .center) {
                 activityBrand
                 Spacer()
@@ -908,14 +907,14 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: 8) {
-                metric("ENTRY", price(state.entryPrice), color: .white)
-                metric("MARK", price(state.markPrice), color: mark)
-                metric("TAKE PROFIT", price(state.takeProfitPrice), color: positive)
-                metric("STOP LOSS", price(state.stopLossPrice), color: negative)
-            }
+            activityChart(state)
+                .frame(maxHeight: .infinity)
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .frame(height: liveActivityMaximumHeight)
+        .clipped()
         .activityBackgroundTint(Color(red: 0.045, green: 0.06, blue: 0.095))
         .activitySystemActionForegroundColor(.white)
         .widgetURL(URL(string: state.targetURL))
@@ -952,7 +951,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                 }
                 .contentMargins(.trailing, 27)
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 7) {
+                    VStack(spacing: 5) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(state.positionLabel)
                                 .font(.system(size: 16, weight: .heavy, design: .rounded))
@@ -966,14 +965,13 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                                 .minimumScaleFactor(0.72)
                         }
 
-                        HStack(spacing: 4) {
-                            metric("ENTRY", price(state.entryPrice), color: .white)
-                            metric("MARK", price(state.markPrice), color: mark)
-                            metric("TP", price(state.takeProfitPrice), color: positive)
-                            metric("SL", price(state.stopLossPrice), color: negative)
-                        }
+                        activityChart(state)
+                            .frame(maxHeight: .infinity)
                     }
                     .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+                    .frame(height: expandedIslandBottomHeight)
+                    .clipped()
                 }
             } compactLeading: {
                 Text(state.market)

@@ -10,7 +10,12 @@ import {
   removeLiveActivityPushToken,
   type LiveActivityPushTokenRecord,
 } from "@/lib/push/liveActivityStore";
-import type { WidgetServerSnapshot } from "@/lib/widget/serverSnapshot";
+import type {
+  WidgetChartCandle,
+  WidgetServerSnapshot,
+} from "@/lib/widget/serverSnapshot";
+
+export const LIVE_ACTIVITY_CHART_CANDLE_LIMIT = 24;
 
 export type LiveActivityContentState = {
   positionLabel: string;
@@ -23,6 +28,7 @@ export type LiveActivityContentState = {
   markPrice: number | null;
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
+  chartCandles: WidgetChartCandle[];
   updatedAt: number;
   targetURL: string;
 };
@@ -34,6 +40,19 @@ function upperOrFallback(value: string | null | undefined, fallback: string) {
 
 function finiteOrNull(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function liveActivityChartCandles(candles: WidgetChartCandle[]) {
+  return candles
+    .filter((candle) => (
+      Number.isFinite(candle.timestamp)
+      && Number.isFinite(candle.open)
+      && Number.isFinite(candle.high)
+      && Number.isFinite(candle.low)
+      && Number.isFinite(candle.close)
+    ))
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-LIVE_ACTIVITY_CHART_CANDLE_LIMIT);
 }
 
 export function liveActivityPositionKey(snapshot: WidgetServerSnapshot) {
@@ -57,6 +76,7 @@ export function buildLiveActivityContentState(
     markPrice: finiteOrNull(snapshot.openPerpMarkPrice),
     takeProfitPrice: finiteOrNull(snapshot.openPerpTakeProfitPrice),
     stopLossPrice: finiteOrNull(snapshot.openPerpStopLossPrice),
+    chartCandles: liveActivityChartCandles(snapshot.chartCandles),
     updatedAt: finiteOrNull(snapshot.updatedAt) ?? Date.now() / 1_000,
     targetURL: snapshot.targetURL,
   };
