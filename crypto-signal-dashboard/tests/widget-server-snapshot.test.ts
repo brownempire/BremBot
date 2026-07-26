@@ -111,6 +111,7 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpPositionValueUsd, 310);
   assert.equal(snapshot.openPerpCollateralUsd, 100);
   assert.equal(snapshot.openPerpEntryPrice, 150);
+  assert.equal(snapshot.openPerpEntryTimestamp, Date.parse(smartExecution.createdAt) / 1_000);
   assert.equal(snapshot.openPerpMarkPrice, 155);
   assert.equal(snapshot.openPerpLeverage, 3.1);
   assert.equal(snapshot.openPerpLiquidationPrice, 120);

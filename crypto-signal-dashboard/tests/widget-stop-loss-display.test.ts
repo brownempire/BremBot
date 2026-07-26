@@ -23,6 +23,23 @@ test("Apple position widgets render stop-loss price and expected P/L", () => {
   assert.match(sharedChart, /legendItem\("SL", stopLossPrice/);
 });
 
+test("Apple position charts mark the execution candle only while it is visible", () => {
+  const phoneWidget = read("ios/App/BremLogicWidgetExtension/BremLogicWidget.swift");
+  const sharedChart = read("ios/App/WidgetShared/BremLogicWidgetShared.swift");
+  const watchChart = read("ios/App/BremLogicWatchApp/BremLogicWatchContentView.swift");
+  const watchComplication = read("ios/App/BremLogicWatchWidgetExtension/BremLogicWatchWidget.swift");
+
+  assert.match(sharedChart, /openPerpEntryTimestamp/);
+  assert.match(sharedChart, /bremLogicEntryCandleIndex/);
+  assert.match(sharedChart, /entryTimestamp >= first\.timestamp/);
+  assert.match(sharedChart, /entryTimestamp < last\.timestamp \+ interval/);
+  assert.match(sharedChart, /context\.stroke\(marker, with: \.color\(entryColor\), lineWidth: 1\.8\)/);
+  assert.match(phoneWidget, /entryTimestamp: entry\.snapshot\.openPerpEntryTimestamp/);
+  assert.match(watchChart, /bremLogicWatchEntryCandleIndex/);
+  assert.match(watchComplication, /visibleEntryCandleIndex/);
+  assert.match(watchComplication, /context\.stroke\(marker, with: \.color\(entryColor\), lineWidth: 1\.25\)/);
+});
+
 test("iPhone Lock Screen rectangle and Live Activity expose the requested trade summary", () => {
   const phoneWidget = read("ios/App/BremLogicWidgetExtension/BremLogicWidget.swift");
   const widgetBundle = read("ios/App/BremLogicWidgetExtension/BremLogicWidgetBundle.swift");

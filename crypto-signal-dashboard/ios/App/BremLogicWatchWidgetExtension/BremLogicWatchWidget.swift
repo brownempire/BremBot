@@ -79,6 +79,7 @@ struct BremLogicComplicationBrand: View {
 private struct BremLogicRectangularCandlestickChart: View {
     let candles: [BremLogicWatchCandle]
     let entryPrice: Double?
+    let entryTimestamp: Double?
     let markPrice: Double?
     let takeProfitPrice: Double?
     let stopLossPrice: Double?
@@ -92,6 +93,13 @@ private struct BremLogicRectangularCandlestickChart: View {
 
     private var visibleCandles: [BremLogicWatchCandle] {
         Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(32))
+    }
+
+    private var visibleEntryCandleIndex: Int? {
+        bremLogicWatchEntryCandleIndex(
+            candles: visibleCandles,
+            entryTimestamp: entryTimestamp
+        )
     }
 
     var body: some View {
@@ -155,6 +163,24 @@ private struct BremLogicRectangularCandlestickChart: View {
                 ))
                 context.fill(body, with: .color(color))
             }
+
+            if let entryPrice,
+               entryPrice.isFinite,
+               entryPrice > 0,
+               let entryIndex = visibleEntryCandleIndex {
+                let x = plot.minX + (CGFloat(entryIndex) + 0.5) * step
+                let center = CGPoint(x: x, y: y(entryPrice))
+                let markerSize = max(4.5, min(7, step * 1.5))
+                var marker = Path()
+                marker.addEllipse(in: CGRect(
+                    x: center.x - markerSize / 2,
+                    y: center.y - markerSize / 2,
+                    width: markerSize,
+                    height: markerSize
+                ))
+                context.fill(marker, with: .color(.black.opacity(0.72)))
+                context.stroke(marker, with: .color(entryColor), lineWidth: 1.25)
+            }
         }
         .accessibilityHidden(true)
     }
@@ -217,6 +243,7 @@ struct BremLogicPositionComplicationView: View {
                     BremLogicRectangularCandlestickChart(
                         candles: candles,
                         entryPrice: snapshot.hasOpenPerp ? snapshot.openPerpEntryPrice : nil,
+                        entryTimestamp: snapshot.hasOpenPerp ? snapshot.openPerpEntryTimestamp : nil,
                         markPrice: snapshot.openPerpMarkPrice,
                         takeProfitPrice: snapshot.hasOpenPerp ? snapshot.openPerpTakeProfitPrice : nil,
                         stopLossPrice: snapshot.hasOpenPerp ? snapshot.openPerpStopLossPrice : nil

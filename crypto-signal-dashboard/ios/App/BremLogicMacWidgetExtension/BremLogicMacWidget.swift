@@ -128,6 +128,7 @@ struct BremLogicMacWidgetEntryView: View {
             candles: chartCandles,
             symbol: entry.snapshot.chartSymbol ?? entry.snapshot.openPerpMarket,
             entryPrice: entry.snapshot.openPerpEntryPrice,
+            entryTimestamp: entry.snapshot.openPerpEntryTimestamp,
             markPrice: entry.snapshot.openPerpMarkPrice,
             takeProfitPrice: entry.snapshot.openPerpTakeProfitPrice,
             stopLossPrice: entry.snapshot.openPerpStopLossPrice,

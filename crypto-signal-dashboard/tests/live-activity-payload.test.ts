@@ -27,6 +27,7 @@ const snapshot: WidgetServerSnapshot = {
   openPerpPositionValueUsd: 200,
   openPerpCollateralUsd: 20,
   openPerpEntryPrice: 75.12,
+  openPerpEntryTimestamp: 1_785_000_018,
   openPerpMarkPrice: 74.68,
   openPerpLeverage: 10,
   openPerpLiquidationPrice: 80,
@@ -59,6 +60,7 @@ test("Live Activity state uses the actual position entry and protection prices",
   assert.equal(state.positionLabel, "SOL SHORT");
   assert.equal(state.strategy, "SCALP");
   assert.equal(state.entryPrice, 75.12);
+  assert.equal(state.entryTimestamp, 1_785_000_018);
   assert.equal(state.markPrice, 74.68);
   assert.equal(state.takeProfitPrice, 73.5);
   assert.equal(state.stopLossPrice, 76.4);

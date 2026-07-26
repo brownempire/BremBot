@@ -47,6 +47,7 @@ struct BremLogicWatchSnapshot: Codable {
     var openPerpPositionValueUsd: Double?
     var openPerpCollateralUsd: Double?
     var openPerpEntryPrice: Double?
+    var openPerpEntryTimestamp: Double?
     var openPerpMarkPrice: Double?
     var openPerpLeverage: Double?
     var openPerpLiquidationPrice: Double?
@@ -71,6 +72,7 @@ struct BremLogicWatchSnapshot: Codable {
         openPerpPositionValueUsd: nil,
         openPerpCollateralUsd: nil,
         openPerpEntryPrice: nil,
+        openPerpEntryTimestamp: nil,
         openPerpMarkPrice: nil,
         openPerpLeverage: nil,
         openPerpLiquidationPrice: nil,
@@ -96,6 +98,7 @@ struct BremLogicWatchSnapshot: Codable {
         openPerpPositionValueUsd: 1_151.28,
         openPerpCollateralUsd: 25.61,
         openPerpEntryPrice: 76.85,
+        openPerpEntryTimestamp: bremLogicPreviewWatchCandles[40].timestamp + 18,
         openPerpMarkPrice: 76.44,
         openPerpLeverage: 45,
         openPerpLiquidationPrice: 78.35,
@@ -115,6 +118,28 @@ struct BremLogicWatchSnapshot: Codable {
         let market = openPerpMarket?.trimmingCharacters(in: .whitespacesAndNewlines)
         return market?.isEmpty == false || openPerpPnlUsd != nil
     }
+}
+
+func bremLogicWatchEntryCandleIndex(
+    candles: [BremLogicWatchCandle],
+    entryTimestamp: Double?
+) -> Int? {
+    guard let entryTimestamp, entryTimestamp.isFinite else { return nil }
+    let sorted = candles.sorted { $0.timestamp < $1.timestamp }
+    guard let first = sorted.first, let last = sorted.last else { return nil }
+
+    let intervals = zip(sorted, sorted.dropFirst())
+        .map { $1.timestamp - $0.timestamp }
+        .filter { $0.isFinite && $0 > 0 }
+        .sorted()
+    let interval = intervals.isEmpty ? 60 : intervals[intervals.count / 2]
+    guard entryTimestamp >= first.timestamp,
+          entryTimestamp < last.timestamp + interval
+    else {
+        return nil
+    }
+
+    return sorted.lastIndex { $0.timestamp <= entryTimestamp }
 }
 
 enum BremLogicWatchServerClient {

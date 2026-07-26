@@ -27,6 +27,7 @@ export type WidgetServerSnapshot = {
   openPerpPositionValueUsd: number | null;
   openPerpCollateralUsd: number | null;
   openPerpEntryPrice: number | null;
+  openPerpEntryTimestamp: number | null;
   openPerpMarkPrice: number | null;
   openPerpLeverage: number | null;
   openPerpLiquidationPrice: number | null;
@@ -157,6 +158,12 @@ function findPositionExecution(
     ?? null;
 }
 
+function executionTimestamp(execution: PerpsUserExecution | null) {
+  if (!execution) return null;
+  const timestamp = Date.parse(execution.createdAt);
+  return Number.isFinite(timestamp) && timestamp > 0 ? Math.round(timestamp / 1_000) : null;
+}
+
 export function buildWidgetServerSnapshot({
   agentPositions,
   mainPositions = [],
@@ -215,6 +222,7 @@ export function buildWidgetServerSnapshot({
     openPerpPositionValueUsd: finiteOrNull(position?.positionValue),
     openPerpCollateralUsd: positionCollateral,
     openPerpEntryPrice: finiteOrNull(position?.entryPrice),
+    openPerpEntryTimestamp: executionTimestamp(positionExecution),
     // The mark doubles as the current market price in the idle dashboard. It
     // does not imply that a position is open; openPerpMarket remains null.
     openPerpMarkPrice: finiteOrNull(position?.markPrice) ?? latestChartPrice,

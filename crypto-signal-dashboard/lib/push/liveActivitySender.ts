@@ -25,6 +25,7 @@ export type LiveActivityContentState = {
   pnlUsd: number | null;
   pnlPercent: number | null;
   entryPrice: number | null;
+  entryTimestamp: number | null;
   markPrice: number | null;
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
@@ -73,6 +74,7 @@ export function buildLiveActivityContentState(
     pnlUsd: finiteOrNull(snapshot.openPerpPnlUsd),
     pnlPercent: finiteOrNull(snapshot.openPerpPnlPercent),
     entryPrice: finiteOrNull(snapshot.openPerpEntryPrice),
+    entryTimestamp: finiteOrNull(snapshot.openPerpEntryTimestamp),
     markPrice: finiteOrNull(snapshot.openPerpMarkPrice),
     takeProfitPrice: finiteOrNull(snapshot.openPerpTakeProfitPrice),
     stopLossPrice: finiteOrNull(snapshot.openPerpStopLossPrice),

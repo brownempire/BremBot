@@ -37,6 +37,7 @@ struct BremLogicWidgetSnapshot: Codable {
     var openPerpPositionValueUsd: Double?
     var openPerpCollateralUsd: Double?
     var openPerpEntryPrice: Double?
+    var openPerpEntryTimestamp: Double?
     var openPerpMarkPrice: Double?
     var openPerpLeverage: Double?
     var openPerpLiquidationPrice: Double?
@@ -73,6 +74,7 @@ struct BremLogicWidgetSnapshot: Codable {
         openPerpPositionValueUsd: nil,
         openPerpCollateralUsd: nil,
         openPerpEntryPrice: nil,
+        openPerpEntryTimestamp: nil,
         openPerpMarkPrice: nil,
         openPerpLeverage: nil,
         openPerpLiquidationPrice: nil,
@@ -106,6 +108,7 @@ struct BremLogicTradeActivityAttributes: ActivityAttributes {
         var pnlUsd: Double?
         var pnlPercent: Double?
         var entryPrice: Double?
+        var entryTimestamp: Double?
         var markPrice: Double?
         var takeProfitPrice: Double?
         var stopLossPrice: Double?
@@ -139,6 +142,7 @@ extension BremLogicTradeActivityAttributes.ContentState {
             pnlUsd: snapshot.openPerpPnlUsd,
             pnlPercent: snapshot.openPerpPnlPercent,
             entryPrice: snapshot.openPerpEntryPrice,
+            entryTimestamp: snapshot.openPerpEntryTimestamp,
             markPrice: snapshot.openPerpMarkPrice,
             takeProfitPrice: snapshot.openPerpTakeProfitPrice,
             stopLossPrice: snapshot.openPerpStopLossPrice,
@@ -156,6 +160,7 @@ struct BremLogicCandlestickChart: View {
     let candles: [BremLogicWidgetCandle]
     let symbol: String?
     let entryPrice: Double?
+    let entryTimestamp: Double?
     let markPrice: Double?
     let takeProfitPrice: Double?
     let stopLossPrice: Double?
@@ -172,6 +177,13 @@ struct BremLogicCandlestickChart: View {
 
     private var visibleCandles: [BremLogicWidgetCandle] {
         Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
+    }
+
+    private var visibleEntryCandleIndex: Int? {
+        bremLogicEntryCandleIndex(
+            candles: visibleCandles,
+            entryTimestamp: entryTimestamp
+        )
     }
 
     private func formattedPrice(_ value: Double?) -> String? {
@@ -277,6 +289,24 @@ struct BremLogicCandlestickChart: View {
                             style: StrokeStyle(lineWidth: 0.8, dash: dash)
                         )
                     }
+
+                    if let entryPrice,
+                       entryPrice.isFinite,
+                       entryPrice > 0,
+                       let entryIndex = visibleEntryCandleIndex {
+                        let x = plotRect.minX + (CGFloat(entryIndex) + 0.5) * step
+                        let markerCenter = CGPoint(x: x, y: yPosition(entryPrice))
+                        let markerSize = max(7, min(11, step * 1.35))
+                        var marker = Path()
+                        marker.addEllipse(in: CGRect(
+                            x: markerCenter.x - markerSize / 2,
+                            y: markerCenter.y - markerSize / 2,
+                            width: markerSize,
+                            height: markerSize
+                        ))
+                        context.fill(marker, with: .color(Color(red: 0.075, green: 0.09, blue: 0.13).opacity(0.82)))
+                        context.stroke(marker, with: .color(entryColor), lineWidth: 1.8)
+                    }
                 }
 
                 VStack(spacing: 0) {
@@ -306,6 +336,28 @@ struct BremLogicCandlestickChart: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(symbol ?? "Perpetual") one minute candlestick chart for the last hour")
     }
+}
+
+func bremLogicEntryCandleIndex(
+    candles: [BremLogicWidgetCandle],
+    entryTimestamp: Double?
+) -> Int? {
+    guard let entryTimestamp, entryTimestamp.isFinite else { return nil }
+    let sorted = candles.sorted { $0.timestamp < $1.timestamp }
+    guard let first = sorted.first, let last = sorted.last else { return nil }
+
+    let intervals = zip(sorted, sorted.dropFirst())
+        .map { $1.timestamp - $0.timestamp }
+        .filter { $0.isFinite && $0 > 0 }
+        .sorted()
+    let interval = intervals.isEmpty ? 60 : intervals[intervals.count / 2]
+    guard entryTimestamp >= first.timestamp,
+          entryTimestamp < last.timestamp + interval
+    else {
+        return nil
+    }
+
+    return sorted.lastIndex { $0.timestamp <= entryTimestamp }
 }
 
 enum BremLogicWidgetStore {

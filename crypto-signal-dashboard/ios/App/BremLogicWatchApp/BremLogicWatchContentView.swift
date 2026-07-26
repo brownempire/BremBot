@@ -29,6 +29,7 @@ private struct BremLogicWatchCandlestickChart: View {
     let candles: [BremLogicWatchCandle]
     let symbol: String
     let entryPrice: Double?
+    let entryTimestamp: Double?
     let markPrice: Double?
     let takeProfitPrice: Double?
     let stopLossPrice: Double?
@@ -44,6 +45,13 @@ private struct BremLogicWatchCandlestickChart: View {
 
     private var visibleCandles: [BremLogicWatchCandle] {
         Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
+    }
+
+    private var visibleEntryCandleIndex: Int? {
+        bremLogicWatchEntryCandleIndex(
+            candles: visibleCandles,
+            entryTimestamp: entryTimestamp
+        )
     }
 
     var body: some View {
@@ -130,6 +138,24 @@ private struct BremLogicWatchCandlestickChart: View {
                         line.addLine(to: CGPoint(x: plot.maxX, y: y(price)))
                         context.stroke(line, with: .color(color.opacity(0.9)), style: StrokeStyle(lineWidth: 0.8, dash: dash))
                     }
+
+                    if let entryPrice,
+                       entryPrice.isFinite,
+                       entryPrice > 0,
+                       let entryIndex = visibleEntryCandleIndex {
+                        let x = plot.minX + (CGFloat(entryIndex) + 0.5) * step
+                        let center = CGPoint(x: x, y: y(entryPrice))
+                        let markerSize = max(6, min(9, step * 1.5))
+                        var marker = Path()
+                        marker.addEllipse(in: CGRect(
+                            x: center.x - markerSize / 2,
+                            y: center.y - markerSize / 2,
+                            width: markerSize,
+                            height: markerSize
+                        ))
+                        context.fill(marker, with: .color(Color(red: 0.075, green: 0.09, blue: 0.13).opacity(0.82)))
+                        context.stroke(marker, with: .color(entryColor), lineWidth: 1.5)
+                    }
                 }
             }
         }
@@ -192,6 +218,7 @@ struct BremLogicWatchContentView: View {
                         candles: snapshot.chartCandles ?? [],
                         symbol: snapshot.chartSymbol ?? snapshot.openPerpMarket ?? "PERP",
                         entryPrice: snapshot.openPerpEntryPrice,
+                        entryTimestamp: snapshot.openPerpEntryTimestamp,
                         markPrice: snapshot.openPerpMarkPrice,
                         takeProfitPrice: snapshot.openPerpTakeProfitPrice,
                         stopLossPrice: snapshot.openPerpStopLossPrice,
@@ -209,6 +236,7 @@ struct BremLogicWatchContentView: View {
                         candles: snapshot.chartCandles ?? [],
                         symbol: snapshot.chartSymbol ?? "SOL",
                         entryPrice: nil,
+                        entryTimestamp: nil,
                         markPrice: snapshot.openPerpMarkPrice,
                         takeProfitPrice: nil,
                         stopLossPrice: nil,
