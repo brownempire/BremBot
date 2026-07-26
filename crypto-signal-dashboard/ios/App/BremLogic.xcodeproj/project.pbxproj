@@ -38,6 +38,9 @@
 		AD1000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift */; };
 		AD1000050000000000000005 /* BremLogicLogo.png in Mac Widget Resources */ = {isa = PBXBuildFile; fileRef = AA2000090000000000000009 /* BremLogicLogo.png */; };
 		AD1000060000000000000006 /* BremLogicMacWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = AD2000010000000000000001 /* BremLogicMacWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, CodeSignOnCopy, ); }; };
+		AF1000010000000000000001 /* BremLogicLaunchSoundPlayer.swift in iPhone Sources */ = {isa = PBXBuildFile; fileRef = AF2000010000000000000001 /* BremLogicLaunchSoundPlayer.swift */; };
+		AF1000020000000000000002 /* BremLogicLaunchSoundPlayer.swift in Watch App Sources */ = {isa = PBXBuildFile; fileRef = AF2000010000000000000001 /* BremLogicLaunchSoundPlayer.swift */; };
+		AF1000030000000000000003 /* brem_open.wav in Watch Resources */ = {isa = PBXBuildFile; fileRef = 4D22ABF02AF431CB00220026 /* brem_open.wav */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		4D22ABEA2AF431CB00220026 /* brem_approval.wav in Resources */ = {isa = PBXBuildFile; fileRef = 4D22ABEF2AF431CB00220026 /* brem_approval.wav */; };
@@ -175,6 +178,7 @@
 		AD2000020000000000000002 /* BremLogicMacWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidget.swift; sourceTree = "<group>"; };
 		AD2000030000000000000003 /* BremLogicMacWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidgetBundle.swift; sourceTree = "<group>"; };
 		AD2000040000000000000004 /* BremLogicMacWidgetRefreshIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicMacWidgetRefreshIntent.swift; sourceTree = "<group>"; };
+		AF2000010000000000000001 /* BremLogicLaunchSoundPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BremLogicLaunchSoundPlayer.swift; sourceTree = "<group>"; };
 		AD2000050000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AD2000060000000000000006 /* BremLogicMacWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BremLogicMacWidget.entitlements; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
@@ -336,6 +340,7 @@
 			isa = PBXGroup;
 			children = (
 				AB2000070000000000000007 /* BremLogicWatchSnapshot.swift */,
+				AF2000010000000000000001 /* BremLogicLaunchSoundPlayer.swift */,
 			);
 			path = BremLogicWatchShared;
 			sourceTree = "<group>";
@@ -580,6 +585,7 @@
 			files = (
 				AB1000090000000000000009 /* Assets.xcassets in Watch Resources */,
 				AB1000100000000000000010 /* BremLogicLogo.png in Watch Resources */,
+				AF1000030000000000000003 /* brem_open.wav in Watch Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -614,6 +620,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AF1000010000000000000001 /* BremLogicLaunchSoundPlayer.swift in iPhone Sources */,
 				AA1000010000000000000001 /* BremBridgeViewController.swift in Sources */,
 				AA1000030000000000000003 /* BremLogicWidgetShared.swift in Sources */,
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
@@ -638,6 +645,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AF1000020000000000000002 /* BremLogicLaunchSoundPlayer.swift in Watch App Sources */,
 				AB1000010000000000000001 /* BremLogicWatchApp.swift in Sources */,
 				AB1000020000000000000002 /* BremLogicWatchContentView.swift in Sources */,
 				AB1000030000000000000003 /* BremLogicWatchSnapshot.swift in Watch App Sources */,

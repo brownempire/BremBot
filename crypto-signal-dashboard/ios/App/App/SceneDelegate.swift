@@ -24,7 +24,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: true)
         BremLogicLiveActivityManager.startScheduledRefresh()
+    }
+
+    func sceneWillResignActive(_ scene: UIScene) {
+        BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: false)
     }
 
     private func handleURLContexts(_ contexts: Set<UIOpenURLContext>) {

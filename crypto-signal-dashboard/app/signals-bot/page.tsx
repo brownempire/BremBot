@@ -67,9 +67,7 @@ const NATIVE_ALERTS_ENABLED_STORAGE_KEY = "brembot.native-alerts-enabled.v1";
 const DEFAULT_WALLET_PASSWORD = "bremlogic";
 const LOCAL_RECENT_TRADES_CAP = 20;
 const SIGNALS_BOT_TAB_EVENT = "bremlogic:signals-bot-tab-change";
-const APP_OPEN_SOUND_SESSION_KEY = "brembot.app-open-sound.played";
 const NATIVE_NOTIFICATION_SOUNDS = {
-  appOpen: "brem_open.wav",
   signal: "brem_signal.wav",
   approval: "brem_approval.wav",
   tp: "brem_tp.wav",
@@ -3438,16 +3436,6 @@ function DashboardPage() {
     setActiveApprovalId(approvalId);
     setActiveApprovalStatus("Opening approval request...");
   }, []);
-
-  useEffect(() => {
-    if (!nativeShell || typeof window === "undefined") return;
-    if (window.sessionStorage.getItem(APP_OPEN_SOUND_SESSION_KEY) === "true") return;
-
-    const audio = new Audio(`/sounds/${NATIVE_NOTIFICATION_SOUNDS.appOpen}`);
-    audio.volume = 1;
-    window.sessionStorage.setItem(APP_OPEN_SOUND_SESSION_KEY, "true");
-    void audio.play().catch(() => undefined);
-  }, [nativeShell]);
 
   useEffect(() => {
     if (!subscription?.endpoint || nativeShell) return;

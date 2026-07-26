@@ -325,9 +325,13 @@ struct BremLogicWatchContentView: View {
             .padding(.horizontal, 3)
             .padding(.bottom, 6)
         }
-        .task { await runRefreshLoop() }
+        .task {
+            BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: scenePhase == .active)
+            await runRefreshLoop()
+        }
         .refreshable { await reload() }
         .onChange(of: scenePhase) { phase in
+            BremLogicLaunchSoundPlayer.shared.handleForegroundState(isActive: phase == .active)
             guard phase == .active else { return }
             reloadComplications()
             Task { await reload() }
