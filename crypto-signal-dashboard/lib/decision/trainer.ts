@@ -15,6 +15,8 @@ import type {
 import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
+import { updateScalpLearningProfile } from "@/lib/decision/scalpTrainer";
+import { DEFAULT_SCALP_LEARNING_PROFILE } from "@/lib/perps/scalpEngine";
 
 const MIN_TRAINING_SAMPLE = 50;
 const MIN_VALIDATION_SAMPLE = 10;
@@ -140,8 +142,12 @@ function createLearnedCandidate(
   training: TradeLearningOutcome[],
   validation: TradeLearningOutcome[]
 ) {
-  const winners = training.filter((outcome) => outcome.netPnlUsd > 0);
-  const losers = training.filter((outcome) => outcome.netPnlUsd <= 0);
+  const allOutcomes = [...training, ...validation];
+  const smartTraining = training.filter((outcome) => outcome.signalType !== "scalp");
+  const smartValidation = validation.filter((outcome) => outcome.signalType !== "scalp");
+  const scalpOutcomes = allOutcomes.filter((outcome) => outcome.signalType === "scalp");
+  const winners = smartTraining.filter((outcome) => outcome.netPnlUsd > 0);
+  const losers = smartTraining.filter((outcome) => outcome.netPnlUsd <= 0);
   const winnerConfidence = mean(winners.flatMap((outcome) => outcome.signalConfidence === null ? [] : [outcome.signalConfidence]));
   const loserConfidence = mean(losers.flatMap((outcome) => outcome.signalConfidence === null ? [] : [outcome.signalConfidence]));
   const minimumConfidence = winnerConfidence > 0 && loserConfidence > 0
@@ -171,17 +177,17 @@ function createLearnedCandidate(
     OPERATOR_TRAINING_BASELINE.signalParams.cooldownSeconds,
     43_200
   ));
-  const preferredDirection = derivePreferredDirection(training);
-  const indicatorSettings = deriveIndicatorSettings(training);
+  const preferredDirection = derivePreferredDirection(smartTraining);
+  const indicatorSettings = deriveIndicatorSettings(smartTraining);
 
-  const admittedValidation = validation.filter((outcome) => (
+  const admittedValidation = smartValidation.filter((outcome) => (
     (outcome.signalConfidence === null || outcome.signalConfidence >= minimumConfidence)
     && (outcome.volatilityPercent === null || outcome.volatilityPercent <= volatilityCeilingPercent)
     && (preferredDirection === "balanced" || (preferredDirection === "bullish" ? outcome.side === "long" : outcome.side === "short"))
     && passesIndicatorSettings(outcome, indicatorSettings)
   ));
   const stats = calculateStats(admittedValidation);
-  const baselineStats = calculateStats(validation);
+  const baselineStats = calculateStats(smartValidation);
   const reasons: string[] = [];
   if (admittedValidation.length < MIN_VALIDATION_SAMPLE) reasons.push(`Only ${admittedValidation.length} validation trades passed the candidate filters; ${MIN_VALIDATION_SAMPLE} are required.`);
   if (stats.expectancyUsd <= 0) reasons.push("Validation expectancy was not positive after fees.");
@@ -198,7 +204,7 @@ function createLearnedCandidate(
     source,
     createdAt: now,
     promotedAt: null,
-    learnedFromClosedTrades: training.length + validation.length,
+    learnedFromClosedTrades: allOutcomes.length,
     strategyBaselineVersion: OPERATOR_TRAINING_BASELINE.version,
     minimumConfidence: Number(minimumConfidence.toFixed(4)),
     leverageFloor: OPERATOR_TRAINING_BASELINE.leverageFloor,
@@ -219,10 +225,11 @@ function createLearnedCandidate(
     atrStopMultiplier: 1.5,
     volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
     indicatorSettings,
+    scalpProfile: updateScalpLearningProfile(DEFAULT_SCALP_LEARNING_PROFILE, scalpOutcomes),
     assetAdjustments: {
-      SOL: deriveAssetAdjustment("SOL", training, leverageCap),
-      ETH: deriveAssetAdjustment("ETH", training, leverageCap),
-      BTC: deriveAssetAdjustment("BTC", training, leverageCap),
+      SOL: deriveAssetAdjustment("SOL", smartTraining, leverageCap),
+      ETH: deriveAssetAdjustment("ETH", smartTraining, leverageCap),
+      BTC: deriveAssetAdjustment("BTC", smartTraining, leverageCap),
     },
     validation: {
       sampleSize: training.length + validation.length,
@@ -248,12 +255,15 @@ function createIncrementalProfile(
   outcomes: TradeLearningOutcome[]
 ) {
   const newOutcomes = outcomes.slice(active.learnedFromClosedTrades);
+  const newSmartOutcomes = newOutcomes.filter((outcome) => outcome.signalType !== "scalp");
+  const allSmartOutcomes = outcomes.filter((outcome) => outcome.signalType !== "scalp");
+  const allScalpOutcomes = outcomes.filter((outcome) => outcome.signalType === "scalp");
   let minimumConfidence = active.minimumConfidence;
   let volatilityCeilingPercent = active.volatilityCeilingPercent;
   let consecutiveLosses = active.consecutiveLosses ?? 0;
   const assetAdjustments = structuredClone(active.assetAdjustments);
 
-  for (const outcome of newOutcomes) {
+  for (const outcome of newSmartOutcomes) {
     const adjustment = assetAdjustments[outcome.asset];
     if (outcome.netPnlUsd > 0) {
       consecutiveLosses = 0;
@@ -288,7 +298,8 @@ function createIncrementalProfile(
     adjustment.allocationMultiplier = Number(adjustment.allocationMultiplier.toFixed(3));
   }
 
-  const stats = calculateStats(outcomes);
+  const stats = calculateStats(allSmartOutcomes);
+  const scalpProfile = updateScalpLearningProfile(active.scalpProfile, allScalpOutcomes);
   const now = new Date().toISOString();
   return {
     ...active,
@@ -309,8 +320,9 @@ function createIncrementalProfile(
     consecutiveLosses,
     maximumAllocationPercent: OPERATOR_TRAINING_BASELINE.maximumAllocationPercent,
     targetWalletRiskPercent: OPERATOR_TRAINING_BASELINE.targetWalletRiskPercent,
-    preferredDirection: derivePreferredDirection(outcomes),
+    preferredDirection: derivePreferredDirection(allSmartOutcomes),
     volatilityCeilingPercent: Number(volatilityCeilingPercent.toFixed(2)),
+    scalpProfile,
     assetAdjustments,
     validation: {
       sampleSize: outcomes.length,
@@ -321,9 +333,9 @@ function createIncrementalProfile(
       profitFactor: Number(stats.profitFactor.toFixed(4)),
       maxDrawdownUsd: Number(stats.maxDrawdownUsd.toFixed(4)),
       passed: true,
-      reasons: [`Applied bounded online learning from ${newOutcomes.length} newly closed trade${newOutcomes.length === 1 ? "" : "s"}; full holdout validation remains scheduled separately.`],
+      reasons: [`Applied bounded Smart-only learning from ${newSmartOutcomes.length} new Smart trade${newSmartOutcomes.length === 1 ? "" : "s"} and isolated scalp learning from ${newOutcomes.length - newSmartOutcomes.length} scalp trade${newOutcomes.length - newSmartOutcomes.length === 1 ? "" : "s"}; full holdout validation remains scheduled separately.`],
     },
-    summary: `Online profile update after ${outcomes.length} closed trades. Confidence and ${[...new Set(newOutcomes.map((outcome) => outcome.asset))].join("/")} risk multipliers were adjusted within safety bounds.`,
+    summary: `Online profile update after ${outcomes.length} closed trades. Smart trend/breakout learning and scalp range/reversal learning were updated independently within bounded safety limits.`,
   } satisfies DecisionLearningProfile;
 }
 
@@ -348,6 +360,20 @@ export async function trainWalletDecisionProfile(input: {
       return { profile: migratedBaseline, activated: true, outcomeCount: 0, skipped: false, migrated: true };
     }
     if (outcomes.length >= MIN_TRAINING_SAMPLE) {
+      const smartOutcomeCount = outcomes.filter((outcome) => outcome.signalType !== "scalp").length;
+      if (smartOutcomeCount < MIN_TRAINING_SAMPLE) {
+        const incremental = createIncrementalProfile(migratedBaseline, version + 1, input.source, outcomes);
+        const profile = await saveDecisionLearningProfile(incremental, true);
+        return {
+          profile,
+          activated: true,
+          outcomeCount: outcomes.length,
+          skipped: false,
+          incremental: true,
+          migrated: true,
+          activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+        };
+      }
       const splitIndex = Math.max(MIN_TRAINING_SAMPLE - MIN_VALIDATION_SAMPLE, Math.floor(outcomes.length * 0.8));
       const candidate = createLearnedCandidate(
         input.walletAddress,
@@ -414,6 +440,29 @@ export async function trainWalletDecisionProfile(input: {
     }
     const profile = savedBaseline;
     return { profile, activated: true, outcomeCount: outcomes.length, skipped: false };
+  }
+
+  const smartOutcomeCount = outcomes.filter((outcome) => outcome.signalType !== "scalp").length;
+  if (smartOutcomeCount < MIN_TRAINING_SAMPLE) {
+    const baseline = active ?? await saveDecisionLearningProfile(
+      makeOperatorTrainingBaselineProfile(input.walletAddress, version),
+      true
+    );
+    const incremental = createIncrementalProfile(
+      baseline,
+      active ? version : version + 1,
+      input.source,
+      outcomes
+    );
+    const profile = await saveDecisionLearningProfile(incremental, true);
+    return {
+      profile,
+      activated: true,
+      outcomeCount: outcomes.length,
+      skipped: false,
+      incremental: true,
+      activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+    };
   }
 
   const splitIndex = Math.max(MIN_TRAINING_SAMPLE - MIN_VALIDATION_SAMPLE, Math.floor(outcomes.length * 0.8));

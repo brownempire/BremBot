@@ -1,7 +1,7 @@
 import type { UserParams } from "@/lib/signal/engine";
 
 export const OPERATOR_TRAINING_BASELINE = {
-  version: 3,
+  version: 4,
   signalParams: {
     trendWindow: 145,
     trendThreshold: 1.65,

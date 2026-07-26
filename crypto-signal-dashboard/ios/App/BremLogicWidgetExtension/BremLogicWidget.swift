@@ -824,6 +824,24 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     }
 
     @ViewBuilder
+    private var islandBrand: some View {
+        if let image = UIImage(named: "BremLogicLogo")
+            ?? BremLogicWidgetAssetLoader.logoImage() {
+            Image(uiImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .frame(width: 64, height: 14, alignment: .leading)
+        } else {
+            Text("BremLogic")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(positive)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+    }
+
+    @ViewBuilder
     private func metric(_ label: String, _ value: String, color: Color = .primary) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
@@ -883,12 +901,9 @@ struct BremLogicTradeLiveActivityWidget: Widget {
             let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Text(state.market)
-                        .font(.caption2.bold())
-                        .foregroundStyle(positive)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                    islandBrand
                 }
+                .contentMargins(.leading, 16)
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 1) {
                         Text(signedUsd(state.pnlUsd))
@@ -899,6 +914,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                             .foregroundStyle(pnlColor(state))
                     }
                 }
+                .contentMargins(.trailing, 16)
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 7) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -921,7 +937,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
                             metric("SL", price(state.stopLossPrice), color: negative)
                         }
                     }
-                    .padding(.horizontal, 4)
+                    .padding(.horizontal, 12)
                 }
             } compactLeading: {
                 Text(state.market)

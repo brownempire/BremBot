@@ -30,7 +30,16 @@ test("Lock Screen and expanded Island show Entry, Mark, TP, and SL", () => {
     assert.match(widgetSource, new RegExp(`metric\\("${label}"`));
   }
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*Text\(state\.positionLabel\)/);
-  assert.match(widgetSource, /\.padding\(\.horizontal, 4\)/);
+  assert.match(widgetSource, /\.padding\(\.horizontal, 12\)/);
+});
+
+test("expanded Dynamic Island content respects the curved safe edges", () => {
+  assert.match(widgetSource, /private var islandBrand[\s\S]*Image\(uiImage: image\)[\s\S]*frame\(width: 64, height: 14/);
+  assert.match(widgetSource, /private var islandBrand[\s\S]*Text\("BremLogic"\)/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.leading\)[\s\S]*islandBrand/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.leading\)[\s\S]*\.contentMargins\(\.leading, 16\)/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.trailing\)[\s\S]*\.contentMargins\(\.trailing, 16\)/);
+  assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*\.padding\(\.horizontal, 12\)/);
 });
 
 test("Live Activity refresh cadence shares the open-position widget interval", () => {

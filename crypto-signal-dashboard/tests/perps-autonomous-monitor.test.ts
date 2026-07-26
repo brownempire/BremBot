@@ -3,6 +3,11 @@ import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
 import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
+import {
+  DEFAULT_SCALP_LEARNING_PROFILE,
+  analyzeScalpPriceAction,
+  detectAdaptiveScalpSignal,
+} from "../lib/perps/scalpEngine";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import {
@@ -132,6 +137,107 @@ test("scalp detection uses an independent 25-minute cooldown", () => {
     cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
     lastSignalAt: latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000,
   })?.type, "scalp");
+});
+
+function reversalIndicators(overrides: Record<string, number | null> = {}) {
+  return {
+    emaFast: 100.4,
+    emaSlow: 99.5,
+    emaSpreadPercent: 0.9,
+    emaSlopePercent: 0.2,
+    rsi: 58,
+    macdLine: -0.01,
+    macdSignal: 0,
+    macdHistogram: -0.01,
+    macdHistogramChange: 0.01,
+    adx: 38,
+    plusDi: 18,
+    minusDi: 24,
+    atrPercent: 0.12,
+    volumeRatio: 1.6,
+    bollingerBandwidthPercent: 0.8,
+    bollingerPosition: 0.55,
+    ...overrides,
+  };
+}
+
+function bullishSweepPoints() {
+  const baseTime = 1_784_174_800_000;
+  return Array.from({ length: 24 }, (_, index) => {
+    const closes = [100, 99.98, 99.82, 99.88, 100.02, 100.16];
+    const close = index < 18 ? 100 + Math.sin(index) * 0.015 : closes[index - 18]!;
+    return {
+      t: baseTime + index * 60_000,
+      o: index === 20 ? 100 : close - 0.01,
+      h: index === 20 ? 100.02 : close + 0.03,
+      l: index === 20 ? 99.7 : close - 0.03,
+      v: close,
+      volume: index >= 22 ? 220 : 100,
+    };
+  });
+}
+
+test("strong liquidity-sweep reversal uses candle structure despite lagging indicator disagreement", () => {
+  const points = bullishSweepPoints();
+  const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators(),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+
+  assert.equal(priceAction.direction, "bullish");
+  assert.equal(priceAction.setupType, "liquidity-sweep");
+  assert.equal(priceAction.strong, true);
+  assert.equal(signal?.direction, "bullish");
+  assert.equal(signal?.indicatorBypass, true);
+  assert.ok(signal?.priceActionTags.includes("PRICE_LIQUIDITY_SWEEP_RECLAIM"));
+  assert.ok(signal?.priceActionTags.includes("INDICATOR_BYPASS_STRONG_PRICE_ACTION"));
+});
+
+test("the candle-structure reversal detector handles bearish liquidity sweeps symmetrically", () => {
+  const points = bullishSweepPoints().map((point) => ({
+    ...point,
+    v: 200 - point.v,
+    o: 200 - point.o,
+    h: 200 - point.l,
+    l: 200 - point.h,
+  }));
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators({
+      emaFast: 99.4,
+      emaSlow: 100.3,
+      emaSpreadPercent: -0.9,
+      emaSlopePercent: -0.2,
+      rsi: 42,
+      plusDi: 24,
+      minusDi: 18,
+    }),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+
+  assert.equal(signal?.direction, "bearish");
+  assert.equal(signal?.setupType, "liquidity-sweep");
+  assert.equal(signal?.indicatorBypass, true);
+});
+
+test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
+  const points = bullishSweepPoints().map((point, index) => index >= 21
+    ? { ...point, v: 99.74, o: 99.76, h: 99.79, l: 99.7, volume: 100 }
+    : point);
+  const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators(),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+
+  assert.equal(priceAction.direction, null);
+  assert.equal(signal, null);
 });
 
 test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net target", () => {
@@ -656,7 +762,7 @@ test("server monitor closes an armed profitable position at 20% even with pendin
   assert.equal(closed.results[0]?.status, "executed");
   assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
   assert.equal(closeCalls, 1);
-  assert.equal(profitLockState?.closeTxid, "profit-lock-close-tx");
+  assert.equal((profitLockState as PerpsProfitLockState | null)?.closeTxid, "profit-lock-close-tx");
 });
 
 test("server monitor clears stale profit-lock state after the position closes", async () => {

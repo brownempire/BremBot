@@ -117,7 +117,7 @@ test("automatic training migrates a legacy active profile before applying new ou
 
   assert.equal(result.activated, true);
   assert.equal(result.migrated, true);
-  assert.equal(result.profile.strategyBaselineVersion, 3);
+  assert.equal(result.profile.strategyBaselineVersion, 4);
   assert.equal(result.profile.trendWindow, 145);
   assert.equal(result.profile.cooldownSeconds, 27_000);
   assert.equal(result.profile.leverageFloor, 2);
@@ -184,6 +184,93 @@ test("each newly closed trade incrementally updates the active wallet profile", 
   assert.ok(result.profile.minimumConfidence > baseline.profile.minimumConfidence);
   assert.ok(result.profile.assetAdjustments.SOL.leverageMultiplier < baseline.profile.assetAdjustments.SOL.leverageMultiplier);
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
+});
+
+test("Smart and scalp losses update only their respective learning algorithms", async () => {
+  const walletAddress = "learning-wallet-strategy-isolation";
+  const baseline = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  const makeOutcome = (index: number, signalType: "trend" | "scalp") => learningTypes.tradeLearningOutcomeSchema.parse({
+    outcomeId: `${walletAddress}:${index}`,
+    walletAddress,
+    executionId: `execution-isolation-${index}`,
+    decisionId: `decision-isolation-${index}`,
+    signalId: `signal-isolation-${index}`,
+    asset: "SOL",
+    side: "long",
+    openedAt: new Date(1_700_000_000_000 + index * 3_600_000).toISOString(),
+    closedAt: new Date(1_700_000_900_000 + index * 3_600_000).toISOString(),
+    positionPubkey: `position-isolation-${index}`,
+    entryPrice: 100,
+    exitPrice: 99,
+    collateralUsd: 10,
+    sizeUsd: 50,
+    leverage: 5,
+    takeProfitPrice: 105,
+    stopLossPrice: 97,
+    grossPnlUsd: -1,
+    feesUsd: 0.15,
+    netPnlUsd: -1.15,
+    returnOnCollateralPercent: -11.5,
+    durationMinutes: 15,
+    exitReason: "stop-loss",
+    signalConfidence: 0.64,
+    signalType,
+    trendWindow: 145,
+    trendThreshold: 1.65,
+    breakoutPercent: 0.35,
+    cooldownSeconds: signalType === "scalp" ? 1_500 : 27_000,
+    trendStrengthPercent: 0.4,
+    breakoutStrengthPercent: 0.2,
+    volatilityPercent: 1.5,
+    atrPercent: 0.15,
+    indicatorScore: 3,
+    emaSpreadPercent: 0.3,
+    emaSlopePercent: -0.05,
+    rsi: 45,
+    macdHistogram: -0.01,
+    macdHistogramChange: -0.01,
+    adx: 21,
+    plusDi: 18,
+    minusDi: 22,
+    volumeRatio: 0.72,
+    bollingerBandwidthPercent: 0.7,
+    bollingerPosition: 0.2,
+    scalpSetupType: signalType === "scalp" ? "range-reversal" : null,
+    priceActionScore: signalType === "scalp" ? 0.6 : null,
+    priceActionTags: signalType === "scalp" ? ["SCALP_RANGE_LOW"] : [],
+    trendBias: "sideways",
+    createdAt: new Date().toISOString(),
+  });
+
+  await learningStore.saveTradeLearningOutcomes([makeOutcome(1, "scalp")]);
+  const afterScalp = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+  assert.equal(afterScalp.profile.minimumConfidence, baseline.profile.minimumConfidence);
+  assert.deepEqual(afterScalp.profile.assetAdjustments, baseline.profile.assetAdjustments);
+  assert.ok((afterScalp.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
+  assert.ok((afterScalp.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
+
+  const scalpSnapshot = structuredClone(afterScalp.profile.scalpProfile);
+  await learningStore.saveTradeLearningOutcomes([makeOutcome(2, "trend")]);
+  const afterSmart = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+  assert.ok(afterSmart.profile.minimumConfidence > afterScalp.profile.minimumConfidence);
+  assert.ok(afterSmart.profile.assetAdjustments.SOL.leverageMultiplier < afterScalp.profile.assetAdjustments.SOL.leverageMultiplier);
+  const scalpAfterSmart = structuredClone(afterSmart.profile.scalpProfile);
+  if (scalpSnapshot) scalpSnapshot.validation.reasons = [];
+  if (scalpAfterSmart) scalpAfterSmart.validation.reasons = [];
+  assert.deepEqual(scalpAfterSmart, scalpSnapshot);
 });
 
 test("trained runtime enforces risk sizing, adaptive leverage bounds, and stored TP/SL", () => {
@@ -293,7 +380,7 @@ test("profitable chronological holdout history promotes a versioned learned prof
   assert.equal(result.profile.source, "manual-training");
   assert.equal(result.profile.validation.passed, true);
   assert.equal(result.profile.learnedFromClosedTrades, 60);
-  assert.equal(result.profile.strategyBaselineVersion, 3);
+  assert.equal(result.profile.strategyBaselineVersion, 4);
   assert.ok(result.profile.trendWindow >= 120 && result.profile.trendWindow <= 180);
   assert.ok(result.profile.cooldownSeconds >= 27_000 && result.profile.cooldownSeconds <= 43_200);
   assert.ok(result.profile.takeProfitRoePercent >= 20 && result.profile.takeProfitRoePercent <= 30);

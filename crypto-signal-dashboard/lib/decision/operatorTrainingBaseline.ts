@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
+import { DEFAULT_SCALP_LEARNING_PROFILE } from "@/lib/perps/scalpEngine";
 
 export function makeOperatorTrainingBaselineProfile(
   walletAddress: string,
@@ -47,6 +48,7 @@ export function makeOperatorTrainingBaselineProfile(
       minimumVolumeRatio: BASE_INDICATOR_SETTINGS.minimumVolumeRatio,
       minimumScore: BASE_INDICATOR_SETTINGS.minimumScore,
     },
+    scalpProfile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
     assetAdjustments: {
       SOL: { trendThreshold: baseline.signalParams.trendThreshold, breakoutPercent: baseline.signalParams.breakoutPercent, leverageMultiplier: 1, allocationMultiplier: 1 },
       ETH: { trendThreshold: baseline.signalParams.trendThreshold, breakoutPercent: baseline.signalParams.breakoutPercent, leverageMultiplier: 1, allocationMultiplier: 1 },
@@ -63,6 +65,6 @@ export function makeOperatorTrainingBaselineProfile(
       passed: true,
       reasons: ["Operator-selected baseline activated while BremLogic collects enough closed trades for walk-forward training."],
     },
-    summary: "Research baseline: 145-minute window, 1.65% trend, 0.35% breakout, 7.5-hour cooldown, 50% allocation ceiling, 3% target wallet risk, 25% TP, 25% SL, and quality-adjusted 2–10x leverage.",
+    summary: "Research baseline: isolated Smart trend/breakout learning plus adaptive scalp range/reversal learning, a 145-minute Smart window, 1.65% trend, 0.35% breakout, 7.5-hour Smart cooldown, 50% allocation ceiling, 3% target wallet risk, 25% TP, 25% SL, and quality-adjusted 2–10x leverage.",
   };
 }

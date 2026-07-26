@@ -2,6 +2,13 @@ import { z } from "zod";
 
 export const learningAssetSchema = z.enum(["SOL", "ETH", "BTC"]);
 
+export const scalpSetupTypeSchema = z.enum([
+  "range-reversal",
+  "liquidity-sweep",
+  "v-reversal",
+  "double-reversal",
+]);
+
 export const tradeLearningOutcomeSchema = z.object({
   outcomeId: z.string().trim().min(1),
   walletAddress: z.string().trim().min(1),
@@ -48,6 +55,9 @@ export const tradeLearningOutcomeSchema = z.object({
   volumeRatio: z.number().finite().nullable().optional(),
   bollingerBandwidthPercent: z.number().finite().nullable().optional(),
   bollingerPosition: z.number().finite().nullable().optional(),
+  scalpSetupType: scalpSetupTypeSchema.nullable().optional(),
+  priceActionScore: z.number().finite().min(0).max(1).nullable().optional(),
+  priceActionTags: z.array(z.string().trim().min(1)).optional(),
   trendBias: z.enum(["bullish", "bearish", "sideways"]).nullable(),
   createdAt: z.string().datetime(),
 });
@@ -62,6 +72,35 @@ export const learningValidationSchema = z.object({
   maxDrawdownUsd: z.number().finite().min(0),
   passed: z.boolean(),
   reasons: z.array(z.string()),
+});
+
+export const scalpLearningProfileSchema = z.object({
+  learnedFromClosedTrades: z.number().int().min(0),
+  minimumConfidence: z.number().finite().min(0.55).max(0.85),
+  cooldownSeconds: z.number().int().min(300).max(7_200),
+  longRsiMaximum: z.number().finite().min(30).max(65),
+  shortRsiMinimum: z.number().finite().min(35).max(70),
+  longBollingerMaximum: z.number().finite().min(-0.25).max(0.45),
+  shortBollingerMinimum: z.number().finite().min(0.55).max(1.25),
+  maximumAdx: z.number().finite().min(12).max(40),
+  maximumEmaSpreadPercent: z.number().finite().min(0.1).max(1.5),
+  minimumAtrPercent: z.number().finite().min(0.005).max(1),
+  minimumBandwidthPercent: z.number().finite().min(0.02).max(3),
+  minimumVolumeRatio: z.number().finite().min(0.5).max(2),
+  minimumPriceActionScore: z.number().finite().min(0.45).max(0.85),
+  strongReversalScore: z.number().finite().min(0.6).max(0.95),
+  minimumSweepPercent: z.number().finite().min(0.01).max(1),
+  minimumReclaimPercent: z.number().finite().min(0.02).max(2),
+  setupConfidenceAdjustments: z.object({
+    rangeReversal: z.number().finite().min(-0.08).max(0.15),
+    liquiditySweep: z.number().finite().min(-0.08).max(0.15),
+    vReversal: z.number().finite().min(-0.08).max(0.15),
+    doubleReversal: z.number().finite().min(-0.08).max(0.15),
+  }),
+  riskMultiplier: z.number().finite().min(0.5).max(1),
+  preferredDirection: z.enum(["bullish", "bearish", "balanced"]),
+  consecutiveLosses: z.number().int().min(0).max(5),
+  validation: learningValidationSchema,
 });
 
 const learnedAssetAdjustmentSchema = z.object({
@@ -108,6 +147,7 @@ export const decisionLearningProfileSchema = z.object({
     minimumVolumeRatio: z.number().finite().min(0.8).max(1.4),
     minimumScore: z.number().finite().min(2).max(5),
   }).optional(),
+  scalpProfile: scalpLearningProfileSchema.optional(),
   assetAdjustments: z.object({
     SOL: learnedAssetAdjustmentSchema,
     ETH: learnedAssetAdjustmentSchema,
@@ -119,4 +159,6 @@ export const decisionLearningProfileSchema = z.object({
 
 export type TradeLearningOutcome = z.infer<typeof tradeLearningOutcomeSchema>;
 export type DecisionLearningProfile = z.infer<typeof decisionLearningProfileSchema>;
+export type ScalpLearningProfile = z.infer<typeof scalpLearningProfileSchema>;
+export type ScalpSetupType = z.infer<typeof scalpSetupTypeSchema>;
 export type LearningAsset = z.infer<typeof learningAssetSchema>;

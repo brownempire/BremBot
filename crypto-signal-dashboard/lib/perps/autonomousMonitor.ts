@@ -38,6 +38,12 @@ import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
 import { trainWalletDecisionProfile } from "@/lib/decision/trainer";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
+import {
+  DEFAULT_SCALP_LEARNING_PROFILE,
+  detectAdaptiveScalpSignal,
+  getScalpLearningProfile,
+  type ScalpSignal,
+} from "@/lib/perps/scalpEngine";
 
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
@@ -51,7 +57,13 @@ const MIN_TPSL_EXPECTED_PNL_USD = 1;
 const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = 0.0012;
 export const SCALP_SIGNAL_COOLDOWN_SECONDS = 25 * 60;
 
-type AutonomousSignal = Omit<Signal, "type"> & { type: Signal["type"] | "scalp" };
+type AutonomousSignal = Omit<Signal, "type"> & {
+  type: Signal["type"] | "scalp";
+  setupType?: ScalpSignal["setupType"];
+  priceActionScore?: number;
+  priceActionTags?: string[];
+  indicatorBypass?: boolean;
+};
 type StrategyClass = "smart" | "scalp";
 
 type MonitorExecutionResult = {
@@ -209,44 +221,16 @@ export function detectScalpSignal(options: {
   cooldownSeconds: number;
   lastSignalAt?: number | null;
 }): AutonomousSignal | null {
-  const { points, indicators } = options;
-  const latest = points[points.length - 1];
-  if (!latest || points.length < 3) return null;
-  if (options.lastSignalAt && latest.t - options.lastSignalAt < options.cooldownSeconds * 1_000) return null;
-  if (computeTrendBias(points) !== "sideways") return null;
-  if (
-    indicators.adx === null
-    || indicators.adx > 20
-    || indicators.emaSpreadPercent === null
-    || Math.abs(indicators.emaSpreadPercent) > 0.35
-    || indicators.atrPercent === null
-    || indicators.atrPercent < 0.02
-    || indicators.bollingerBandwidthPercent === null
-    || indicators.bollingerBandwidthPercent < 0.1
-    || indicators.bollingerPosition === null
-    || indicators.rsi === null
-  ) return null;
-
-  const longSetup = indicators.bollingerPosition <= 0.2 && indicators.rsi <= 45;
-  const shortSetup = indicators.bollingerPosition >= 0.8 && indicators.rsi >= 55;
-  if (!longSetup && !shortSetup) return null;
-  const direction = longSetup ? "bullish" : "bearish";
-  const bandExtremity = longSetup
-    ? clamp((0.2 - indicators.bollingerPosition) / 0.2, 0, 1)
-    : clamp((indicators.bollingerPosition - 0.8) / 0.2, 0, 1);
-  const rsiExtremity = longSetup
-    ? clamp((45 - indicators.rsi) / 20, 0, 1)
-    : clamp((indicators.rsi - 55) / 20, 0, 1);
-  const confidence = Number(clamp(0.6 + bandExtremity * 0.12 + rsiExtremity * 0.08, 0.6, 0.8).toFixed(3));
-  return {
-    id: `${options.symbol}-scalp-${latest.t}`,
+  return detectAdaptiveScalpSignal({
     symbol: options.symbol,
-    type: "scalp",
-    direction,
-    confidence,
-    summary: `${direction === "bullish" ? "Range-low" : "Range-high"} scalp setup at Bollinger position ${indicators.bollingerPosition.toFixed(2)} with RSI ${indicators.rsi.toFixed(1)}.`,
-    timestamp: latest.t,
-  };
+    points: options.points,
+    indicators: options.indicators,
+    profile: {
+      ...structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+      cooldownSeconds: options.cooldownSeconds,
+    },
+    lastSignalAt: options.lastSignalAt,
+  });
 }
 
 function getIndicatorSettings(profile: DecisionLearningProfile | null): IndicatorSettings {
@@ -517,31 +501,80 @@ export async function runAutonomousPerpsMonitor(
       })[0];
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
-      const scalpSignal = !smartSignalCandidate && config.settings.scalpModeEnabled
-        ? detectScalpSignal({
+      const indicatorsReady = indicators.emaFast !== null
+        && indicators.emaSlow !== null
+        && indicators.rsi !== null
+        && indicators.macdHistogram !== null
+        && indicators.adx !== null;
+      const smartIndicatorScore = smartSignal
+        ? scoreIndicatorSnapshot(indicators, smartSignal.direction, indicatorSettings)
+        : null;
+      const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= effectiveParams.breakoutPercent
+        ? signalMetrics.breakoutChange
+        : signalMetrics.shortMomentum;
+      const trendDirection = signalMetrics.trend.changePercent >= 0 ? "bullish" : "bearish";
+      const breakoutDirection = breakoutMetric >= 0 ? "bullish" : "bearish";
+      const smartLearningConfirmed = !smartSignal || !executionProfile || (
+        Math.abs(signalMetrics.trend.changePercent) >= effectiveParams.trendThreshold
+        && Math.abs(breakoutMetric) >= effectiveParams.breakoutPercent * 0.6
+        && trendDirection === breakoutDirection
+        && smartSignal.direction === trendDirection
+      );
+      const smartDirectionAllowed = !smartSignal
+        || !executionProfile
+        || executionProfile.preferredDirection === "balanced"
+        || smartSignal.direction === executionProfile.preferredDirection;
+      const smartEligible = Boolean(
+        smartSignal
+        && (!indicatorsReady || smartIndicatorScore?.qualified)
+        && smartLearningConfirmed
+        && smartDirectionAllowed
+      );
+      const scalpProfile = getScalpLearningProfile(learningProfile);
+      const scalpSignal = config.settings.scalpModeEnabled
+        ? detectAdaptiveScalpSignal({
             symbol: `${asset}/USD`,
             points: windowPoints,
             indicators,
-            cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
+            profile: scalpProfile,
             lastSignalAt: lastScalpSignalAt,
           })
         : null;
-      const signal = smartSignal ?? scalpSignal;
-      const strategyClass = scalpSignal ? "scalp" as const : "smart" as const;
+      const signal = smartEligible ? smartSignal! : scalpSignal;
+      const strategyClass = smartEligible ? "smart" as const : "scalp" as const;
       if (!signal) {
+        if (smartSignal && !smartEligible) {
+          await deps.writeLastSignal(config.walletAddress, asset, "smart", smartSignal.timestamp);
+        }
+        const smartRejectedByIndicators = smartSignal && indicatorsReady && !smartIndicatorScore?.qualified;
+        const smartRejectedByDirection = smartSignal && !smartDirectionAllowed;
+        const smartRejectedByLearning = smartSignal && !smartLearningConfirmed;
         results.push(skip(
           config,
           asset,
-          smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
-          smartSignalCandidate
-            ? "A trend or breakout candidate was detected, but the Smart Trade cooldown is still active. Scalp Mode remains enabled until a smart trade is taken."
+          smartRejectedByIndicators
+            ? smartIndicatorScore?.vetoed ? "INDICATOR_RSI_VETO" : "INDICATOR_CONFIRMATION_SKIP"
+            : smartRejectedByDirection ? "LEARNED_DIRECTION_SKIP"
+              : smartRejectedByLearning ? "LEARNED_CONFIRMATION_SKIP"
+                : smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
+          smartRejectedByIndicators
+            ? smartIndicatorScore?.vetoed
+              ? `The ${smartSignal.direction} Smart candidate was skipped by the RSI extreme veto, and no qualifying scalp/reversal setup replaced it.`
+              : `The Smart candidate scored ${smartIndicatorScore?.score.toFixed(1)} indicator points, and no qualifying scalp/reversal setup replaced it.`
+            : smartRejectedByDirection
+              ? `The Smart candidate opposed the trained Smart direction, and no qualifying independent scalp/reversal setup replaced it.`
+              : smartRejectedByLearning
+                ? "The Smart candidate lacked matching trend and breakout confirmation, and no qualifying independent scalp/reversal setup replaced it."
+                : smartSignalCandidate
+                  ? "A Smart candidate was in cooldown; Scalp Mode remains enabled, but no qualifying independent scalp/reversal setup was detected."
             : config.settings.scalpModeEnabled
-              ? "No qualifying smart or sideways-market scalp signal was detected in the latest candle window."
+              ? "No qualifying Smart, range scalp, or candle-structure reversal signal was detected in the latest window."
               : "No qualifying signal was detected in the latest candle window."
         ));
         continue;
       }
-      if (executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
+      const scalpMetadata = strategyClass === "scalp" ? signal as ScalpSignal : null;
+      if (strategyClass === "smart" && executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
         results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${executionProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
         continue;
       }
@@ -550,61 +583,19 @@ export async function runAutonomousPerpsMonitor(
             score: Number((signal.confidence * 5).toFixed(2)),
             qualified: true,
             vetoed: false,
-            tags: ["SCALP_RANGE", signal.direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"],
+            tags: scalpMetadata?.priceActionTags ?? ["SCALP_RANGE", signal.direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"],
           }
-        : scoreIndicatorSnapshot(indicators, signal.direction, indicatorSettings);
-      const indicatorsReady = indicators.emaFast !== null
-        && indicators.emaSlow !== null
-        && indicators.rsi !== null
-        && indicators.macdHistogram !== null
-        && indicators.adx !== null;
-      if (strategyClass === "smart" && indicatorsReady && !indicatorScore.qualified) {
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
-        results.push(skip(
-          config,
-          asset,
-          indicatorScore.vetoed ? "INDICATOR_RSI_VETO" : "INDICATOR_CONFIRMATION_SKIP",
-          indicatorScore.vetoed
-            ? `The ${signal.direction} candidate was skipped by the RSI extreme veto (${indicators.rsi?.toFixed(1)}).`
-            : `The ${signal.direction} candidate scored ${indicatorScore.score.toFixed(1)} of the required ${indicatorSettings.minimumScore.toFixed(1)} indicator points.`
-        ));
-        continue;
-      }
-      if (strategyClass === "smart" && executionProfile) {
-        const trendQualified = Math.abs(signalMetrics.trend.changePercent) >= effectiveParams.trendThreshold;
-        const breakoutMetric = Math.abs(signalMetrics.breakoutChange) >= effectiveParams.breakoutPercent
-          ? signalMetrics.breakoutChange
-          : signalMetrics.shortMomentum;
-        const breakoutQualified = Math.abs(breakoutMetric) >= effectiveParams.breakoutPercent * 0.6;
-        const trendDirection = signalMetrics.trend.changePercent >= 0 ? "bullish" : "bearish";
-        const breakoutDirection = breakoutMetric >= 0 ? "bullish" : "bearish";
-        if (!trendQualified || !breakoutQualified || trendDirection !== breakoutDirection || signal.direction !== trendDirection) {
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
-          results.push(skip(config, asset, "LEARNED_CONFIRMATION_SKIP", "The signal did not have matching trend and breakout confirmation under the active trained profile."));
-          continue;
-        }
-      }
+        : smartIndicatorScore!;
       if (config.settings.mode === "buy-only" && signal.direction === "bearish") {
         await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
         continue;
       }
-      if (
-        strategyClass === "smart"
-        && executionProfile
-        && executionProfile.preferredDirection !== "balanced"
-        && signal.direction !== executionProfile.preferredDirection
-      ) {
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
-        results.push(skip(config, asset, "LEARNED_DIRECTION_SKIP", `The active trained profile currently prefers ${executionProfile.preferredDirection} setups.`));
-        continue;
-      }
-
       const planningConfig = strategyClass === "scalp"
         ? getScalpTradePlanningConfig(config)
         : config;
       const basePlan = deriveTradePlan(planningConfig, windowPoints, signal, availableUsdc);
-      const plan = applyLearnedTradePlan({
+      const learnedPlan = applyLearnedTradePlan({
         basePlan,
         asset,
         points: windowPoints,
@@ -614,6 +605,14 @@ export async function runAutonomousPerpsMonitor(
         adx: indicators.adx,
         volumeRatio: indicators.volumeRatio,
       });
+      const plan = strategyClass === "scalp"
+        ? {
+            ...learnedPlan,
+            collateralPercent: Number((learnedPlan.collateralPercent * scalpProfile.riskMultiplier).toFixed(2)),
+            leverage: Number((learnedPlan.leverage * Math.max(0.65, scalpProfile.riskMultiplier)).toFixed(2)),
+            profileId: learningProfile?.profileId ?? null,
+          }
+        : learnedPlan;
       const collateralUsd = resolveAutonomousCollateralUsd(availableUsdc, plan.collateralPercent);
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The configured allocation produced no usable USDC collateral."));
@@ -664,7 +663,7 @@ export async function runAutonomousPerpsMonitor(
           trendThreshold: effectiveParams.trendThreshold,
           breakoutPercent: effectiveParams.breakoutPercent,
           cooldownSeconds: strategyClass === "scalp"
-            ? SCALP_SIGNAL_COOLDOWN_SECONDS
+            ? scalpProfile.cooldownSeconds
             : effectiveParams.cooldownSeconds,
           trendStrengthPercent: signalMetrics.trend.changePercent,
           breakoutStrengthPercent: signalMetrics.breakoutChange,
@@ -672,6 +671,10 @@ export async function runAutonomousPerpsMonitor(
           indicatorScore: indicatorScore.score,
           indicatorQualified: indicatorsReady ? indicatorScore.qualified : false,
           indicatorTags: indicatorsReady ? indicatorScore.tags : ["INDICATOR_HISTORY_INCOMPLETE"],
+          scalpSetupType: scalpMetadata?.setupType,
+          priceActionScore: scalpMetadata?.priceActionScore,
+          priceActionTags: scalpMetadata?.priceActionTags,
+          indicatorBypass: scalpMetadata?.indicatorBypass,
           indicators: {
             emaSpreadPercent: indicators.emaSpreadPercent,
             emaSlopePercent: indicators.emaSlopePercent,
