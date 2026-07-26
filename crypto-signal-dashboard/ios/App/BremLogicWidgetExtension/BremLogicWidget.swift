@@ -869,7 +869,16 @@ struct BremLogicTradeLiveActivityWidget: Widget {
         _ state: BremLogicTradeActivityAttributes.ContentState
     ) -> some View {
         BremLogicCandlestickChart(
-            candles: state.chartCandles ?? [],
+            candles: (state.chartCandles ?? []).compactMap { values in
+                guard values.count == 5 else { return nil }
+                return BremLogicWidgetCandle(
+                    timestamp: values[0],
+                    open: values[1],
+                    high: values[2],
+                    low: values[3],
+                    close: values[4]
+                )
+            },
             symbol: state.market,
             entryPrice: state.entryPrice,
             entryTimestamp: state.entryTimestamp,

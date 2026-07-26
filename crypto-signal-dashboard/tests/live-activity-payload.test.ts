@@ -36,7 +36,7 @@ const snapshot: WidgetServerSnapshot = {
   openPerpTakeProfitPnlUsd: 5,
   openPerpStopLossPnlUsd: -4,
   chartSymbol: "SOL",
-  chartCandles: Array.from({ length: 30 }, (_, index) => ({
+  chartCandles: Array.from({ length: 72 }, (_, index) => ({
     timestamp: 1_784_999_000 + index * 60,
     open: 75 + index * 0.01,
     high: 75.05 + index * 0.01,
@@ -66,7 +66,13 @@ test("Live Activity state uses the actual position entry and protection prices",
   assert.equal(state.stopLossPrice, 76.4);
   assert.equal(state.pnlUsd, 4.25);
   assert.equal(state.chartCandles.length, LIVE_ACTIVITY_CHART_CANDLE_LIMIT);
-  assert.equal(state.chartCandles[0]?.timestamp, snapshot.chartCandles[6]?.timestamp);
+  assert.deepEqual(state.chartCandles[0], [
+    snapshot.chartCandles[12]?.timestamp,
+    snapshot.chartCandles[12]?.open,
+    snapshot.chartCandles[12]?.high,
+    snapshot.chartCandles[12]?.low,
+    snapshot.chartCandles[12]?.close,
+  ]);
 });
 
 test("Live Activity APNs update has the required topic, timing, and content state", () => {

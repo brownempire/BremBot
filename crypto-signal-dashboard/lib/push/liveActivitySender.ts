@@ -15,7 +15,15 @@ import type {
   WidgetServerSnapshot,
 } from "@/lib/widget/serverSnapshot";
 
-export const LIVE_ACTIVITY_CHART_CANDLE_LIMIT = 24;
+export const LIVE_ACTIVITY_CHART_CANDLE_LIMIT = 60;
+
+export type LiveActivityCompactCandle = [
+  timestamp: number,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+];
 
 export type LiveActivityContentState = {
   positionLabel: string;
@@ -29,7 +37,7 @@ export type LiveActivityContentState = {
   markPrice: number | null;
   takeProfitPrice: number | null;
   stopLossPrice: number | null;
-  chartCandles: WidgetChartCandle[];
+  chartCandles: LiveActivityCompactCandle[];
   updatedAt: number;
   targetURL: string;
 };
@@ -53,7 +61,14 @@ function liveActivityChartCandles(candles: WidgetChartCandle[]) {
       && Number.isFinite(candle.close)
     ))
     .sort((left, right) => left.timestamp - right.timestamp)
-    .slice(-LIVE_ACTIVITY_CHART_CANDLE_LIMIT);
+    .slice(-LIVE_ACTIVITY_CHART_CANDLE_LIMIT)
+    .map((candle): LiveActivityCompactCandle => [
+      candle.timestamp,
+      candle.open,
+      candle.high,
+      candle.low,
+      candle.close,
+    ]);
 }
 
 export function liveActivityPositionKey(snapshot: WidgetServerSnapshot) {

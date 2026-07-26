@@ -112,7 +112,9 @@ struct BremLogicTradeActivityAttributes: ActivityAttributes {
         var markPrice: Double?
         var takeProfitPrice: Double?
         var stopLossPrice: Double?
-        var chartCandles: [BremLogicWidgetCandle]?
+        // Compact [timestamp, open, high, low, close] rows keep the remote
+        // ActivityKit payload under Apple's 4 KB limit with all 60 candles.
+        var chartCandles: [[Double]]?
         var updatedAt: Double
         var targetURL: String
     }
@@ -147,7 +149,9 @@ extension BremLogicTradeActivityAttributes.ContentState {
             takeProfitPrice: snapshot.openPerpTakeProfitPrice,
             stopLossPrice: snapshot.openPerpStopLossPrice,
             chartCandles: snapshot.chartCandles.map {
-                Array($0.sorted { $0.timestamp < $1.timestamp }.suffix(24))
+                Array($0.sorted { $0.timestamp < $1.timestamp }.suffix(60)).map {
+                    [$0.timestamp, $0.open, $0.high, $0.low, $0.close]
+                }
             },
             updatedAt: snapshot.updatedAt,
             targetURL: snapshot.targetURL

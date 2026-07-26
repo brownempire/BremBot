@@ -37,6 +37,7 @@ test("Apple position charts mark the execution candle only while it is visible",
   assert.match(phoneWidget, /entryTimestamp: entry\.snapshot\.openPerpEntryTimestamp/);
   assert.match(watchChart, /bremLogicWatchEntryCandleIndex/);
   assert.match(watchComplication, /visibleEntryCandleIndex/);
+  assert.match(watchComplication, /suffix\(60\)/);
   assert.match(watchComplication, /context\.stroke\(marker, with: \.color\(entryColor\), lineWidth: 1\.25\)/);
 });
 

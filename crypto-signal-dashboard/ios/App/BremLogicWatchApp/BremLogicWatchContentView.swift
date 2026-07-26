@@ -37,7 +37,7 @@ private struct BremLogicWatchCandlestickChart: View {
 
     private let upColor = Color(red: 0.035, green: 0.60, blue: 0.51)
     private let downColor = Color(red: 0.95, green: 0.21, blue: 0.27)
-    private let entryColor = Color(red: 0.40, green: 0.85, blue: 1.0)
+    private let entryColor = Color(red: 1.0, green: 0.72, blue: 0.24)
     private let markColor = Color(red: 0.36, green: 0.68, blue: 0.98)
     private let takeProfitColor = Color(red: 0.30, green: 0.89, blue: 0.54)
     private let stopLossColor = Color(red: 1.0, green: 0.45, blue: 0.45)

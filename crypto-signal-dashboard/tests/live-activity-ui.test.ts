@@ -23,8 +23,9 @@ const sceneSource = fs.readFileSync(
 test("Live Activity state carries the actual open-position entry price", () => {
   assert.match(sharedSource, /var entryPrice: Double\?/);
   assert.match(sharedSource, /entryPrice: snapshot\.openPerpEntryPrice/);
-  assert.match(sharedSource, /var chartCandles: \[BremLogicWidgetCandle\]\?/);
-  assert.match(sharedSource, /suffix\(24\)/);
+  assert.match(sharedSource, /var chartCandles: \[\[Double\]\]\?/);
+  assert.match(sharedSource, /suffix\(60\)/);
+  assert.match(widgetSource, /values\.count == 5/);
 });
 
 test("Lock Screen and expanded Island charts show Entry, Mark, TP, and SL", () => {

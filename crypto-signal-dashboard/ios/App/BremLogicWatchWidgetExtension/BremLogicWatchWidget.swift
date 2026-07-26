@@ -92,7 +92,7 @@ private struct BremLogicRectangularCandlestickChart: View {
     private let stopLossColor = Color(red: 1.0, green: 0.45, blue: 0.45)
 
     private var visibleCandles: [BremLogicWatchCandle] {
-        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(32))
+        Array(candles.sorted { $0.timestamp < $1.timestamp }.suffix(60))
     }
 
     private var visibleEntryCandleIndex: Int? {
