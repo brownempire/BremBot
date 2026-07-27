@@ -11,8 +11,7 @@ import { assertAgentWalletSigner, getAgentWalletForOwner } from "@/lib/perps/age
 import {
   calculatePerpsPositionRoePercent,
   evaluatePerpsProfitLock,
-  PROFIT_LOCK_ARM_ROE_PERCENT,
-  PROFIT_LOCK_EXIT_ROE_PERCENT,
+  PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
   type PerpsProfitLockState,
 } from "@/lib/perps/profitLock";
 import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
@@ -452,8 +451,8 @@ export async function runAutonomousPerpsMonitor(
           asset,
           profitLock.action === "armed" ? "POSITION_PROFIT_LOCK_ARMED" : "POSITION_ALREADY_OPEN",
           profitLock.action === "armed"
-            ? `Profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches ${PROFIT_LOCK_EXIT_ROE_PERCENT}% or lower.`
-            : `An agent-owned Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The profit lock arms at ${PROFIT_LOCK_ARM_ROE_PERCENT}%.`
+            ? `Profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches ${profitLock.exitRoePercent}% or lower.`
+            : `An agent-owned Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The first profit lock arms at ${PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT}%.`
         ));
         continue;
       }

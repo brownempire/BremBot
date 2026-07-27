@@ -13,6 +13,8 @@ import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import {
   calculatePerpsPositionRoePercent,
   evaluatePerpsProfitLock,
+  PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
+  PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
   PROFIT_LOCK_ARM_ROE_PERCENT,
   PROFIT_LOCK_EXIT_ROE_PERCENT,
   type PerpsProfitLockState,
@@ -490,7 +492,32 @@ function createLearningProfile(): DecisionLearningProfile {
   };
 }
 
-test("profit lock arms at 20% ROE and closes on a retreat to 15%", () => {
+test("first profit-lock tier arms at 15% ROE and closes on a retreat to 10%", () => {
+  assert.equal(PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT, 15);
+  assert.equal(PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT, 10);
+
+  const armed = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 15,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(armed.action, "armed");
+  assert.equal(armed.activeTier, "fifteen-to-ten");
+  assert.equal(armed.exitRoePercent, 10);
+
+  const retreat = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 10,
+    previousState: armed.state,
+    now: 2_000,
+  });
+  assert.equal(retreat.action, "close");
+  assert.equal(retreat.activeTier, "fifteen-to-ten");
+  assert.equal(retreat.state.peakRoePercent, 15);
+});
+
+test("second profit-lock tier arms at 20% ROE and closes on a retreat to 15%", () => {
   assert.equal(PROFIT_LOCK_ARM_ROE_PERCENT, 20);
   assert.equal(PROFIT_LOCK_EXIT_ROE_PERCENT, 15);
   assert.equal(calculatePerpsPositionRoePercent(createOpenPosition(20)), 20);
@@ -502,6 +529,8 @@ test("profit lock arms at 20% ROE and closes on a retreat to 15%", () => {
     now: 1_000,
   });
   assert.equal(armed.action, "armed");
+  assert.equal(armed.activeTier, "twenty-to-fifteen");
+  assert.equal(armed.exitRoePercent, 15);
   assert.equal(armed.state.peakRoePercent, 20);
 
   const retreat = evaluatePerpsProfitLock({
@@ -514,10 +543,10 @@ test("profit lock arms at 20% ROE and closes on a retreat to 15%", () => {
   assert.equal(retreat.state.peakRoePercent, 20);
 });
 
-test("profit lock does not close at 15% unless the same position first reached 20%", () => {
+test("profit lock does not close at 10% unless the same position first reached 15%", () => {
   const evaluation = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
-    currentRoePercent: 15,
+    currentRoePercent: 10,
     previousState: null,
     now: 1_000,
   });
@@ -525,7 +554,36 @@ test("profit lock does not close at 15% unless the same position first reached 2
   assert.equal(evaluation.state.armedAt, null);
 });
 
-test("the new threshold arms a current position from its Redis-tracked 20% peak", () => {
+test("a position promoted to the 20-to-15 tier cannot fall back to the 15-to-10 tier", () => {
+  const firstTier = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 16,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(firstTier.activeTier, "fifteen-to-ten");
+
+  const promoted = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 21,
+    previousState: firstTier.state,
+    now: 2_000,
+  });
+  assert.equal(promoted.activeTier, "twenty-to-fifteen");
+  assert.equal(promoted.exitRoePercent, 15);
+
+  const retreat = evaluatePerpsProfitLock({
+    positionPubkey: "position-pubkey",
+    currentRoePercent: 14,
+    previousState: promoted.state,
+    now: 3_000,
+  });
+  assert.equal(retreat.action, "close");
+  assert.equal(retreat.activeTier, "twenty-to-fifteen");
+  assert.equal(retreat.exitRoePercent, 15);
+});
+
+test("the tier thresholds arm a current position from its Redis-tracked peak", () => {
   const evaluation = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
     currentRoePercent: 17,
@@ -540,11 +598,12 @@ test("the new threshold arms a current position from its Redis-tracked 20% peak"
     now: 2_000,
   });
   assert.equal(evaluation.action, "armed");
+  assert.equal(evaluation.activeTier, "twenty-to-fifteen");
   assert.equal(evaluation.state.armedAt, 2_000);
   assert.equal(evaluation.state.peakRoePercent, 21);
 });
 
-test("the new threshold immediately closes a current position below 15% after a Redis-tracked 20% peak", () => {
+test("the upper tier immediately closes a current position below 15% after a Redis-tracked 20% peak", () => {
   const evaluation = evaluatePerpsProfitLock({
     positionPubkey: "position-pubkey",
     currentRoePercent: 14,
@@ -757,6 +816,54 @@ test("server monitor fails closed when an agent position is already open", async
   assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
 });
 
+test("server monitor closes the first-tier profit lock at 10% even with pending TP and SL", async () => {
+  let profitLockState: PerpsProfitLockState | null = null;
+  let closeCalls = 0;
+  const run = (roePercent: number) => runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: (async () => ({
+      positions: [createOpenPosition(roePercent)],
+      pendingTriggers: [
+        { kind: "take-profit", positionPubkey: "position-pubkey" },
+        { kind: "stop-loss", positionPubkey: "position-pubkey" },
+      ],
+      recentTrades: [],
+    })) as never,
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({ ok: true, message: "unexpected" })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "first-tier-profit-lock-close-tx" };
+    },
+    readProfitLockState: async () => profitLockState,
+    writeProfitLockState: async (_address, state) => {
+      profitLockState = state;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const armed = await run(16);
+  assert.equal(armed.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.match(armed.results[0]?.message ?? "", /10% or lower/);
+  assert.equal(closeCalls, 0);
+
+  const held = await run(12);
+  assert.equal(held.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.equal(closeCalls, 0);
+
+  const closed = await run(10);
+  assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
+  assert.equal(closeCalls, 1);
+  assert.equal((profitLockState as PerpsProfitLockState | null)?.activeTier, "fifteen-to-ten");
+});
+
 test("server monitor closes an armed profitable position at 15% even with pending TP and SL", async () => {
   let profitLockState: PerpsProfitLockState | null = null;
   let closeCalls = 0;
@@ -793,6 +900,7 @@ test("server monitor closes an armed profitable position at 15% even with pendin
 
   const armed = await run(22);
   assert.equal(armed.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.match(armed.results[0]?.message ?? "", /15% or lower/);
   assert.equal(closeCalls, 0);
 
   const closed = await run(15);

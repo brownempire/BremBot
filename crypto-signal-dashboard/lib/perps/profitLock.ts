@@ -1,12 +1,17 @@
 import type { JupiterPerpsPosition } from "@/lib/jupiterPerps";
 
+export const PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 15;
+export const PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 10;
 export const PROFIT_LOCK_ARM_ROE_PERCENT = 20;
 export const PROFIT_LOCK_EXIT_ROE_PERCENT = 15;
 export const PROFIT_LOCK_CLOSE_RETRY_MS = 2 * 60_000;
 
+export type PerpsProfitLockTier = "fifteen-to-ten" | "twenty-to-fifteen";
+
 export type PerpsProfitLockState = {
   positionPubkey: string;
   peakRoePercent: number;
+  activeTier?: PerpsProfitLockTier | null;
   armedAt: number | null;
   closeTxid: string | null;
   closeSubmittedAt: number | null;
@@ -16,6 +21,9 @@ export type PerpsProfitLockState = {
 export type PerpsProfitLockEvaluation = {
   action: "track" | "armed" | "close" | "close-pending";
   currentRoePercent: number;
+  armRoePercent: number;
+  exitRoePercent: number;
+  activeTier: PerpsProfitLockTier | null;
   state: PerpsProfitLockState;
 };
 
@@ -46,14 +54,27 @@ export function evaluatePerpsProfitLock(options: {
     ? options.previousState
     : null;
   const peakRoePercent = Math.max(previous?.peakRoePercent ?? options.currentRoePercent, options.currentRoePercent);
+  const activeTier: PerpsProfitLockTier | null = peakRoePercent >= PROFIT_LOCK_ARM_ROE_PERCENT
+    ? "twenty-to-fifteen"
+    : peakRoePercent >= PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
+      ? "fifteen-to-ten"
+      : null;
+  const armRoePercent = activeTier === "twenty-to-fifteen"
+    ? PROFIT_LOCK_ARM_ROE_PERCENT
+    : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
+  const exitRoePercent = activeTier === "twenty-to-fifteen"
+    ? PROFIT_LOCK_EXIT_ROE_PERCENT
+    : PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT;
   const armedAt = previous?.armedAt
-    ?? (peakRoePercent >= PROFIT_LOCK_ARM_ROE_PERCENT ? now : null);
+    ?? (activeTier !== null ? now : null);
   const closeIsPending = Boolean(
     previous?.closeTxid
     && previous.closeSubmittedAt
     && now - previous.closeSubmittedAt < PROFIT_LOCK_CLOSE_RETRY_MS
   );
-  const shouldClose = armedAt !== null && options.currentRoePercent <= PROFIT_LOCK_EXIT_ROE_PERCENT;
+  const shouldClose = activeTier !== null
+    && armedAt !== null
+    && options.currentRoePercent <= exitRoePercent;
 
   return {
     action: closeIsPending
@@ -64,9 +85,13 @@ export function evaluatePerpsProfitLock(options: {
           ? "armed"
           : "track",
     currentRoePercent: options.currentRoePercent,
+    armRoePercent,
+    exitRoePercent,
+    activeTier,
     state: {
       positionPubkey: options.positionPubkey,
       peakRoePercent,
+      activeTier,
       armedAt,
       closeTxid: closeIsPending ? previous?.closeTxid ?? null : null,
       closeSubmittedAt: closeIsPending ? previous?.closeSubmittedAt ?? null : null,
