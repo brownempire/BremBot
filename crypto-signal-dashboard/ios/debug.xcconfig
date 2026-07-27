@@ -1,6 +1,5 @@
 CAPACITOR_DEBUG = true
-// Personal Team-safe Debug entitlements. WatchConnectivity updates the local
-// Live Activity without Push Notifications or App Groups, which Apple rejects
-// for Personal Team provisioning. Release retains the full entitlements.
-APP_ENTITLEMENTS = App/BremLogicDebug.entitlements
-WIDGET_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtensionDebug.entitlements
+// Paid Developer Program builds use the same APNs and App Group capabilities
+// in Debug and Release so device push registration and Live Activities work.
+APP_ENTITLEMENTS = App/BremLogic.entitlements
+WIDGET_ENTITLEMENTS = BremLogicWidgetExtension/BremLogicWidgetExtension.entitlements
