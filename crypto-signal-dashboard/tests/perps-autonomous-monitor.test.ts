@@ -5,6 +5,7 @@ import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
 import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_REVERSAL_MAX_ADX,
   analyzeScalpPriceAction,
   detectAdaptiveScalpSignal,
 } from "../lib/perps/scalpEngine";
@@ -17,6 +18,8 @@ import {
   PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
   PROFIT_LOCK_ARM_ROE_PERCENT,
   PROFIT_LOCK_EXIT_ROE_PERCENT,
+  SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
+  SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
   type PerpsProfitLockState,
 } from "../lib/perps/profitLock";
 import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
@@ -179,7 +182,7 @@ function bullishSweepPoints() {
   });
 }
 
-test("strong liquidity-sweep reversal uses candle structure despite lagging indicator disagreement", () => {
+test("strong liquidity-sweep reversal requires confirmation without bypassing indicators", () => {
   const points = bullishSweepPoints();
   const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
@@ -193,9 +196,9 @@ test("strong liquidity-sweep reversal uses candle structure despite lagging indi
   assert.equal(priceAction.setupType, "liquidity-sweep");
   assert.equal(priceAction.strong, true);
   assert.equal(signal?.direction, "bullish");
-  assert.equal(signal?.indicatorBypass, true);
+  assert.equal(signal?.indicatorBypass, false);
   assert.ok(signal?.priceActionTags.includes("PRICE_LIQUIDITY_SWEEP_RECLAIM"));
-  assert.ok(signal?.priceActionTags.includes("INDICATOR_BYPASS_STRONG_PRICE_ACTION"));
+  assert.ok(signal?.priceActionTags.includes("INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"));
 });
 
 test("the candle-structure reversal detector handles bearish liquidity sweeps symmetrically", () => {
@@ -223,7 +226,7 @@ test("the candle-structure reversal detector handles bearish liquidity sweeps sy
 
   assert.equal(signal?.direction, "bearish");
   assert.equal(signal?.setupType, "liquidity-sweep");
-  assert.equal(signal?.indicatorBypass, true);
+  assert.equal(signal?.indicatorBypass, false);
 });
 
 test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
@@ -239,6 +242,48 @@ test("a lone price spike without reclaim and momentum confirmation cannot bypass
   });
 
   assert.equal(priceAction.direction, null);
+  assert.equal(signal, null);
+});
+
+test("ADX above 40 rejects even a strong confirmed reversal", () => {
+  const points = bullishSweepPoints();
+  const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 0.01 }),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+
+  assert.equal(priceAction.strong, true);
+  assert.equal(priceAction.confirmed, true);
+  assert.equal(signal, null);
+});
+
+test("a confirmed reversal at the ADX 40 ceiling remains eligible", () => {
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points: bullishSweepPoints(),
+    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX }),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+
+  assert.equal(signal?.setupType, "liquidity-sweep");
+  assert.equal(signal?.indicatorBypass, false);
+});
+
+test("raw scalp confidence must clear the learned threshold instead of being raised to it", () => {
+  const points = bullishSweepPoints();
+  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  profile.minimumConfidence = 0.82;
+  profile.setupConfidenceAdjustments.liquiditySweep = 0.08;
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators(),
+    profile,
+  });
+
   assert.equal(signal, null);
 });
 
@@ -515,6 +560,86 @@ test("first profit-lock tier arms at 15% ROE and closes on a retreat to 10%", ()
   assert.equal(retreat.action, "close");
   assert.equal(retreat.activeTier, "fifteen-to-ten");
   assert.equal(retreat.state.peakRoePercent, 15);
+});
+
+test("scalp staircase arms at 10% ROE and closes on a retreat to 7%", () => {
+  assert.equal(SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT, 10);
+  assert.equal(SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT, 7);
+
+  const armed = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 10,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(armed.action, "armed");
+  assert.equal(armed.activeTier, "ten-to-seven");
+  assert.equal(armed.exitRoePercent, 7);
+  assert.equal(armed.state.strategyClass, "scalp");
+
+  const held = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 8,
+    previousState: armed.state,
+    now: 2_000,
+  });
+  assert.equal(held.action, "armed");
+
+  const retreat = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 7,
+    previousState: held.state,
+    now: 3_000,
+  });
+  assert.equal(retreat.action, "close");
+  assert.equal(retreat.activeTier, "ten-to-seven");
+});
+
+test("Smart Trades retain the original staircase and do not arm at 10% ROE", () => {
+  const evaluation = evaluatePerpsProfitLock({
+    positionPubkey: "smart-position",
+    strategyClass: "smart",
+    currentRoePercent: 10,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(evaluation.action, "track");
+  assert.equal(evaluation.activeTier, null);
+  assert.equal(evaluation.armRoePercent, 15);
+});
+
+test("a scalp position promotes from 10-to-7 through the existing upper tiers", () => {
+  const first = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 11,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(first.activeTier, "ten-to-seven");
+
+  const second = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 16,
+    previousState: first.state,
+    now: 2_000,
+  });
+  assert.equal(second.activeTier, "fifteen-to-ten");
+  assert.equal(second.exitRoePercent, 10);
+
+  const third = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-position",
+    strategyClass: "scalp",
+    currentRoePercent: 21,
+    previousState: second.state,
+    now: 3_000,
+  });
+  assert.equal(third.activeTier, "twenty-to-fifteen");
+  assert.equal(third.exitRoePercent, 15);
 });
 
 test("second profit-lock tier arms at 20% ROE and closes on a retreat to 15%", () => {
@@ -862,6 +987,59 @@ test("server monitor closes the first-tier profit lock at 10% even with pending 
   assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
   assert.equal(closeCalls, 1);
   assert.equal((profitLockState as PerpsProfitLockState | null)?.activeTier, "fifteen-to-ten");
+});
+
+test("server monitor applies the 10-to-7 staircase only to an open scalp position", async () => {
+  let profitLockState: PerpsProfitLockState | null = null;
+  let closeCalls = 0;
+  const base = createConfig();
+  const scalpConfig = createConfig({
+    settings: {
+      ...base.settings,
+      scalpModeEnabled: true,
+    },
+  });
+  const run = (roePercent: number) => runAutonomousPerpsMonitor({
+    listConfigs: async () => [scalpConfig],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(roePercent)],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({ ok: true, message: "unexpected" })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "scalp-staircase-close-tx" };
+    },
+    readProfitLockState: async () => profitLockState,
+    writeProfitLockState: async (_address, state) => {
+      profitLockState = state;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const armed = await run(11);
+  assert.equal(armed.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.match(armed.results[0]?.message ?? "", /7% or lower/);
+  assert.equal((profitLockState as PerpsProfitLockState | null)?.strategyClass, "scalp");
+  assert.equal((profitLockState as PerpsProfitLockState | null)?.activeTier, "ten-to-seven");
+
+  const held = await run(8);
+  assert.equal(held.results[0]?.code, "POSITION_PROFIT_LOCK_ARMED");
+  assert.equal(closeCalls, 0);
+
+  const closed = await run(7);
+  assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
+  assert.equal(closeCalls, 1);
+  assert.equal((profitLockState as PerpsProfitLockState | null)?.closeTxid, "scalp-staircase-close-tx");
 });
 
 test("server monitor closes an armed profitable position at 15% even with pending TP and SL", async () => {

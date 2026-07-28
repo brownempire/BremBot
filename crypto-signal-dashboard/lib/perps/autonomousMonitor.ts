@@ -11,7 +11,6 @@ import { assertAgentWalletSigner, getAgentWalletForOwner } from "@/lib/perps/age
 import {
   calculatePerpsPositionRoePercent,
   evaluatePerpsProfitLock,
-  PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
   type PerpsProfitLockState,
 } from "@/lib/perps/profitLock";
 import { getPerpsSessionConfig, isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
@@ -411,10 +410,17 @@ export async function runAutonomousPerpsMonitor(
         }
 
         const previousState = await deps.readProfitLockState(config.walletAddress);
+        const positionStrategyClass = previousState?.positionPubkey === positionPubkey
+          && previousState.strategyClass
+          ? previousState.strategyClass
+          : config.settings.scalpModeEnabled
+            ? "scalp"
+            : "smart";
         const profitLock = evaluatePerpsProfitLock({
           positionPubkey,
           currentRoePercent,
           previousState,
+          strategyClass: positionStrategyClass,
         });
         await deps.writeProfitLockState(config.walletAddress, profitLock.state);
 
@@ -452,7 +458,7 @@ export async function runAutonomousPerpsMonitor(
           profitLock.action === "armed" ? "POSITION_PROFIT_LOCK_ARMED" : "POSITION_ALREADY_OPEN",
           profitLock.action === "armed"
             ? `Profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches ${profitLock.exitRoePercent}% or lower.`
-            : `An agent-owned Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The first profit lock arms at ${PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT}%.`
+            : `An agent-owned ${profitLock.strategyClass === "scalp" ? "Scalp" : "Smart Trade"} Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The first profit lock arms at ${profitLock.armRoePercent}%.`
         ));
         continue;
       }

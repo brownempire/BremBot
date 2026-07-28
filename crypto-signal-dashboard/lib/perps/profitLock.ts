@@ -4,12 +4,17 @@ export const PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 15;
 export const PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 10;
 export const PROFIT_LOCK_ARM_ROE_PERCENT = 20;
 export const PROFIT_LOCK_EXIT_ROE_PERCENT = 15;
+export const SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 10;
+export const SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 7;
 export const PROFIT_LOCK_CLOSE_RETRY_MS = 2 * 60_000;
+const PROFIT_LOCK_ROE_EPSILON = 1e-9;
 
-export type PerpsProfitLockTier = "fifteen-to-ten" | "twenty-to-fifteen";
+export type PerpsProfitLockTier = "ten-to-seven" | "fifteen-to-ten" | "twenty-to-fifteen";
+export type PerpsProfitLockStrategyClass = "smart" | "scalp";
 
 export type PerpsProfitLockState = {
   positionPubkey: string;
+  strategyClass?: PerpsProfitLockStrategyClass;
   peakRoePercent: number;
   activeTier?: PerpsProfitLockTier | null;
   armedAt: number | null;
@@ -21,6 +26,7 @@ export type PerpsProfitLockState = {
 export type PerpsProfitLockEvaluation = {
   action: "track" | "armed" | "close" | "close-pending";
   currentRoePercent: number;
+  strategyClass: PerpsProfitLockStrategyClass;
   armRoePercent: number;
   exitRoePercent: number;
   activeTier: PerpsProfitLockTier | null;
@@ -47,24 +53,34 @@ export function evaluatePerpsProfitLock(options: {
   positionPubkey: string;
   currentRoePercent: number;
   previousState: PerpsProfitLockState | null;
+  strategyClass?: PerpsProfitLockStrategyClass;
   now?: number;
 }): PerpsProfitLockEvaluation {
   const now = options.now ?? Date.now();
   const previous = options.previousState?.positionPubkey === options.positionPubkey
     ? options.previousState
     : null;
+  const strategyClass = options.strategyClass ?? previous?.strategyClass ?? "smart";
   const peakRoePercent = Math.max(previous?.peakRoePercent ?? options.currentRoePercent, options.currentRoePercent);
   const activeTier: PerpsProfitLockTier | null = peakRoePercent >= PROFIT_LOCK_ARM_ROE_PERCENT
     ? "twenty-to-fifteen"
     : peakRoePercent >= PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
       ? "fifteen-to-ten"
+      : strategyClass === "scalp" && peakRoePercent >= SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
+        ? "ten-to-seven"
       : null;
   const armRoePercent = activeTier === "twenty-to-fifteen"
     ? PROFIT_LOCK_ARM_ROE_PERCENT
-    : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
+    : activeTier === "fifteen-to-ten"
+      ? PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
+      : strategyClass === "scalp"
+        ? SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
+        : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
   const exitRoePercent = activeTier === "twenty-to-fifteen"
     ? PROFIT_LOCK_EXIT_ROE_PERCENT
-    : PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT;
+    : activeTier === "fifteen-to-ten"
+      ? PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT
+      : SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT;
   const armedAt = previous?.armedAt
     ?? (activeTier !== null ? now : null);
   const closeIsPending = Boolean(
@@ -74,7 +90,7 @@ export function evaluatePerpsProfitLock(options: {
   );
   const shouldClose = activeTier !== null
     && armedAt !== null
-    && options.currentRoePercent <= exitRoePercent;
+    && options.currentRoePercent <= exitRoePercent + PROFIT_LOCK_ROE_EPSILON;
 
   return {
     action: closeIsPending
@@ -85,11 +101,13 @@ export function evaluatePerpsProfitLock(options: {
           ? "armed"
           : "track",
     currentRoePercent: options.currentRoePercent,
+    strategyClass,
     armRoePercent,
     exitRoePercent,
     activeTier,
     state: {
       positionPubkey: options.positionPubkey,
+      strategyClass,
       peakRoePercent,
       activeTier,
       armedAt,

@@ -44,12 +44,14 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
     reasons: ["Scalp baseline is active while closed scalp outcomes are collected."],
   },
 };
+export const SCALP_REVERSAL_MAX_ADX = 40;
 
 export type ScalpPriceAction = {
   direction: "bullish" | "bearish" | null;
   setupType: ScalpSetupType | null;
   score: number;
   strong: boolean;
+  confirmed: boolean;
   tags: string[];
   sweepPercent: number;
   reclaimPercent: number;
@@ -162,7 +164,7 @@ export function analyzeScalpPriceAction(
 ): ScalpPriceAction {
   const recent = points.slice(-24);
   if (recent.length < 10) {
-    return { direction: null, setupType: null, score: 0, strong: false, tags: [], sweepPercent: 0, reclaimPercent: 0 };
+    return { direction: null, setupType: null, score: 0, strong: false, confirmed: false, tags: [], sweepPercent: 0, reclaimPercent: 0 };
   }
   const latest = recent[recent.length - 1]!;
   const reference = recent.slice(0, -4);
@@ -222,6 +224,7 @@ export function analyzeScalpPriceAction(
       setupType: null,
       score: Number(Math.max(bullish.score, bearish.score).toFixed(3)),
       strong: false,
+      confirmed: false,
       tags: [],
       sweepPercent: 0,
       reclaimPercent: 0,
@@ -232,11 +235,17 @@ export function analyzeScalpPriceAction(
     : selected.double
       ? "double-reversal"
       : "v-reversal";
+  const reclaimHeld = direction === "bullish"
+    ? recent.slice(-2).every((point) => point.v > referenceLow)
+    : recent.slice(-2).every((point) => point.v < referenceHigh);
+  const confirmed = selected.momentum
+    && (!selected.sweep || reclaimHeld);
   return {
     direction,
     setupType,
     score: Number(selected.score.toFixed(3)),
     strong: selected.score >= profile.strongReversalScore,
+    confirmed,
     tags: selected.tags,
     sweepPercent: Number((direction === "bullish"
       ? percent(referenceLow - reactionLow, referenceLow)
@@ -279,14 +288,16 @@ export function detectAdaptiveScalpSignal(options: {
     && indicators.bollingerBandwidthPercent >= profile.minimumBandwidthPercent
     && (indicators.volumeRatio === null || indicators.volumeRatio >= profile.minimumVolumeRatio);
 
-  const strongReversal = priceAction.strong && priceAction.direction !== null;
-  const moderateReversal = priceAction.direction !== null
+  const reversalIndicatorsReady = priceAction.direction !== null
+    && priceAction.confirmed
     && indicators.adx !== null
-    && indicators.adx <= Math.min(40, profile.maximumAdx + 12)
+    && indicators.adx <= SCALP_REVERSAL_MAX_ADX
     && indicators.emaSpreadPercent !== null
     && Math.abs(indicators.emaSpreadPercent) <= Math.min(1.5, profile.maximumEmaSpreadPercent + 0.55)
     && indicators.rsi !== null
     && (priceAction.direction === "bullish" ? indicators.rsi <= 62 : indicators.rsi >= 38);
+  const strongReversal = priceAction.strong && reversalIndicatorsReady;
+  const moderateReversal = !priceAction.strong && reversalIndicatorsReady;
   const direction = strongReversal || moderateReversal ? priceAction.direction : rangeIndicatorsReady ? rangeDirection : null;
   if (!direction) return null;
   if (profile.preferredDirection !== "balanced" && direction !== profile.preferredDirection) return null;
@@ -305,12 +316,13 @@ export function detectAdaptiveScalpSignal(options: {
   const rangeExtremity = direction === "bullish"
     ? clamp((profile.longBollingerMaximum - (indicators.bollingerPosition ?? profile.longBollingerMaximum)) / 0.3, 0, 1)
     : clamp(((indicators.bollingerPosition ?? profile.shortBollingerMinimum) - profile.shortBollingerMinimum) / 0.3, 0, 1);
-  const confidence = strongReversal || moderateReversal
-    ? clamp(0.55 + priceAction.score * 0.35, requiredConfidence, 0.9)
-    : clamp(0.6 + rangeExtremity * 0.15, requiredConfidence, 0.82);
-  if (confidence < requiredConfidence) return null;
+  const rawConfidence = strongReversal || moderateReversal
+    ? 0.55 + priceAction.score * 0.35
+    : 0.6 + rangeExtremity * 0.22;
+  if (rawConfidence < requiredConfidence) return null;
+  const confidence = clamp(rawConfidence, 0, strongReversal || moderateReversal ? 0.9 : 0.82);
   const tags = strongReversal || moderateReversal
-    ? [...priceAction.tags, strongReversal ? "INDICATOR_BYPASS_STRONG_PRICE_ACTION" : "INDICATORS_RELAXED_PRICE_ACTION"]
+    ? [...priceAction.tags, strongReversal ? "INDICATORS_CONFIRMED_STRONG_PRICE_ACTION" : "INDICATORS_CONFIRMED_PRICE_ACTION"]
     : ["SCALP_RANGE", direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"];
 
   return {
@@ -326,6 +338,6 @@ export function detectAdaptiveScalpSignal(options: {
     setupType,
     priceActionScore: setupType === "range-reversal" ? Number((0.55 + rangeExtremity * 0.2).toFixed(3)) : priceAction.score,
     priceActionTags: tags,
-    indicatorBypass: strongReversal,
+    indicatorBypass: false,
   };
 }
