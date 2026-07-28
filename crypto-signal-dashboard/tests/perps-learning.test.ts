@@ -136,6 +136,8 @@ test("each newly closed trade incrementally updates the active wallet profile", 
   });
   await learningStore.saveTradeLearningOutcomes([learningTypes.tradeLearningOutcomeSchema.parse({
     outcomeId: `${walletAddress}:1`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
     walletAddress,
     executionId: "execution-online-1",
     decisionId: "decision-online-1",
@@ -196,6 +198,8 @@ test("Smart and scalp losses update only their respective learning algorithms", 
   });
   const makeOutcome = (index: number, signalType: "trend" | "scalp") => learningTypes.tradeLearningOutcomeSchema.parse({
     outcomeId: `${walletAddress}:${index}`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
     walletAddress,
     executionId: `execution-isolation-${index}`,
     decisionId: `decision-isolation-${index}`,
@@ -332,6 +336,8 @@ test("profitable chronological holdout history promotes a versioned learned prof
   const walletAddress = "learning-wallet-history";
   const outcomes = Array.from({ length: 60 }, (_, index) => learningTypes.tradeLearningOutcomeSchema.parse({
     outcomeId: `${walletAddress}:${index}`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
     walletAddress,
     executionId: `execution-${index}`,
     decisionId: `decision-${index}`,
@@ -402,6 +408,8 @@ test("a failing trained candidate never replaces the active live profile", async
   });
   const outcomes = Array.from({ length: 60 }, (_, index) => learningTypes.tradeLearningOutcomeSchema.parse({
     outcomeId: `${walletAddress}:${index}`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
     walletAddress,
     executionId: `execution-${index}`,
     decisionId: `decision-${index}`,
@@ -522,4 +530,163 @@ test("closed Jupiter trades reconcile into fee-aware training outcomes", async (
   assert.equal(saved[0]?.netPnlUsd, 0.8);
   assert.equal(saved[0]?.exitReason, "take-profit");
   assert.equal(saved[0]?.trendWindow, 30);
+});
+
+test("reused Jupiter position accounts are reconciled as separate chronological episodes", async () => {
+  const walletAddress = "learning-wallet-reused-position";
+  const positionPubkey = "reused-position";
+  const makeExecution = (index: number, openedAtMs: number, txid: string): PerpsUserExecution => ({
+    executionId: `execution-episode-${index}`,
+    sessionId: "session-episodes",
+    walletAddress,
+    signalId: `signal-episode-${index}`,
+    symbol: "SOL/USD",
+    summary: `Episode ${index}`,
+    side: "long",
+    asset: "SOL",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "submitted",
+    reasonCode: "APPROVED",
+    reasonMessage: "Submitted",
+    collateralUsd: 10,
+    sizeUsd: 50,
+    leverage: 5,
+    takeProfitPrice: 102,
+    stopLossPrice: 98,
+    txid,
+    positionPubkey,
+    decisionId: null,
+    strategyClass: "scalp",
+    createdAt: new Date(openedAtMs).toISOString(),
+    updatedAt: new Date(openedAtMs).toISOString(),
+  });
+  const firstOpenedAt = 1_730_000_000_000;
+  const secondOpenedAt = firstOpenedAt + 3_600_000;
+  const trades = [
+    { id: "exit-2", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Close", orderType: "StopLoss", price: 99, sizeUsd: 50, collateralUsdDelta: -10, feeUsd: 0.1, pnl: -0.6, pnlPercentage: -7, txHash: "exit-tx-2", createdAt: secondOpenedAt + 600_000, lastUpdated: secondOpenedAt + 600_000 },
+    { id: "entry-1", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 100, sizeUsd: 50, collateralUsdDelta: 10, feeUsd: 0.1, pnl: null, pnlPercentage: null, txHash: "entry-tx-1", createdAt: firstOpenedAt + 1_000, lastUpdated: firstOpenedAt + 1_000 },
+    { id: "entry-2", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 101, sizeUsd: 50, collateralUsdDelta: 10, feeUsd: 0.1, pnl: null, pnlPercentage: null, txHash: "entry-tx-2", createdAt: secondOpenedAt + 1_000, lastUpdated: secondOpenedAt + 1_000 },
+    { id: "exit-1", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Close", orderType: "TakeProfit", price: 102, sizeUsd: 50, collateralUsdDelta: -10, feeUsd: 0.1, pnl: 0.9, pnlPercentage: 8, txHash: "exit-tx-1", createdAt: firstOpenedAt + 600_000, lastUpdated: firstOpenedAt + 600_000 },
+  ] as const;
+
+  await learningStore.saveTradeLearningOutcomes([learningTypes.tradeLearningOutcomeSchema.parse({
+    outcomeId: `${walletAddress}:corrupt`,
+    walletAddress,
+    executionId: "corrupt",
+    decisionId: null,
+    signalId: "corrupt",
+    asset: "SOL",
+    side: "long",
+    openedAt: new Date(firstOpenedAt).toISOString(),
+    closedAt: new Date(secondOpenedAt + 600_000).toISOString(),
+    positionPubkey,
+    entryPrice: 100,
+    exitPrice: 99,
+    collateralUsd: 10,
+    sizeUsd: 50,
+    leverage: 5,
+    takeProfitPrice: 102,
+    stopLossPrice: 98,
+    grossPnlUsd: -10,
+    feesUsd: 3,
+    netPnlUsd: -13,
+    returnOnCollateralPercent: -130,
+    durationMinutes: 70,
+    exitReason: "stop-loss",
+    signalConfidence: null,
+    signalType: "scalp",
+    trendWindow: null,
+    trendThreshold: null,
+    breakoutPercent: null,
+    cooldownSeconds: null,
+    trendStrengthPercent: null,
+    breakoutStrengthPercent: null,
+    volatilityPercent: null,
+    atrPercent: null,
+    trendBias: null,
+    createdAt: new Date().toISOString(),
+  })]);
+
+  const saved = await outcomeReconciler.reconcileTradeLearningOutcomes({
+    walletAddress,
+    executions: [
+      makeExecution(1, firstOpenedAt, "entry-tx-1"),
+      makeExecution(2, secondOpenedAt, "entry-tx-2"),
+    ],
+    decisions: [],
+    snapshot: { positions: [], pendingTriggers: [], recentTrades: [...trades] },
+    replaceWalletHistory: true,
+  });
+
+  assert.equal(saved.length, 2);
+  assert.equal(saved[0]?.netPnlUsd, 0.8);
+  assert.equal(saved[1]?.netPnlUsd, -0.7);
+  assert.equal(saved[0]?.feesUsd, 0.2);
+  assert.equal(saved[1]?.feesUsd, 0.2);
+  assert.equal(saved[0]?.durationMinutes, 10);
+  assert.equal(saved[1]?.durationMinutes, 10);
+  assert.notEqual(saved[0]?.episodeId, saved[1]?.episodeId);
+  assert.ok(saved.every((outcome) => outcome.reconciliationVersion === 2));
+  assert.equal((await learningStore.listTradeLearningOutcomes(walletAddress)).length, 2);
+});
+
+test("the known legacy loss stays in audit history but is excluded from profile training", async () => {
+  const walletAddress = "learning-wallet-legacy-outlier";
+  const openedAtMs = Date.parse("2026-07-20T23:04:22.891Z");
+  const execution: PerpsUserExecution = {
+    executionId: "execution-legacy-outlier",
+    sessionId: "session-legacy-outlier",
+    walletAddress,
+    signalId: "signal-legacy-outlier",
+    symbol: "SOL/USD",
+    summary: "Legacy scalp",
+    side: "long",
+    asset: "SOL",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "submitted",
+    reasonCode: "APPROVED",
+    reasonMessage: "Submitted",
+    collateralUsd: 100,
+    sizeUsd: 500,
+    leverage: 5,
+    takeProfitPrice: 105,
+    stopLossPrice: 95,
+    txid: "legacy-entry-tx",
+    positionPubkey: "legacy-outlier-position",
+    decisionId: null,
+    strategyClass: "scalp",
+    createdAt: new Date(openedAtMs).toISOString(),
+    updatedAt: new Date(openedAtMs).toISOString(),
+  };
+  const saved = await outcomeReconciler.reconcileTradeLearningOutcomes({
+    walletAddress,
+    executions: [execution],
+    decisions: [],
+    snapshot: {
+      positions: [],
+      pendingTriggers: [],
+      recentTrades: [
+        { id: "legacy-entry", source: "live-api", positionPubkey: execution.positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 100, sizeUsd: 500, collateralUsdDelta: 100, feeUsd: 0.5, pnl: null, pnlPercentage: null, txHash: execution.txid, createdAt: openedAtMs + 1_000, lastUpdated: openedAtMs + 1_000 },
+        { id: "legacy-exit", source: "live-api", positionPubkey: execution.positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Close", orderType: "Market", price: 82, sizeUsd: 500, collateralUsdDelta: -100, feeUsd: 0.5, pnl: -90.75, pnlPercentage: -91.25, txHash: "legacy-exit-tx", createdAt: openedAtMs + 600_000, lastUpdated: openedAtMs + 600_000 },
+      ],
+    },
+    replaceWalletHistory: true,
+  });
+
+  assert.equal(saved[0]?.netPnlUsd, -91.25);
+  assert.equal(saved[0]?.trainingEligible, false);
+  assert.match(saved[0]?.trainingExclusionReason ?? "", /retained for PnL, audit, and tail-risk/i);
+
+  const trained = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  assert.equal(trained.outcomeCount, 0);
+  assert.equal(trained.excludedOutcomeCount, 1);
+  assert.equal(trained.profile.learnedFromClosedTrades, 0);
+  assert.equal((await learningStore.listTradeLearningOutcomes(walletAddress)).length, 1);
 });

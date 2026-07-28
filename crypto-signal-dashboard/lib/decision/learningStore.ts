@@ -136,6 +136,44 @@ export async function saveTradeLearningOutcomes(outcomes: TradeLearningOutcome[]
   return parsed;
 }
 
+export async function replaceTradeLearningOutcomesForWallet(
+  walletAddress: string,
+  outcomes: TradeLearningOutcome[]
+) {
+  const parsed = outcomes.map((outcome) => tradeLearningOutcomeSchema.parse(outcome));
+  if (parsed.some((outcome) => outcome.walletAddress !== walletAddress)) {
+    throw new Error("Cannot replace learning outcomes across wallet boundaries.");
+  }
+
+  const redis = await getRedisClient().catch(() => null);
+  if (redis) {
+    try {
+      const existing = await redis.hGetAll(OUTCOMES_KEY);
+      const staleIds = Object.entries(existing).flatMap(([outcomeId, value]) => {
+        try {
+          return parseOutcome(JSON.parse(value))?.walletAddress === walletAddress ? [outcomeId] : [];
+        } catch {
+          return [];
+        }
+      });
+      const multi = redis.multi();
+      if (staleIds.length > 0) multi.hDel(OUTCOMES_KEY, staleIds);
+      parsed.forEach((outcome) => multi.hSet(OUTCOMES_KEY, outcome.outcomeId, JSON.stringify(outcome)));
+      await multi.exec();
+    } catch {
+      // Keep the local fail-safe internally consistent if Redis is interrupted.
+    }
+  }
+
+  const disk = readJsonFile(OUTCOME_FILE) as Record<string, unknown>;
+  Object.entries(disk).forEach(([outcomeId, value]) => {
+    if (parseOutcome(value)?.walletAddress === walletAddress) delete disk[outcomeId];
+  });
+  parsed.forEach((outcome) => { disk[outcome.outcomeId] = outcome; });
+  writeJsonFile(OUTCOME_FILE, disk);
+  return parsed;
+}
+
 export async function listTradeLearningOutcomes(walletAddress: string) {
   const outcomes = new Map<string, TradeLearningOutcome>();
   const redis = await getRedisClient().catch(() => null);

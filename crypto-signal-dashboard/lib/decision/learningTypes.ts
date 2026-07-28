@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const CURRENT_OUTCOME_RECONCILIATION_VERSION = 2;
+
 export const learningAssetSchema = z.enum(["SOL", "ETH", "BTC"]);
 
 export const scalpSetupTypeSchema = z.enum([
@@ -11,6 +13,10 @@ export const scalpSetupTypeSchema = z.enum([
 
 export const tradeLearningOutcomeSchema = z.object({
   outcomeId: z.string().trim().min(1),
+  episodeId: z.string().trim().min(1).optional(),
+  reconciliationVersion: z.number().int().positive().optional(),
+  trainingEligible: z.boolean().optional(),
+  trainingExclusionReason: z.string().trim().min(1).nullable().optional(),
   walletAddress: z.string().trim().min(1),
   executionId: z.string().trim().min(1),
   decisionId: z.string().trim().min(1).nullable(),
@@ -119,6 +125,7 @@ export const decisionLearningProfileSchema = z.object({
   createdAt: z.string().datetime(),
   promotedAt: z.string().datetime().nullable(),
   learnedFromClosedTrades: z.number().int().min(0),
+  outcomeDataVersion: z.number().int().positive().optional(),
   strategyBaselineVersion: z.number().int().positive().optional(),
   minimumConfidence: z.number().finite().min(0.45).max(0.82),
   leverageFloor: z.number().finite().min(1).max(125).optional(),

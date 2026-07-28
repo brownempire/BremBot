@@ -4,6 +4,7 @@ import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 import { DEFAULT_SCALP_LEARNING_PROFILE } from "@/lib/perps/scalpEngine";
+import { CURRENT_OUTCOME_RECONCILIATION_VERSION } from "@/lib/decision/learningTypes";
 
 export function makeOperatorTrainingBaselineProfile(
   walletAddress: string,
@@ -20,6 +21,7 @@ export function makeOperatorTrainingBaselineProfile(
     createdAt: now,
     promotedAt: null,
     learnedFromClosedTrades: 0,
+    outcomeDataVersion: CURRENT_OUTCOME_RECONCILIATION_VERSION,
     strategyBaselineVersion: baseline.version,
     minimumConfidence: baseline.minimumConfidence,
     leverageFloor: baseline.leverageFloor,

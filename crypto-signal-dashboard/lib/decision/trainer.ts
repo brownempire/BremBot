@@ -12,6 +12,7 @@ import type {
   LearningAsset,
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
+import { CURRENT_OUTCOME_RECONCILIATION_VERSION } from "@/lib/decision/learningTypes";
 import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
@@ -205,6 +206,7 @@ function createLearnedCandidate(
     createdAt: now,
     promotedAt: null,
     learnedFromClosedTrades: allOutcomes.length,
+    outcomeDataVersion: CURRENT_OUTCOME_RECONCILIATION_VERSION,
     strategyBaselineVersion: OPERATOR_TRAINING_BASELINE.version,
     minimumConfidence: Number(minimumConfidence.toFixed(4)),
     leverageFloor: OPERATOR_TRAINING_BASELINE.leverageFloor,
@@ -310,6 +312,7 @@ function createIncrementalProfile(
     createdAt: now,
     promotedAt: null,
     learnedFromClosedTrades: outcomes.length,
+    outcomeDataVersion: CURRENT_OUTCOME_RECONCILIATION_VERSION,
     strategyBaselineVersion: OPERATOR_TRAINING_BASELINE.version,
     minimumConfidence: Number(minimumConfidence.toFixed(4)),
     leverageFloor: OPERATOR_TRAINING_BASELINE.leverageFloor,
@@ -345,19 +348,33 @@ export async function trainWalletDecisionProfile(input: {
   source: "automatic" | "manual-training";
   force?: boolean;
 }) {
-  const [active, history, outcomes] = await Promise.all([
+  const [active, history, storedOutcomes] = await Promise.all([
     getActiveDecisionLearningProfile(input.walletAddress),
     listDecisionLearningProfileHistory(input.walletAddress),
     listTradeLearningOutcomes(input.walletAddress),
   ]);
+  const requiresOutcomeMigration = Boolean(
+    active && (active.outcomeDataVersion ?? 1) < CURRENT_OUTCOME_RECONCILIATION_VERSION
+  );
+  const outcomes = storedOutcomes.filter((outcome) => (
+    outcome.trainingEligible !== false
+    && outcome.reconciliationVersion === CURRENT_OUTCOME_RECONCILIATION_VERSION
+  ));
+  const excludedOutcomeCount = storedOutcomes.length - outcomes.length;
   const version = Math.max(0, ...history.map((profile) => profile.version)) + 1;
-  if (active && (active.strategyBaselineVersion ?? 1) < OPERATOR_TRAINING_BASELINE.version) {
+  if (
+    active
+    && (
+      (active.strategyBaselineVersion ?? 1) < OPERATOR_TRAINING_BASELINE.version
+      || requiresOutcomeMigration
+    )
+  ) {
     const migratedBaseline = await saveDecisionLearningProfile(
       makeOperatorTrainingBaselineProfile(input.walletAddress, version),
       true
     );
     if (outcomes.length === 0) {
-      return { profile: migratedBaseline, activated: true, outcomeCount: 0, skipped: false, migrated: true };
+      return { profile: migratedBaseline, activated: true, outcomeCount: 0, excludedOutcomeCount, skipped: false, migrated: true };
     }
     if (outcomes.length >= MIN_TRAINING_SAMPLE) {
       const smartOutcomeCount = outcomes.filter((outcome) => outcome.signalType !== "scalp").length;
@@ -368,6 +385,7 @@ export async function trainWalletDecisionProfile(input: {
           profile,
           activated: true,
           outcomeCount: outcomes.length,
+          excludedOutcomeCount,
           skipped: false,
           incremental: true,
           migrated: true,
@@ -387,6 +405,7 @@ export async function trainWalletDecisionProfile(input: {
         profile,
         activated: candidate.validation.passed,
         outcomeCount: outcomes.length,
+        excludedOutcomeCount,
         skipped: false,
         migrated: true,
         activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
@@ -398,6 +417,7 @@ export async function trainWalletDecisionProfile(input: {
       profile,
       activated: true,
       outcomeCount: outcomes.length,
+      excludedOutcomeCount,
       skipped: false,
       incremental: true,
       migrated: true,
@@ -411,6 +431,7 @@ export async function trainWalletDecisionProfile(input: {
       profile,
       activated: true,
       outcomeCount: outcomes.length,
+      excludedOutcomeCount,
       skipped: false,
       incremental: true,
       activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
@@ -418,11 +439,11 @@ export async function trainWalletDecisionProfile(input: {
   }
   const latestAttempt = history[0] ?? active;
   if (!input.force && latestAttempt && Date.now() - Date.parse(latestAttempt.createdAt) < AUTO_RETRAIN_INTERVAL_MS) {
-    return { profile: active ?? latestAttempt, activated: false, outcomeCount: outcomes.length, skipped: true };
+    return { profile: active ?? latestAttempt, activated: false, outcomeCount: outcomes.length, excludedOutcomeCount, skipped: true };
   }
   if (outcomes.length < MIN_TRAINING_SAMPLE) {
     if (active && !input.force) {
-      return { profile: active, activated: false, outcomeCount: outcomes.length, skipped: true };
+      return { profile: active, activated: false, outcomeCount: outcomes.length, excludedOutcomeCount, skipped: true };
     }
     const baseline = makeOperatorTrainingBaselineProfile(input.walletAddress, version);
     const savedBaseline = await saveDecisionLearningProfile(baseline, true);
@@ -433,13 +454,14 @@ export async function trainWalletDecisionProfile(input: {
         profile,
         activated: true,
         outcomeCount: outcomes.length,
+        excludedOutcomeCount,
         skipped: false,
         incremental: true,
         activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
       };
     }
     const profile = savedBaseline;
-    return { profile, activated: true, outcomeCount: outcomes.length, skipped: false };
+    return { profile, activated: true, outcomeCount: outcomes.length, excludedOutcomeCount, skipped: false };
   }
 
   const smartOutcomeCount = outcomes.filter((outcome) => outcome.signalType !== "scalp").length;
@@ -459,6 +481,7 @@ export async function trainWalletDecisionProfile(input: {
       profile,
       activated: true,
       outcomeCount: outcomes.length,
+      excludedOutcomeCount,
       skipped: false,
       incremental: true,
       activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
@@ -474,6 +497,7 @@ export async function trainWalletDecisionProfile(input: {
     profile,
     activated: candidate.validation.passed,
     outcomeCount: outcomes.length,
+    excludedOutcomeCount,
     skipped: false,
     activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
   };

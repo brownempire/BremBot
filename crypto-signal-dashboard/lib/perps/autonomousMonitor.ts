@@ -20,7 +20,11 @@ import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
 import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
 import { listUserPerpsExecutions, reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
-import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
+import {
+  fetchJupiterPerpsAccountSnapshot,
+  fetchJupiterPerpsTradeHistory,
+  type JupiterPerpsPosition,
+} from "@/lib/jupiterPerps";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
 import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
@@ -37,7 +41,10 @@ import { getLearnedSignalParams, applyLearnedTradePlan } from "@/lib/decision/le
 import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
 import { trainWalletDecisionProfile } from "@/lib/decision/trainer";
-import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
+import {
+  CURRENT_OUTCOME_RECONCILIATION_VERSION,
+  type DecisionLearningProfile,
+} from "@/lib/decision/learningTypes";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   detectAdaptiveScalpSignal,
@@ -125,7 +132,25 @@ const defaultDependencies: MonitorDependencies = {
       listUserPerpsExecutions(walletAddress),
       listTradeDecisionRecords(2_000, walletAddress),
     ]);
-    const outcomes = await reconcileTradeLearningOutcomes({ walletAddress, executions, decisions, snapshot });
+    const activeProfile = await getActiveDecisionLearningProfile(walletAddress);
+    const requiresCleanRebuild = (activeProfile?.outcomeDataVersion ?? 1) < CURRENT_OUTCOME_RECONCILIATION_VERSION;
+    let learningSnapshot = snapshot;
+    if (requiresCleanRebuild) {
+      const agentWallet = getAgentWalletForOwner(walletAddress);
+      if (!agentWallet) return 0;
+      const history = await fetchJupiterPerpsTradeHistory(agentWallet);
+      if (!history.complete) {
+        throw new Error(`Jupiter returned only ${history.trades.length} of ${history.totalCount} trades.`);
+      }
+      learningSnapshot = { ...snapshot, recentTrades: history.trades };
+    }
+    const outcomes = await reconcileTradeLearningOutcomes({
+      walletAddress,
+      executions,
+      decisions,
+      snapshot: learningSnapshot,
+      replaceWalletHistory: requiresCleanRebuild,
+    });
     return outcomes.length;
   },
   autoTrain: async (walletAddress, config) => {
