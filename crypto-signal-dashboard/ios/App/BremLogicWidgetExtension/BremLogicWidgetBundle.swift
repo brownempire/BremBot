@@ -8,7 +8,7 @@ struct BremLogicWidgetBundle: WidgetBundle {
         if #available(iOS 16.1, *) {
             BremLogicLockScreenWidget()
         }
-        if #available(iOS 16.2, *) {
+        if #available(iOS 18.0, *) {
             BremLogicTradeLiveActivityWidget()
         }
     }

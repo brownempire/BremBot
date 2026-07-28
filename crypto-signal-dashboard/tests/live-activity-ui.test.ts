@@ -11,6 +11,10 @@ const widgetSource = fs.readFileSync(
   path.join(process.cwd(), "ios/App/BremLogicWidgetExtension/BremLogicWidget.swift"),
   "utf8"
 );
+const widgetBundleSource = fs.readFileSync(
+  path.join(process.cwd(), "ios/App/BremLogicWidgetExtension/BremLogicWidgetBundle.swift"),
+  "utf8"
+);
 const managerSource = fs.readFileSync(
   path.join(process.cwd(), "ios/App/App/BremLogicLiveActivityManager.swift"),
   "utf8"
@@ -44,7 +48,7 @@ test("Live Activity state carries the actual open-position entry price", () => {
   assert.match(widgetSource, /values\.count == 5/);
 });
 
-test("Lock Screen and expanded Island charts show Entry, Mark, TP, and SL", () => {
+test("Lock Screen, CarPlay, Watch, and expanded Island charts show Entry, Mark, TP, and SL", () => {
   for (const property of [
     "entryPrice",
     "markPrice",
@@ -54,7 +58,15 @@ test("Lock Screen and expanded Island charts show Entry, Mark, TP, and SL", () =
     assert.match(widgetSource, new RegExp(`${property}: state\\.${property}`));
   }
   assert.match(widgetSource, /private func activityChart[\s\S]*BremLogicCandlestickChart/);
-  assert.match(widgetSource, /lockScreenView[\s\S]*activityChart\(state\)/);
+  assert.match(widgetSource, /regularActivityView[\s\S]*activityChart\(state\)/);
+  assert.match(widgetSource, /smallActivityView[\s\S]*activityChart\(state\)/);
+  assert.match(widgetSource, /smallActivityView[\s\S]*Text\(state\.positionLabel\)/);
+  assert.match(widgetSource, /smallActivityView[\s\S]*signedUsd\(state\.pnlUsd\)/);
+  assert.match(widgetSource, /smallActivityView[\s\S]*percent\(state\.pnlPercent\)/);
+  assert.match(widgetSource, /@Environment\(\\\.activityFamily\)/);
+  assert.match(widgetSource, /activityFamily == \.small/);
+  assert.match(widgetSource, /\.supplementalActivityFamilies\(\[\.small\]\)/);
+  assert.match(widgetBundleSource, /#available\(iOS 18\.0, \*\)[\s\S]*BremLogicTradeLiveActivityWidget\(\)/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*Text\(state\.positionLabel\)/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*activityChart\(state\)/);
   assert.match(widgetSource, /\.padding\(\.horizontal, 12\)/);
@@ -62,7 +74,8 @@ test("Lock Screen and expanded Island charts show Entry, Mark, TP, and SL", () =
 
 test("Live Activity presentations consume the 160-point allowance without overflow", () => {
   assert.match(widgetSource, /private let liveActivityMaximumHeight: CGFloat = 160/);
-  assert.match(widgetSource, /lockScreenView[\s\S]*\.frame\(height: liveActivityMaximumHeight\)[\s\S]*\.clipped\(\)/);
+  assert.match(widgetSource, /regularActivityView[\s\S]*\.frame\(height: liveActivityMaximumHeight\)[\s\S]*\.clipped\(\)/);
+  assert.match(widgetSource, /smallActivityView[\s\S]*\.frame\(maxWidth: \.infinity, maxHeight: \.infinity\)[\s\S]*\.clipped\(\)/);
   assert.match(widgetSource, /private let expandedIslandBottomHeight: CGFloat = 120/);
   assert.match(widgetSource, /DynamicIslandExpandedRegion\(\.bottom\)[\s\S]*\.frame\(height: expandedIslandBottomHeight\)[\s\S]*\.clipped\(\)/);
 });

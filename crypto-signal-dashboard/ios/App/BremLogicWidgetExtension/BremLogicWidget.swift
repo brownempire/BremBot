@@ -799,8 +799,24 @@ struct BremLogicLockScreenWidgetEntryView: View {
 }
 
 #if canImport(ActivityKit)
+@available(iOS 18.0, *)
+private struct BremLogicSupplementalActivityLayout<RegularContent: View, SmallContent: View>: View {
+    @Environment(\.activityFamily) private var activityFamily
+    let regularContent: RegularContent
+    let smallContent: SmallContent
+
+    @ViewBuilder
+    var body: some View {
+        if activityFamily == .small {
+            smallContent
+        } else {
+            regularContent
+        }
+    }
+}
+
 @available(iOS 16.2, *)
-struct BremLogicTradeLiveActivityWidget: Widget {
+private struct BremLogicTradeLiveActivityConfiguration {
     private let positive = Color(red: 0.38, green: 0.92, blue: 0.62)
     private let negative = Color(red: 1.0, green: 0.38, blue: 0.42)
     private let liveActivityMaximumHeight: CGFloat = 160
@@ -890,7 +906,7 @@ struct BremLogicTradeLiveActivityWidget: Widget {
     }
 
     @ViewBuilder
-    private func lockScreenView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
+    private func regularActivityView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
         let state = context.state
         VStack(spacing: 5) {
             HStack(alignment: .center) {
@@ -932,9 +948,66 @@ struct BremLogicTradeLiveActivityWidget: Widget {
         .widgetURL(URL(string: state.targetURL))
     }
 
-    var body: some WidgetConfiguration {
+    @available(iOS 18.0, *)
+    @ViewBuilder
+    private func smallActivityView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
+        let state = context.state
+        VStack(spacing: 4) {
+            HStack(alignment: .top, spacing: 5) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(state.positionLabel)
+                        .font(.system(size: 13, weight: .heavy, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text(strategyLabel(state.strategy))
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(positive)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 2)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(signedUsd(state.pnlUsd))
+                        .font(.system(size: 12, weight: .heavy, design: .rounded))
+                        .foregroundStyle(pnlColor(state))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .monospacedDigit()
+                    Text(percent(state.pnlPercent))
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(pnlColor(state))
+                        .lineLimit(1)
+                        .monospacedDigit()
+                }
+            }
+
+            // The chart legend carries E, M, TP, and SL while preserving most of
+            // the small CarPlay/Watch presentation for the actual price chart.
+            activityChart(state)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .activityBackgroundTint(Color(red: 0.045, green: 0.06, blue: 0.095))
+        .activitySystemActionForegroundColor(.white)
+        .widgetURL(URL(string: state.targetURL))
+    }
+
+    @ViewBuilder
+    private func activityView(_ context: ActivityViewContext<BremLogicTradeActivityAttributes>) -> some View {
+        if #available(iOS 18.0, *) {
+            BremLogicSupplementalActivityLayout(
+                regularContent: regularActivityView(context),
+                smallContent: smallActivityView(context)
+            )
+        } else {
+            regularActivityView(context)
+        }
+    }
+
+    fileprivate var baseConfiguration: some WidgetConfiguration {
         ActivityConfiguration(for: BremLogicTradeActivityAttributes.self) { context in
-            lockScreenView(context)
+            activityView(context)
         } dynamicIsland: { context in
             let state = context.state
             return DynamicIsland {
@@ -1000,7 +1073,18 @@ struct BremLogicTradeLiveActivityWidget: Widget {
             .keylineTint(pnlColor(state))
         }
     }
+
 }
+
+@available(iOS 18.0, *)
+struct BremLogicTradeLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        BremLogicTradeLiveActivityConfiguration()
+            .baseConfiguration
+            .supplementalActivityFamilies([.small])
+    }
+}
+
 #endif
 
 @available(iOS 16.0, *)
