@@ -1092,6 +1092,7 @@ function DashboardPage() {
   const [agentWalletTokens, setAgentWalletTokens] = useState<WalletTokenHolding[]>([]);
   const [agentTotalBalanceUsd, setAgentTotalBalanceUsd] = useState<number | null>(null);
   const [agentSolValueUsd, setAgentSolValueUsd] = useState<number | null>(null);
+  const [agentPortfolioWalletAddress, setAgentPortfolioWalletAddress] = useState<string | null>(null);
   const [agentPortfolioStatus, setAgentPortfolioStatus] = useState("Agent wallet not associated");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
@@ -4514,8 +4515,24 @@ function DashboardPage() {
   }, [refreshWalletPortfolio]);
 
   const refreshAgentWalletPortfolio = useCallback(async () => {
-    const agentWalletAddress = readOnlyPerpsSnapshot.agentWalletAddress;
+    let agentWalletAddress = readOnlyPerpsSnapshot.agentWalletAddress;
+    if (!agentWalletAddress && remoteAuthToken) {
+      try {
+        const associationResponse = await fetch("/api/perps/portfolio", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${remoteAuthToken}` },
+        });
+        const association = await associationResponse.json().catch(() => null);
+        agentWalletAddress = associationResponse.ok && typeof association?.agentWalletAddress === "string"
+          ? association.agentWalletAddress
+          : null;
+      } catch {
+        agentWalletAddress = null;
+      }
+    }
+
     if (!agentWalletAddress) {
+      setAgentPortfolioWalletAddress(null);
       setAgentSolBalance(null);
       setAgentWalletTokens([]);
       setAgentTotalBalanceUsd(null);
@@ -4524,6 +4541,7 @@ function DashboardPage() {
       return;
     }
 
+    setAgentPortfolioWalletAddress(agentWalletAddress);
     setAgentPortfolioStatus("Syncing agent wallet balances...");
     try {
       const response = await fetch(`/api/wallet/balances?address=${encodeURIComponent(agentWalletAddress)}`, {
@@ -4539,7 +4557,7 @@ function DashboardPage() {
     } catch {
       setAgentPortfolioStatus("Failed to sync agent wallet balances");
     }
-  }, [readOnlyPerpsSnapshot.agentWalletAddress]);
+  }, [readOnlyPerpsSnapshot.agentWalletAddress, remoteAuthToken]);
 
   useEffect(() => {
     void refreshAgentWalletPortfolio();
@@ -4551,7 +4569,7 @@ function DashboardPage() {
   }, [refreshAgentWalletPortfolio]);
 
   const displayedWalletAddress = walletBalanceMode === "agent"
-    ? readOnlyPerpsSnapshot.agentWalletAddress
+    ? agentPortfolioWalletAddress
     : activeWalletAddress;
   const displayedPortfolioStatus = walletBalanceMode === "agent" ? agentPortfolioStatus : portfolioStatus;
   const displayedTotalBalanceUsd = walletBalanceMode === "agent" ? agentTotalBalanceUsd : totalBalanceUsd;
@@ -5442,44 +5460,6 @@ function DashboardPage() {
     if (id === "wallet") {
       return (
         <>
-          <div className="wallet-balance-selector">
-            <button
-              type="button"
-              className="wallet-balance-selector-button"
-              aria-haspopup="menu"
-              aria-expanded={walletBalanceMenuOpen}
-              onClick={() => setWalletBalanceMenuOpen((open) => !open)}
-            >
-              <span>{walletBalanceMode === "main" ? "Main Balance" : "Agent Balance"}</span>
-              <span aria-hidden="true">{walletBalanceMenuOpen ? "▴" : "▾"}</span>
-            </button>
-            {walletBalanceMenuOpen ? (
-              <div className="wallet-balance-menu" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={walletBalanceMode === "main" ? "selected" : ""}
-                  onClick={() => {
-                    setWalletBalanceMode("main");
-                    setWalletBalanceMenuOpen(false);
-                  }}
-                >
-                  Main Balance
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={walletBalanceMode === "agent" ? "selected" : ""}
-                  onClick={() => {
-                    setWalletBalanceMode("agent");
-                    setWalletBalanceMenuOpen(false);
-                  }}
-                >
-                  Agent Balance
-                </button>
-              </div>
-            ) : null}
-          </div>
           <div className="wallet-controls">
             {walletBalanceMode === "main" ? (
               <>
@@ -5528,8 +5508,45 @@ function DashboardPage() {
             </div>
           ) : null}
           <div className="wallet-holdings">
-            <div className="holding-row total-row">
-              <span>Total Balance</span>
+            <div className="holding-row total-row wallet-balance-total-row">
+              <div className="wallet-balance-selector">
+                <button
+                  type="button"
+                  className="wallet-balance-selector-button"
+                  aria-haspopup="menu"
+                  aria-expanded={walletBalanceMenuOpen}
+                  onClick={() => setWalletBalanceMenuOpen((open) => !open)}
+                >
+                  <span>{walletBalanceMode === "main" ? "Main Balance" : "Agent Balance"}</span>
+                  <span aria-hidden="true">{walletBalanceMenuOpen ? "▴" : "▾"}</span>
+                </button>
+                {walletBalanceMenuOpen ? (
+                  <div className="wallet-balance-menu" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={walletBalanceMode === "main" ? "selected" : ""}
+                      onClick={() => {
+                        setWalletBalanceMode("main");
+                        setWalletBalanceMenuOpen(false);
+                      }}
+                    >
+                      Main Balance
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={walletBalanceMode === "agent" ? "selected" : ""}
+                      onClick={() => {
+                        setWalletBalanceMode("agent");
+                        setWalletBalanceMenuOpen(false);
+                      }}
+                    >
+                      Agent Balance
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               <strong>{displayedTotalBalanceUsd === null ? "-" : formatUsd(displayedTotalBalanceUsd)}</strong>
             </div>
             <div className="holding-row token-row">

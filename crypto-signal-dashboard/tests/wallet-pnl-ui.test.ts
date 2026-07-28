@@ -8,7 +8,11 @@ const chartSource = fs.readFileSync(new URL("../app/components/PerpsPnlChart.tsx
 test("Wallet panel switches between matching Main and Agent balance views", () => {
   assert.match(pageSource, /Main Balance/);
   assert.match(pageSource, /Agent Balance/);
+  assert.doesNotMatch(pageSource, />Total Balance</);
+  assert.match(pageSource, /holding-row total-row wallet-balance-total-row/);
   assert.match(pageSource, /readOnlyPerpsSnapshot\.agentWalletAddress/);
+  assert.match(pageSource, /fetch\("\/api\/perps\/portfolio"/);
+  assert.match(pageSource, /agentPortfolioWalletAddress/);
   assert.match(pageSource, /displayedWalletTokens\.map/);
   assert.match(pageSource, /Agent Balance is read only/);
 });
