@@ -24,6 +24,7 @@ import { JupiterTradePanel, type JupiterTradeRecord } from "@/app/components/Jup
 import { PerpsClockCard } from "@/app/components/perps-agent/PerpsClockCard";
 import { PerpsExecutionFeed as PerpsAgentExecutionFeed } from "@/app/components/perps-agent/PerpsExecutionFeed";
 import { PerpsSessionStatus } from "@/app/components/perps-agent/PerpsSessionStatus";
+import { PerpsPnlChart } from "@/app/components/PerpsPnlChart";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
@@ -33,7 +34,8 @@ import type {
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
-import { calculatePnlSince } from "@/lib/perps/pnl";
+import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
+import { pnlPointsForRange } from "@/lib/perps/pnlChart";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -235,15 +237,15 @@ type StoredTradeRecord = {
 };
 
 type PnlRange = "24h" | "7d" | "30d" | "ytd";
-type WalletPnlPoint = { t: number; v: number };
 type PnlMode = "primary" | "agent";
+type WalletBalanceMode = "main" | "agent";
 type PerpsPnlPayload = {
   available: boolean;
   role: PnlMode;
   walletAddress?: string;
   historyComplete?: boolean;
   historyTotalCount?: number;
-  points?: WalletPnlPoint[];
+  points?: PerpsPnlPoint[];
   realizedPnlUsd?: number;
   unrealizedPnlUsd?: number;
   totalPnlUsd?: number;
@@ -1084,6 +1086,13 @@ function DashboardPage() {
   const [totalBalanceUsd, setTotalBalanceUsd] = useState<number | null>(null);
   const [solValueUsd, setSolValueUsd] = useState<number | null>(null);
   const [portfolioStatus, setPortfolioStatus] = useState("Wallet not connected");
+  const [walletBalanceMode, setWalletBalanceMode] = useState<WalletBalanceMode>("main");
+  const [walletBalanceMenuOpen, setWalletBalanceMenuOpen] = useState(false);
+  const [agentSolBalance, setAgentSolBalance] = useState<number | null>(null);
+  const [agentWalletTokens, setAgentWalletTokens] = useState<WalletTokenHolding[]>([]);
+  const [agentTotalBalanceUsd, setAgentTotalBalanceUsd] = useState<number | null>(null);
+  const [agentSolValueUsd, setAgentSolValueUsd] = useState<number | null>(null);
+  const [agentPortfolioStatus, setAgentPortfolioStatus] = useState("Agent wallet not associated");
   const [recentTrades, setRecentTrades] = useState<StoredTradeRecord[]>([]);
   const [autoTradeStatus, setAutoTradeStatus] = useState("Auto-trade is off");
   const [perpsAutoTradeStatus, setPerpsAutoTradeStatus] = useState("Perps auto-trade is off");
@@ -1107,6 +1116,7 @@ function DashboardPage() {
   const [autoTradeSettings, setAutoTradeSettings] = useState<AutoTradeSettings>(DEFAULT_AUTO_TRADE_SETTINGS);
   const [pendingTakeProfit, setPendingTakeProfit] = useState<PendingTakeProfit | null>(null);
   const [readOnlyPerpsSnapshot, setReadOnlyPerpsSnapshot] = useState<JupiterPerpsWidgetSnapshot>({
+    agentWalletAddress: null,
     agentAvailableUsdc: null,
     walletAddress: null,
     positions: [],
@@ -1122,7 +1132,7 @@ function DashboardPage() {
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
   const [pnlMode, setPnlMode] = useState<PnlMode>("primary");
-  const [pnlStatus, setPnlStatus] = useState("Connect the primary wallet to load Perps PnL.");
+  const [pnlStatus, setPnlStatus] = useState("Connect the Main wallet to load Perps PnL.");
   const [remoteAuthSource, setRemoteAuthSource] = useState<RemoteAuthSource | null>(null);
   const [remoteAuthStatus, setRemoteAuthStatus] = useState("Remote auth pending");
   const [remoteSyncStatus, setRemoteSyncStatus] = useState("Remote sync idle");
@@ -1159,6 +1169,7 @@ function DashboardPage() {
   const syncedAutomationSnapshotRef = useRef<string | null>(null);
   const pendingTakeProfitRef = useRef<PendingTakeProfit | null>(null);
   const readOnlyPerpsSnapshotRef = useRef<JupiterPerpsWidgetSnapshot>({
+    agentWalletAddress: null,
     agentAvailableUsdc: null,
     walletAddress: null,
     positions: [],
@@ -4502,6 +4513,60 @@ function DashboardPage() {
     return () => clearInterval(interval);
   }, [refreshWalletPortfolio]);
 
+  const refreshAgentWalletPortfolio = useCallback(async () => {
+    const agentWalletAddress = readOnlyPerpsSnapshot.agentWalletAddress;
+    if (!agentWalletAddress) {
+      setAgentSolBalance(null);
+      setAgentWalletTokens([]);
+      setAgentTotalBalanceUsd(null);
+      setAgentSolValueUsd(null);
+      setAgentPortfolioStatus("Agent wallet not associated");
+      return;
+    }
+
+    setAgentPortfolioStatus("Syncing agent wallet balances...");
+    try {
+      const response = await fetch(`/api/wallet/balances?address=${encodeURIComponent(agentWalletAddress)}`, {
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload) throw new Error("Agent wallet sync failed");
+      setAgentSolBalance(typeof payload.solBalance === "number" ? payload.solBalance : null);
+      setAgentWalletTokens(Array.isArray(payload.tokens) ? (payload.tokens as WalletTokenHolding[]) : []);
+      setAgentTotalBalanceUsd(typeof payload.totalBalanceUsd === "number" ? payload.totalBalanceUsd : null);
+      setAgentSolValueUsd(typeof payload.solValueUsd === "number" ? payload.solValueUsd : null);
+      setAgentPortfolioStatus(typeof payload.status === "string" ? payload.status : "Agent wallet synced");
+    } catch {
+      setAgentPortfolioStatus("Failed to sync agent wallet balances");
+    }
+  }, [readOnlyPerpsSnapshot.agentWalletAddress]);
+
+  useEffect(() => {
+    void refreshAgentWalletPortfolio();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void refreshAgentWalletPortfolio();
+    }, WALLET_PORTFOLIO_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshAgentWalletPortfolio]);
+
+  const displayedWalletAddress = walletBalanceMode === "agent"
+    ? readOnlyPerpsSnapshot.agentWalletAddress
+    : activeWalletAddress;
+  const displayedPortfolioStatus = walletBalanceMode === "agent" ? agentPortfolioStatus : portfolioStatus;
+  const displayedTotalBalanceUsd = walletBalanceMode === "agent" ? agentTotalBalanceUsd : totalBalanceUsd;
+  const displayedSolBalance = walletBalanceMode === "agent" ? agentSolBalance : solBalance;
+  const displayedSolValueUsd = walletBalanceMode === "agent" ? agentSolValueUsd : solValueUsd;
+  const displayedWalletTokens = walletBalanceMode === "agent" ? agentWalletTokens : walletTokens;
+
+  const refreshSelectedWalletPortfolio = useCallback(() => {
+    if (walletBalanceMode === "agent") {
+      void refreshAgentWalletPortfolio();
+      return;
+    }
+    void refreshWalletPortfolio();
+  }, [refreshAgentWalletPortfolio, refreshWalletPortfolio, walletBalanceMode]);
+
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
   const selectedChartPricePoints = priceHistory[selectedChartMarket?.id ?? ""] ?? [];
@@ -4624,14 +4689,14 @@ function DashboardPage() {
 
   useEffect(() => {
     if (!remoteAuthToken) {
-      setPnlStatus("Connect the primary wallet to load Perps PnL.");
+      setPnlStatus("Connect the Main wallet to load Perps PnL.");
     } else if (!selectedPerpsPnl) {
-      setPnlStatus(`Loading ${pnlMode} wallet Perps history...`);
+      setPnlStatus(`Loading ${pnlMode === "primary" ? "Main" : "Agent"} wallet Perps history...`);
     } else if (!selectedPerpsPnl.available) {
-      setPnlStatus(selectedPerpsPnl.message ?? `No ${pnlMode} wallet Perps history is available.`);
+      setPnlStatus(selectedPerpsPnl.message ?? `No ${pnlMode === "primary" ? "Main" : "Agent"} wallet Perps history is available.`);
     } else {
       const coverage = selectedPerpsPnl.historyComplete ? "complete available history" : `latest ${selectedPerpsPnl.tradeCount ?? 0} records`;
-      setPnlStatus(`Tracking ${pnlMode} wallet Jupiter Perps PnL from ${coverage}.`);
+      setPnlStatus(`Tracking ${pnlMode === "primary" ? "Main" : "Agent"} wallet Jupiter Perps PnL from ${coverage}.`);
     }
   }, [pnlMode, remoteAuthToken, selectedPerpsPnl]);
 
@@ -4658,31 +4723,8 @@ function DashboardPage() {
           ? now - 30 * 24 * 60 * 60 * 1000
           : new Date((renderNow > 0 ? new Date(renderNow) : new Date(0)).getFullYear(), 0, 1).getTime();
 
-    const filtered = displayedPnlTimeline.filter((point) => point.t >= cutoff);
-    if (filtered.length >= 2) return filtered;
-    const fallback = displayedPnlTimeline[displayedPnlTimeline.length - 1] ?? { t: now, v: 0 };
-    return [{ t: cutoff, v: fallback.v }, fallback];
+    return pnlPointsForRange(displayedPnlTimeline, cutoff, now);
   }, [displayedPnlTimeline, pnlRange, renderNow]);
-
-  const pnlChartPolyline = useMemo(() => {
-    const width = 640;
-    const height = 220;
-    const minX = pnlChartPoints[0]?.t ?? renderNow;
-    const maxX = pnlChartPoints[pnlChartPoints.length - 1]?.t ?? minX + 1;
-    const values = pnlChartPoints.map((point) => point.v);
-    const minY = Math.min(...values, 0);
-    const maxY = Math.max(...values, 0);
-    const xSpan = Math.max(1, maxX - minX);
-    const ySpan = Math.max(1e-6, maxY - minY);
-
-    return pnlChartPoints
-      .map((point) => {
-        const x = ((point.t - minX) / xSpan) * width;
-        const y = height - ((point.v - minY) / ySpan) * height;
-        return `${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(" ");
-  }, [pnlChartPoints, renderNow]);
 
   function updateTrackedMarket(slotId: string, nextProduct: string) {
     const option = marketOptions.find((item) => item.coinbaseProduct === nextProduct);
@@ -5400,45 +5442,95 @@ function DashboardPage() {
     if (id === "wallet") {
       return (
         <>
+          <div className="wallet-balance-selector">
+            <button
+              type="button"
+              className="wallet-balance-selector-button"
+              aria-haspopup="menu"
+              aria-expanded={walletBalanceMenuOpen}
+              onClick={() => setWalletBalanceMenuOpen((open) => !open)}
+            >
+              <span>{walletBalanceMode === "main" ? "Main Balance" : "Agent Balance"}</span>
+              <span aria-hidden="true">{walletBalanceMenuOpen ? "▴" : "▾"}</span>
+            </button>
+            {walletBalanceMenuOpen ? (
+              <div className="wallet-balance-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={walletBalanceMode === "main" ? "selected" : ""}
+                  onClick={() => {
+                    setWalletBalanceMode("main");
+                    setWalletBalanceMenuOpen(false);
+                  }}
+                >
+                  Main Balance
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={walletBalanceMode === "agent" ? "selected" : ""}
+                  onClick={() => {
+                    setWalletBalanceMode("agent");
+                    setWalletBalanceMenuOpen(false);
+                  }}
+                >
+                  Agent Balance
+                </button>
+              </div>
+            ) : null}
+          </div>
           <div className="wallet-controls">
-            {!wallet.hasWallet ? <button type="button" onClick={createInAppWallet}>Create Wallet</button> : null}
-            <button type="button" className="secondary" onClick={importInAppWallet}>Import Wallet</button>
-            {wallet.hasWallet ? <button type="button" className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
-            {wallet.connected ? <button type="button" onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
-            {wallet.hasWallet && !wallet.connected ? <button type="button" onClick={loginInAppWallet}>Login</button> : null}
-            {wallet.connected ? <button type="button" className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
-            {wallet.connected ? <button type="button" onClick={disconnectInAppWallet}>Disconnect</button> : null}
-            <button type="button" className="secondary" onClick={refreshWalletPortfolio}>Refresh Wallet</button>
+            {walletBalanceMode === "main" ? (
+              <>
+                {!wallet.hasWallet ? <button type="button" onClick={createInAppWallet}>Create Wallet</button> : null}
+                <button type="button" className="secondary" onClick={importInAppWallet}>Import Wallet</button>
+                {wallet.hasWallet ? <button type="button" className="secondary" onClick={exportInAppWallet}>Export Wallet</button> : null}
+                {wallet.connected ? <button type="button" onClick={() => setShowDepositModal(true)}>Deposit</button> : null}
+                {wallet.hasWallet && !wallet.connected ? <button type="button" onClick={loginInAppWallet}>Login</button> : null}
+                {wallet.connected ? <button type="button" className="secondary" onClick={changeWalletPassword}>Change Password</button> : null}
+                {wallet.connected ? <button type="button" onClick={disconnectInAppWallet}>Disconnect</button> : null}
+              </>
+            ) : null}
+            <button type="button" className="secondary" onClick={refreshSelectedWalletPortfolio}>
+              Refresh {walletBalanceMode === "main" ? "Main" : "Agent"}
+            </button>
           </div>
           <div className="subtext" style={{ marginTop: 8 }}>
-            {nativeWalletShell && jupiterPerpsController?.connected
-              ? "WalletConnect keeps the private key in your wallet. BremLogic requests signatures without importing the key."
-              : "Wallet keys are stored in this browser until you disconnect (which removes them from this device)."}
+            {walletBalanceMode === "agent"
+              ? "Agent Balance is read only. Trading authority remains in the server-side associated agent wallet."
+              : nativeWalletShell && jupiterPerpsController?.connected
+                ? "WalletConnect keeps the private key in your wallet. BremLogic requests signatures without importing the key."
+                : "Wallet keys are stored in this browser until you disconnect (which removes them from this device)."}
           </div>
           <div className="subtext" style={{ marginTop: 10 }}>
-            {activeWalletAddress
-              ? `Address: ${shortAddress(activeWalletAddress)} · ${activeWalletProviderLabel}`
-              : "Create or import an in-app wallet to start tracking balances and queueing trades."}
+            {displayedWalletAddress
+              ? `Address: ${shortAddress(displayedWalletAddress)} · ${walletBalanceMode === "agent" ? "Associated Agent" : activeWalletProviderLabel}`
+              : walletBalanceMode === "agent"
+                ? "No associated agent wallet is configured."
+                : "Create or import an in-app wallet to start tracking balances and queueing trades."}
           </div>
-          <div className="subtext" style={{ marginTop: 6 }}>{portfolioStatus}</div>
-          <div className="wallet-trading-panel wallet-trading-panel-swap" style={{ marginTop: 10 }}>
-            <JupiterTradePanel
-              onTradeSuccess={handleManualSwapSuccess}
-              integratedTargetId="bremlogic-manual-swap-widget"
-              passthroughWalletContextState={manualSwapPassthroughWalletContextState}
-              onRequestConnectWallet={
-                nativeWalletShell
-                  ? jupiterPerpsController?.connect
-                  : wallet.hasWallet && !wallet.connected
-                    ? loginInAppWallet
-                    : undefined
-              }
-            />
-          </div>
+          <div className="subtext" style={{ marginTop: 6 }}>{displayedPortfolioStatus}</div>
+          {walletBalanceMode === "main" ? (
+            <div className="wallet-trading-panel wallet-trading-panel-swap" style={{ marginTop: 10 }}>
+              <JupiterTradePanel
+                onTradeSuccess={handleManualSwapSuccess}
+                integratedTargetId="bremlogic-manual-swap-widget"
+                passthroughWalletContextState={manualSwapPassthroughWalletContextState}
+                onRequestConnectWallet={
+                  nativeWalletShell
+                    ? jupiterPerpsController?.connect
+                    : wallet.hasWallet && !wallet.connected
+                      ? loginInAppWallet
+                      : undefined
+                }
+              />
+            </div>
+          ) : null}
           <div className="wallet-holdings">
             <div className="holding-row total-row">
               <span>Total Balance</span>
-              <strong>{totalBalanceUsd === null ? "-" : formatUsd(totalBalanceUsd)}</strong>
+              <strong>{displayedTotalBalanceUsd === null ? "-" : formatUsd(displayedTotalBalanceUsd)}</strong>
             </div>
             <div className="holding-row token-row">
               <span className="token-meta">
@@ -5456,11 +5548,11 @@ function DashboardPage() {
                 </span>
               </span>
               <span className="token-values">
-                <span className="token-line token-top">{solValueUsd === null ? "-" : formatUsd(solValueUsd)}</span>
-                <span className="token-line token-bottom">{solBalance === null ? "-" : solBalance.toFixed(4)}</span>
+                <span className="token-line token-top">{displayedSolValueUsd === null ? "-" : formatUsd(displayedSolValueUsd)}</span>
+                <span className="token-line token-bottom">{displayedSolBalance === null ? "-" : displayedSolBalance.toFixed(4)}</span>
               </span>
             </div>
-            {walletTokens.map((token) => (
+            {displayedWalletTokens.map((token) => (
               <div key={token.mint} className="holding-row token-row">
                 <span className="token-meta">
                   {token.logoURI ? (
@@ -5566,7 +5658,7 @@ function DashboardPage() {
             <div className="pnl-metric"><span>YTD</span><strong className={pnlValues.ytd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(pnlValues.ytd)}</strong></div>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
-            <button type="button" className={pnlMode === "primary" ? "" : "secondary"} onClick={() => setPnlMode("primary")}>Primary</button>
+            <button type="button" className={pnlMode === "primary" ? "" : "secondary"} onClick={() => setPnlMode("primary")}>Main</button>
             <button type="button" className={pnlMode === "agent" ? "" : "secondary"} onClick={() => setPnlMode("agent")}>Agent</button>
           </div>
           <div className="wallet-controls" style={{ marginTop: 8 }}>
@@ -5575,11 +5667,11 @@ function DashboardPage() {
             <button type="button" className={pnlRange === "30d" ? "" : "secondary"} onClick={() => setPnlRange("30d")}>30D</button>
             <button type="button" className={pnlRange === "ytd" ? "" : "secondary"} onClick={() => setPnlRange("ytd")}>YTD</button>
           </div>
-          <div className="pnl-chart-wrap">
-            <svg viewBox="0 0 640 220" role="img" aria-label="PnL chart">
-              <polyline points={pnlChartPolyline} fill="none" stroke="var(--accent)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </div>
+          <PerpsPnlChart
+            points={pnlChartPoints}
+            rangeLabel={pnlRange.toUpperCase()}
+            walletLabel={pnlMode === "primary" ? "Main" : "Agent"}
+          />
         </>
       );
     }

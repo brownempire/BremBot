@@ -18,6 +18,7 @@ type UseJupiterPerpsPositionsOptions = {
 };
 
 type JupiterPerpsPositionsState = {
+  agentWalletAddress: string | null;
   agentAvailableUsdc: number | null;
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
@@ -61,7 +62,13 @@ async function fetchPerpsSnapshotFromApi(walletAddress: string, authToken?: stri
   );
 
   const payload = (await response.json()) as
-    | { positions: JupiterPerpsPosition[]; pendingTriggers: JupiterPerpsPendingTrigger[]; recentTrades: JupiterPerpsTrade[]; agentAvailableUsdc?: number | null }
+    | {
+      positions: JupiterPerpsPosition[];
+      pendingTriggers: JupiterPerpsPendingTrigger[];
+      recentTrades: JupiterPerpsTrade[];
+      agentWalletAddress?: string | null;
+      agentAvailableUsdc?: number | null;
+    }
     | { error?: string };
 
   if (!response.ok) {
@@ -82,6 +89,7 @@ export function useJupiterPerpsPositions({
   pollingEnabled = true,
 }: UseJupiterPerpsPositionsOptions): JupiterPerpsPositionsState {
   const [positions, setPositions] = useState<JupiterPerpsPosition[]>([]);
+  const [agentWalletAddress, setAgentWalletAddress] = useState<string | null>(null);
   const [agentAvailableUsdc, setAgentAvailableUsdc] = useState<number | null>(null);
   const [pendingTriggers, setPendingTriggers] = useState<JupiterPerpsPendingTrigger[]>([]);
   const [recentTrades, setRecentTrades] = useState<JupiterPerpsTrade[]>([]);
@@ -127,6 +135,7 @@ export function useJupiterPerpsPositions({
       setIsLoading(false);
       setIsMock(showMockData);
       setPositions(showMockData ? getMockJupiterPerpsPositions() : []);
+      setAgentWalletAddress(null);
       setAgentAvailableUsdc(null);
       setPendingTriggers(showMockData ? getMockJupiterPerpsPendingTriggers() : []);
       setRecentTrades([]);
@@ -146,6 +155,7 @@ export function useJupiterPerpsPositions({
         const next = await fetchPerpsSnapshotFromApi(walletAddress, authToken);
         hasResolvedInitialLoadRef.current = true;
         setPositions(next.positions);
+        setAgentWalletAddress(next.agentWalletAddress ?? null);
         setAgentAvailableUsdc(next.agentAvailableUsdc ?? null);
         setPendingTriggers(next.pendingTriggers);
         setRecentTrades(next.recentTrades);
@@ -157,6 +167,7 @@ export function useJupiterPerpsPositions({
         if (!silent) {
           if (showMockData) {
             setPositions(getMockJupiterPerpsPositions());
+            setAgentWalletAddress(null);
             setAgentAvailableUsdc(null);
             setPendingTriggers(getMockJupiterPerpsPendingTriggers());
             setRecentTrades([]);
@@ -164,6 +175,7 @@ export function useJupiterPerpsPositions({
             hasResolvedInitialLoadRef.current = true;
           } else {
             setPositions([]);
+            setAgentWalletAddress(null);
             setAgentAvailableUsdc(null);
             setPendingTriggers([]);
             setRecentTrades([]);
@@ -208,6 +220,7 @@ export function useJupiterPerpsPositions({
   }, [clearErrorTimeout]);
 
   return {
+    agentWalletAddress,
     agentAvailableUsdc,
     positions,
     pendingTriggers,

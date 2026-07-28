@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { fetchJupiterPerpsTradeHistory, type JupiterPerpsPosition, type JupiterPerpsTrade } from "../lib/jupiterPerps";
 import { buildPerpsPnlSummary, calculatePnlSince } from "../lib/perps/pnl";
+import { panPnlChartDomain, pnlPointsForRange, zoomPnlChartDomain } from "../lib/perps/pnlChart";
 
 function trade(overrides: Partial<JupiterPerpsTrade>): JupiterPerpsTrade {
   return {
@@ -40,6 +41,11 @@ test("Perps PnL combines fee-adjusted realized history with current open-positio
   assert.equal(summary.unrealizedPnlUsd, 4.75);
   assert.equal(summary.totalPnlUsd, 14);
   assert.deepEqual(summary.points.map((point) => point.v), [-0.25, 12.25, 9.25, 14]);
+  assert.equal(summary.points[0]?.trade?.action, "Increase");
+  assert.equal(summary.points[1]?.trade?.pnlUsd, 12.5);
+  assert.equal(summary.points[2]?.trade?.cumulativePnlUsd, 9.25);
+  assert.equal(summary.points[3]?.trade, undefined);
+  assert.equal(new Set(summary.points.flatMap((point) => point.trade?.id ?? [])).size, 3);
 });
 
 test("range PnL uses the last cumulative value before the cutoff", () => {
@@ -51,6 +57,41 @@ test("range PnL uses the last cumulative value before the cutoff", () => {
   assert.equal(calculatePnlSince(points, 1_500), 2);
   assert.equal(calculatePnlSince(points, 2_500), -1);
   assert.equal(calculatePnlSince(points, 500), 4);
+});
+
+test("PnL chart range keeps every uniquely identified trade plus range boundaries", () => {
+  const summary = buildPerpsPnlSummary([
+    trade({ id: "before", txHash: "tx-before", createdAt: 500, pnl: 2 }),
+    trade({ id: "first", txHash: "tx-first", createdAt: 1_500, pnl: 3 }),
+    trade({ id: "second", txHash: "tx-second", createdAt: 2_500, pnl: -1 }),
+  ], [], 3_000);
+
+  const ranged = pnlPointsForRange(summary.points, 1_000, 3_000);
+  assert.deepEqual(ranged.filter((point) => point.trade).map((point) => point.trade?.id), [
+    "tx-first:position:Close:1500",
+    "tx-second:position:Close:2500",
+  ]);
+  assert.deepEqual(ranged.map((point) => point.t), [1_000, 1_500, 2_500, 3_000]);
+  assert.equal(ranged[0]?.v, 2);
+});
+
+test("PnL chart zoom and horizontal pan remain inside the selected timeframe", () => {
+  const bounds = { start: 0, end: 1_000_000 };
+  const zoomed = zoomPnlChartDomain(bounds, bounds, 0.5, 0.5);
+  assert.deepEqual(zoomed, { start: 250_000, end: 750_000 });
+
+  assert.deepEqual(panPnlChartDomain(zoomed, bounds, 0.25), {
+    start: 375_000,
+    end: 875_000,
+  });
+  assert.deepEqual(panPnlChartDomain(zoomed, bounds, 2), {
+    start: 500_000,
+    end: 1_000_000,
+  });
+  assert.deepEqual(panPnlChartDomain(zoomed, bounds, -2), {
+    start: 0,
+    end: 500_000,
+  });
 });
 
 test("Jupiter Perps history follows start/end pagination until the reported account count is complete", async (context) => {

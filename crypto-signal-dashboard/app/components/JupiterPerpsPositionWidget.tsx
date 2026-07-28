@@ -29,6 +29,7 @@ import {
 } from "@/lib/jupiterPerps";
 
 export type JupiterPerpsWidgetSnapshot = {
+  agentWalletAddress: string | null;
   agentAvailableUsdc: number | null;
   walletAddress: string | null;
   positions: JupiterPerpsPosition[];
@@ -946,7 +947,7 @@ function JupiterPerpsPositionWidgetBody({
   const isDisconnecting = nativeJupiterAdapterEnabled ? nativeJupiterWallet.isDisconnecting : false;
   const walletAddress = nativeJupiterAdapterEnabled ? nativeJupiterWallet.walletAddress : null;
   const portfolioWalletAddress = primaryWalletAddress ?? walletAddress;
-  const { agentAvailableUsdc, positions, pendingTriggers, recentTrades, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
+  const { agentWalletAddress, agentAvailableUsdc, positions, pendingTriggers, recentTrades, isLoading, error, isMock, refetch } = useJupiterPerpsPositions({
     authToken,
     walletAddress: portfolioWalletAddress,
     showMockData,
@@ -991,6 +992,7 @@ function JupiterPerpsPositionWidgetBody({
 
   useEffect(() => {
     onSnapshotChange?.({
+      agentWalletAddress,
       agentAvailableUsdc,
       walletAddress,
       positions,
@@ -1001,7 +1003,7 @@ function JupiterPerpsPositionWidgetBody({
       isMock,
       connected: isConnected,
     });
-  }, [agentAvailableUsdc, error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
+  }, [agentAvailableUsdc, agentWalletAddress, error, isConnected, isLoading, isMock, onSnapshotChange, pendingTriggers, positions, recentTrades, walletAddress]);
 
   const autoTradeController = useMemo<JupiterPerpsWidgetController | null>(() => {
     if (!nativeJupiterAdapterEnabled) return null;

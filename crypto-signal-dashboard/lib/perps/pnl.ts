@@ -3,6 +3,25 @@ import type { JupiterPerpsPosition, JupiterPerpsTrade } from "@/lib/jupiterPerps
 export type PerpsPnlPoint = {
   t: number;
   v: number;
+  trade?: PerpsPnlTradeDetails;
+};
+
+export type PerpsPnlTradeDetails = {
+  id: string;
+  positionPubkey: string | null;
+  txHash: string | null;
+  marketSymbol: string;
+  side: JupiterPerpsTrade["side"];
+  action: string;
+  orderType: string;
+  price: number | null;
+  sizeUsd: number | null;
+  collateralUsdDelta: number | null;
+  feeUsd: number | null;
+  pnlUsd: number;
+  pnlPercentage: number | null;
+  timestamp: number;
+  cumulativePnlUsd: number;
 };
 
 export type PerpsPnlSummary = {
@@ -24,6 +43,11 @@ function tradePnlDelta(trade: JupiterPerpsTrade) {
   return 0;
 }
 
+function tradeIdentity(trade: JupiterPerpsTrade) {
+  const timestamp = tradeTimestamp(trade);
+  return `${trade.txHash ?? trade.id}:${trade.positionPubkey ?? "position"}:${trade.action}:${timestamp}`;
+}
+
 export function buildPerpsPnlSummary(
   trades: JupiterPerpsTrade[],
   positions: JupiterPerpsPosition[],
@@ -33,8 +57,7 @@ export function buildPerpsPnlSummary(
   trades.forEach((trade) => {
     const timestamp = tradeTimestamp(trade);
     if (timestamp <= 0) return;
-    const key = `${trade.txHash ?? trade.id}:${trade.positionPubkey ?? "position"}:${trade.action}:${timestamp}`;
-    uniqueTrades.set(key, trade);
+    uniqueTrades.set(tradeIdentity(trade), trade);
   });
   const ordered = [...uniqueTrades.values()].sort((left, right) => tradeTimestamp(left) - tradeTimestamp(right));
   let realizedPnlUsd = 0;
@@ -44,6 +67,23 @@ export function buildPerpsPnlSummary(
     points.push({
       t: tradeTimestamp(trade),
       v: Number(realizedPnlUsd.toFixed(6)),
+      trade: {
+        id: tradeIdentity(trade),
+        positionPubkey: trade.positionPubkey,
+        txHash: trade.txHash,
+        marketSymbol: trade.marketSymbol,
+        side: trade.side,
+        action: trade.action,
+        orderType: trade.orderType,
+        price: trade.price,
+        sizeUsd: trade.sizeUsd,
+        collateralUsdDelta: trade.collateralUsdDelta,
+        feeUsd: trade.feeUsd,
+        pnlUsd: Number(tradePnlDelta(trade).toFixed(6)),
+        pnlPercentage: trade.pnlPercentage,
+        timestamp: tradeTimestamp(trade),
+        cumulativePnlUsd: Number(realizedPnlUsd.toFixed(6)),
+      },
     });
   });
   const unrealizedPnlUsd = positions.reduce((sum, position) => (
