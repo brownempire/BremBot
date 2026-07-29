@@ -1,3 +1,5 @@
+import { SCALP_MINIMUM_NET_PROFIT_USD } from "@/lib/perps/scalpExit";
+
 type SignalTrigger = {
   enabled: boolean;
   priceUsd?: number | null;
@@ -60,7 +62,10 @@ export function rebaseTakeProfitForLivePosition(
   if (!requested || !entryPrice || !markPrice || !sizeUsd || sizeUsd <= 0) return requested;
 
   const requestedGrossProfitUsd = Math.abs(requested - entryPrice) / entryPrice * sizeUsd;
-  const requiredGrossProfitUsd = totalFeesUsd + Math.max(1, minimumNetProfitUsd);
+  const requiredGrossProfitUsd = totalFeesUsd + Math.max(
+    SCALP_MINIMUM_NET_PROFIT_USD,
+    minimumNetProfitUsd
+  );
   const targetGrossProfitUsd = Math.max(requestedGrossProfitUsd, requiredGrossProfitUsd);
   const targetMove = entryPrice * targetGrossProfitUsd / sizeUsd;
   const markBuffer = entryPrice / sizeUsd;

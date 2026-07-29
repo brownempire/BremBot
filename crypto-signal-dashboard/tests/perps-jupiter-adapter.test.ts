@@ -41,7 +41,7 @@ test("nested and standalone TP/SL requests use Jupiter raw USD prices", () => {
   ]);
 });
 
-test("a deferred scalp TP is rebased to $3.50 net above filled-position break even", () => {
+test("a deferred scalp TP preserves its volatility target above fees and the net-profit floor", () => {
   const rebased = rebaseTakeProfitForLivePosition(
     { side: "short", takeProfit: { enabled: true, priceUsd: 77.44154323703374 } },
     {
@@ -51,12 +51,12 @@ test("a deferred scalp TP is rebased to $3.50 net above filled-position break ev
       sizeUsd: "5253436400",
       totalFeesUsd: "6309618",
     },
-    3.5
+    0.25
   );
 
   assert.equal(typeof rebased, "number");
   if (typeof rebased !== "number") return;
-  assert.ok(rebased < 77.33);
+  assert.ok(rebased < 77.44);
   assert.ok(rebased < 77.458395);
 });
 

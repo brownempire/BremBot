@@ -51,6 +51,11 @@ import {
   getScalpLearningProfile,
   type ScalpSignal,
 } from "@/lib/perps/scalpEngine";
+import {
+  computeFeeAwareScalpExitPlan,
+  ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
+  MIN_TPSL_EXPECTED_PNL_USD,
+} from "@/lib/perps/scalpExit";
 
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
@@ -60,8 +65,6 @@ const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const LOW_BALANCE_TRADE_USD = 12;
 const LOW_BALANCE_TRADE_MAX_USDC = 50;
-const MIN_TPSL_EXPECTED_PNL_USD = 1;
-const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = 0.0012;
 export const SCALP_SIGNAL_COOLDOWN_SECONDS = 25 * 60;
 
 type AutonomousSignal = Omit<Signal, "type"> & {
@@ -354,7 +357,7 @@ export function computeTriggerPrices(options: {
   const positionSizeUsd = options.collateralUsd * options.leverage;
   const requestedTakeProfitMove = typeof options.takeProfitUsd === "number"
     ? (positionSizeUsd > 0
-      ? (Math.max(1, options.takeProfitUsd) + positionSizeUsd * ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE) / positionSizeUsd
+      ? (Math.max(0, options.takeProfitUsd) + positionSizeUsd * ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE) / positionSizeUsd
       : 0)
     : options.config.settings.perpsTakeProfitMode === "usd"
     ? (positionSizeUsd > 0 ? options.config.settings.perpsTakeProfitValue / positionSizeUsd : 0)
@@ -662,6 +665,13 @@ export async function runAutonomousPerpsMonitor(
       }
       const side = signal.direction === "bullish" ? "long" : "short";
       const entryPrice = windowPoints[windowPoints.length - 1]?.v ?? 0;
+      const scalpExitPlan = strategyClass === "scalp"
+        ? computeFeeAwareScalpExitPlan({
+            positionSizeUsd: collateralUsd * plan.leverage,
+            atrPercent: plan.atrPercent,
+            configuredNetProfitUsd: config.settings.scalpTakeProfitUsd,
+          })
+        : null;
       const triggers = computeTriggerPrices({
         config,
         entryPrice,
@@ -670,7 +680,7 @@ export async function runAutonomousPerpsMonitor(
         side,
         stopLossPercent: plan.stopLossPercent,
         takeProfitPercent: plan.takeProfitPercent,
-        takeProfitUsd: strategyClass === "scalp" ? config.settings.scalpTakeProfitUsd : undefined,
+        takeProfitUsd: scalpExitPlan?.netProfitTargetUsd,
       });
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;

@@ -208,6 +208,146 @@ test("set-parameter execution remains authoritative when the decision layer is a
   assert.equal(result.execution.leverage, 8);
 });
 
+test("active decision rejection blocks a weak scalp even in set-parameters mode", async () => {
+  process.env.PERPS_DECISION_SHADOW_MODE = "false";
+  process.env.PERPS_MAX_LEVERAGE = "50";
+  process.env.PERPS_MAX_TRADE_PCT = "1";
+  process.env.PERPS_MAX_EXPOSURE_PCT = "1";
+  const wallet = "TestWalletWeakScalp3333333333333333333333333";
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "paper",
+    platform: "native",
+    walletProvider: "Jupiter Mobile",
+  });
+
+  const result = await tradingAgent.routePerpsSignalForUser(wallet, {
+    signalId: "sig-weak-scalp-active-decision",
+    symbol: "SOL/USD",
+    summary: "Weak range scalp",
+    direction: "bearish",
+    signalConfidence: 0.7,
+    asset: "SOL",
+    collateralUsd: 50,
+    leverage: 32.5,
+    takeProfitPrice: 99.8,
+    stopLossPrice: 100.8,
+    maxSlippageBps: 100,
+    executionStyle: "set-parameters",
+    strategyClass: "scalp",
+    marketContext: {
+      spotPrice: 100,
+      volatilityPercent: 1.5,
+      trendBias: "sideways",
+      availableUsdc: 100,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 0,
+    },
+  });
+
+  assert.equal(result.decision?.shouldTrade, false);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "DECISION_LAYER_SKIP");
+  assert.equal(result.execution.status, "blocked");
+});
+
+test("scalp execution fails closed when a required protection is missing", async () => {
+  process.env.PERPS_DECISION_SHADOW_MODE = "false";
+  process.env.PERPS_MAX_LEVERAGE = "50";
+  process.env.PERPS_MAX_TRADE_PCT = "1";
+  process.env.PERPS_MAX_EXPOSURE_PCT = "1";
+  const wallet = "TestWalletMissingScalpProtection333333333333333";
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "paper",
+    platform: "native",
+    walletProvider: "Jupiter Mobile",
+  });
+
+  const result = await tradingAgent.routePerpsSignalForUser(wallet, {
+    signalId: "sig-scalp-missing-stop",
+    symbol: "SOL/USD",
+    summary: "Scalp missing stop protection",
+    direction: "bullish",
+    signalConfidence: 0.9,
+    asset: "SOL",
+    collateralUsd: 12,
+    leverage: 10,
+    takeProfitPrice: 100.2,
+    stopLossPrice: null,
+    maxSlippageBps: 100,
+    executionStyle: "set-parameters",
+    strategyClass: "scalp",
+    protectionOverride: {
+      allowDecisionRejection: true,
+      reason: "Operator-approved decision exception for this protected test signal.",
+    },
+    marketContext: {
+      spotPrice: 100,
+      volatilityPercent: 1,
+      trendBias: "bullish",
+      availableUsdc: 25,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 0.2,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "SCALP_PROTECTION_REQUIRED");
+  assert.equal(result.execution.status, "blocked");
+  assert.match(result.message, /stop loss/i);
+});
+
+test("a structured reasoned signal override is required to bypass a scalp protection", async () => {
+  process.env.PERPS_DECISION_SHADOW_MODE = "false";
+  process.env.PERPS_MAX_LEVERAGE = "50";
+  process.env.PERPS_MAX_TRADE_PCT = "1";
+  process.env.PERPS_MAX_EXPOSURE_PCT = "1";
+  const wallet = "TestWalletExplicitScalpOverride33333333333333333";
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "paper",
+    platform: "native",
+    walletProvider: "Jupiter Mobile",
+  });
+  const overrideReason = "Signal explicitly requests a stop exception after external hedge confirmation.";
+
+  const result = await tradingAgent.routePerpsSignalForUser(wallet, {
+    signalId: "sig-scalp-explicit-protection-override",
+    symbol: "SOL/USD",
+    summary: "Externally hedged scalp",
+    direction: "bullish",
+    signalConfidence: 0.9,
+    asset: "SOL",
+    collateralUsd: 12,
+    leverage: 10,
+    takeProfitPrice: 100.2,
+    stopLossPrice: null,
+    maxSlippageBps: 100,
+    executionStyle: "set-parameters",
+    strategyClass: "scalp",
+    protectionOverride: {
+      allowDecisionRejection: true,
+      allowMissingStopLoss: true,
+      reason: overrideReason,
+    },
+    marketContext: {
+      spotPrice: 100,
+      volatilityPercent: 1,
+      trendBias: "bullish",
+      availableUsdc: 25,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 0.2,
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.execution.status, "paper_executed");
+  assert.equal(result.execution.protectionOverrideReason, overrideReason);
+  assert.deepEqual(result.execution.protectionOverrideScopes, [
+    "decision-rejection",
+    "missing-stop-loss",
+  ]);
+  assert.ok(result.execution.decisionTags?.includes("explicit-protection-override"));
+});
+
 test("stale operational failures remain auditable but leave recent decision history", () => {
   const staleAt = new Date(Date.now() - 48 * 60 * 60 * 1_000).toISOString();
   const session = {

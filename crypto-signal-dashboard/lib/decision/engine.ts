@@ -303,7 +303,13 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     triggerDistanceMultiplier
   );
 
-  const confidenceThreshold = learningProfile?.minimumConfidence ?? config.confidenceThreshold;
+  // Scalp admission already clears the independently learned scalp confidence
+  // threshold before reaching this layer. The decision score is a second,
+  // differently scaled risk score, so compare it with the decision threshold
+  // instead of the Smart Trade learning threshold.
+  const confidenceThreshold = payload.strategyClass === "scalp"
+    ? config.confidenceThreshold
+    : learningProfile?.minimumConfidence ?? config.confidenceThreshold;
   const exceedsLearnedVolatility = Boolean(
     learningProfile
     && typeof payload.marketContext.volatilityPercent === "number"

@@ -21,6 +21,7 @@ import { createUserPerpsExecution, listUserPerpsExecutions, updateUserPerpsExecu
 import { evaluateUserScopedPerpsRisk } from "@/lib/perps/userScopedRisk";
 import { signSerializedPerpsTransaction } from "@/lib/perps/signer";
 import { executePerpsEntryWithRetries } from "@/lib/perps/entryRetry";
+import { SCALP_MINIMUM_NET_PROFIT_USD } from "@/lib/perps/scalpExit";
 
 function nowIso() {
   return new Date().toISOString();
@@ -204,9 +205,27 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
   });
   await appendTradeDecisionRecord(decision);
 
-  const learningControlsExecution = signal.executionStyle === "smart-trades";
+  const isScalp = signal.strategyClass === "scalp";
+  const explicitOverride = signal.protectionOverride;
+  const protectionOverrideScopes: PerpsUserExecution["protectionOverrideScopes"] = [
+    explicitOverride?.allowDecisionRejection ? "decision-rejection" as const : null,
+    explicitOverride?.allowMissingTakeProfit ? "missing-take-profit" as const : null,
+    explicitOverride?.allowMissingStopLoss ? "missing-stop-loss" as const : null,
+  ].filter((scope): scope is NonNullable<typeof scope> => scope !== null);
+  const decisionControlsExecution = signal.executionStyle === "smart-trades" || isScalp;
+  const decisionRejectionOverridden = Boolean(
+    isScalp
+    && explicitOverride?.allowDecisionRejection
+  );
+  const missingTakeProfit = isScalp && !signal.takeProfitPrice;
+  const missingStopLoss = isScalp && !signal.stopLossPrice;
+  const missingRequiredProtection = (
+    missingTakeProfit && !explicitOverride?.allowMissingTakeProfit
+  ) || (
+    missingStopLoss && !explicitOverride?.allowMissingStopLoss
+  );
   const resolvedSignal =
-    learningControlsExecution && !shadowMode && decisionConfig.allowExecutionOverrides
+    signal.executionStyle === "smart-trades" && !shadowMode && decisionConfig.allowExecutionOverrides
       ? {
           ...signal,
           collateralUsd: decision.recommendation.recommendedCollateralUsd,
@@ -216,7 +235,12 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
         }
       : signal;
 
-  if (learningControlsExecution && !shadowMode && !decision.recommendation.shouldTrade) {
+  if (
+    decisionControlsExecution
+    && !shadowMode
+    && !decision.recommendation.shouldTrade
+    && !decisionRejectionOverridden
+  ) {
     const blockedExecution: PerpsUserExecution = {
       executionId: `pexec_${crypto.randomUUID()}`,
       sessionId: session.sessionId,
@@ -245,6 +269,8 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       decisionTags: decision.recommendation.explanationTags,
       decisionShadowMode: decision.recommendation.shadowMode,
       strategyClass: signal.strategyClass ?? "smart",
+      protectionOverrideReason: explicitOverride?.reason ?? null,
+      protectionOverrideScopes,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -256,6 +282,57 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
       decision: decision.recommendation,
       code: "DECISION_LAYER_SKIP",
       message: decision.recommendation.explanationSummary,
+    } as const;
+  }
+
+  if (missingRequiredProtection) {
+    const missing = [
+      missingTakeProfit && !explicitOverride?.allowMissingTakeProfit ? "take profit" : null,
+      missingStopLoss && !explicitOverride?.allowMissingStopLoss ? "stop loss" : null,
+    ].filter(Boolean).join(" and ");
+    const blockedExecution: PerpsUserExecution = {
+      executionId: `pexec_${crypto.randomUUID()}`,
+      sessionId: session.sessionId,
+      walletAddress,
+      signalId: signal.signalId,
+      symbol: signal.symbol,
+      summary: signal.summary,
+      side: signal.direction === "bullish" ? "long" : "short",
+      asset: signal.asset,
+      mode: session.mode,
+      executionModel: session.executionModel,
+      status: "blocked",
+      reasonCode: "SCALP_PROTECTION_REQUIRED",
+      reasonMessage: `Scalp execution requires a protected ${missing} unless the signal includes an explicit, reasoned override.`,
+      collateralUsd: signal.collateralUsd,
+      sizeUsd: Number((signal.collateralUsd * signal.leverage).toFixed(2)),
+      leverage: signal.leverage,
+      takeProfitPrice: signal.takeProfitPrice ?? null,
+      stopLossPrice: signal.stopLossPrice ?? null,
+      txid: null,
+      positionPubkey: null,
+      decisionId: decision.payload.decisionId,
+      decisionConfidence: decision.recommendation.confidenceScore,
+      decisionShouldTrade: decision.recommendation.shouldTrade,
+      decisionSummary: decision.recommendation.explanationSummary,
+      decisionTags: [
+        ...decision.recommendation.explanationTags,
+        "scalp-protection-required",
+      ],
+      decisionShadowMode: decision.recommendation.shadowMode,
+      strategyClass: "scalp",
+      protectionOverrideReason: explicitOverride?.reason ?? null,
+      protectionOverrideScopes,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    await createUserPerpsExecution(blockedExecution);
+    return {
+      ok: false,
+      execution: blockedExecution,
+      decision: decision.recommendation,
+      code: "SCALP_PROTECTION_REQUIRED",
+      message: blockedExecution.reasonMessage,
     } as const;
   }
 
@@ -299,9 +376,13 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
     decisionConfidence: decision.recommendation.confidenceScore,
     decisionShouldTrade: decision.recommendation.shouldTrade,
     decisionSummary: decision.recommendation.explanationSummary,
-    decisionTags: decision.recommendation.explanationTags,
+    decisionTags: protectionOverrideScopes.length > 0
+      ? [...decision.recommendation.explanationTags, "explicit-protection-override"]
+      : decision.recommendation.explanationTags,
     decisionShadowMode: decision.recommendation.shadowMode,
     strategyClass: signal.strategyClass ?? "smart",
+    protectionOverrideReason: explicitOverride?.reason ?? null,
+    protectionOverrideScopes,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -365,7 +446,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
                 successfulSignal,
                 agentWalletAddress,
                 positionPubkey,
-                signal.strategyClass === "scalp" ? 3.5 : 1
+                signal.strategyClass === "scalp" ? SCALP_MINIMUM_NET_PROFIT_USD : 1
               );
               if (!protection) break;
               const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);

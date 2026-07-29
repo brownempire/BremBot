@@ -20,6 +20,19 @@ export const perpsSessionHeartbeatSchema = z.object({
   reason: z.string().trim().min(1).optional(),
 });
 
+export const perpsProtectionOverrideSchema = z.object({
+  allowDecisionRejection: z.literal(true).optional(),
+  allowMissingTakeProfit: z.literal(true).optional(),
+  allowMissingStopLoss: z.literal(true).optional(),
+  reason: z.string().trim().min(12),
+}).refine((value) => (
+  value.allowDecisionRejection
+  || value.allowMissingTakeProfit
+  || value.allowMissingStopLoss
+), {
+  message: "A protection override must explicitly name at least one protection to bypass.",
+});
+
 export const perpsAgentSignalSchema = z.object({
   signalId: z.string().trim().min(1),
   symbol: z.string().trim().min(1),
@@ -35,6 +48,7 @@ export const perpsAgentSignalSchema = z.object({
   smartTradeProfile: z.enum(["conservative", "balanced", "aggressive"]).optional(),
   executionStyle: z.enum(["set-parameters", "smart-trades"]).optional(),
   strategyClass: z.enum(["smart", "scalp"]).optional(),
+  protectionOverride: perpsProtectionOverrideSchema.optional(),
   strategyContext: z.object({
     signalType: z.enum(["trend", "breakout", "scalp"]),
     trendWindow: z.number().finite().min(1),
@@ -135,6 +149,12 @@ export const perpsUserExecutionSchema = z.object({
   decisionTags: z.array(z.string().trim().min(1)).optional(),
   decisionShadowMode: z.boolean().optional(),
   strategyClass: z.enum(["smart", "scalp"]).optional(),
+  protectionOverrideReason: z.string().trim().nullable().optional(),
+  protectionOverrideScopes: z.array(z.enum([
+    "decision-rejection",
+    "missing-take-profit",
+    "missing-stop-loss",
+  ])).optional(),
   decisionId: z.string().trim().nullable().optional(),
   attemptCount: z.number().int().min(1).max(3).optional(),
   retrySummary: z.array(z.string().trim().min(1)).max(3).optional(),
