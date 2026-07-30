@@ -1,5 +1,8 @@
 import type { ScalpLearningProfile, TradeLearningOutcome } from "@/lib/decision/learningTypes";
-import { DEFAULT_SCALP_LEARNING_PROFILE } from "@/lib/perps/scalpEngine";
+import {
+  DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_STANDARD_COOLDOWN_SECONDS,
+} from "@/lib/perps/scalpEngine";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -70,7 +73,11 @@ export function updateScalpLearningProfile(
       profile.minimumConfidence = clamp(profile.minimumConfidence - 0.002, 0.58, 0.78);
       profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore - 0.002, 0.52, 0.76);
       profile.riskMultiplier = clamp(profile.riskMultiplier + 0.01, 0.5, 1);
-      profile.cooldownSeconds = Math.round(clamp(profile.cooldownSeconds - 15, 900, 3_600));
+      profile.cooldownSeconds = Math.round(clamp(
+        profile.cooldownSeconds - 15,
+        SCALP_STANDARD_COOLDOWN_SECONDS,
+        3_600
+      ));
       if (setupKey) {
         profile.setupConfidenceAdjustments[setupKey] = clamp(
           profile.setupConfidenceAdjustments[setupKey] - 0.004,
@@ -96,7 +103,11 @@ export function updateScalpLearningProfile(
       profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore + 0.01, 0.52, 0.8);
       profile.strongReversalScore = clamp(profile.strongReversalScore + 0.004, 0.68, 0.9);
       profile.riskMultiplier = clamp(profile.riskMultiplier - 0.05, 0.5, 1);
-      profile.cooldownSeconds = Math.round(clamp(profile.cooldownSeconds + 60, 900, 4_800));
+      profile.cooldownSeconds = Math.round(clamp(
+        profile.cooldownSeconds + 60,
+        SCALP_STANDARD_COOLDOWN_SECONDS,
+        4_800
+      ));
       if (setupKey) {
         profile.setupConfidenceAdjustments[setupKey] = clamp(
           profile.setupConfidenceAdjustments[setupKey] + 0.015,

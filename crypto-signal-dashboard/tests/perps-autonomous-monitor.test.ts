@@ -5,7 +5,10 @@ import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
 import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_EXCEPTIONAL_REVERSAL_SCORE,
+  SCALP_PROFIT_COOLDOWN_SECONDS,
   SCALP_REVERSAL_MAX_ADX,
+  SCALP_TRADE_LEVERAGE,
   analyzeScalpPriceAction,
   detectAdaptiveScalpSignal,
 } from "../lib/perps/scalpEngine";
@@ -182,27 +185,40 @@ function bullishSweepPoints() {
   });
 }
 
-test("strong liquidity-sweep reversal requires confirmation without bypassing indicators", () => {
-  const points = bullishSweepPoints();
+function exceptionalBullishSweepPoints() {
+  return bullishSweepPoints().map((point, index) => index === 22
+    ? {
+        ...point,
+        o: 99.98,
+        h: 100.04,
+        l: 99.8,
+      }
+    : point);
+}
+
+test("exceptional confirmed liquidity-sweep reversal can bypass the trend-strength ceiling", () => {
+  const points = exceptionalBullishSweepPoints();
   const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points,
-    indicators: reversalIndicators(),
+    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 20 }),
     profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
   });
 
   assert.equal(priceAction.direction, "bullish");
   assert.equal(priceAction.setupType, "liquidity-sweep");
   assert.equal(priceAction.strong, true);
+  assert.equal(priceAction.confirmed, true);
+  assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
   assert.equal(signal?.direction, "bullish");
-  assert.equal(signal?.indicatorBypass, false);
+  assert.equal(signal?.indicatorBypass, true);
   assert.ok(signal?.priceActionTags.includes("PRICE_LIQUIDITY_SWEEP_RECLAIM"));
-  assert.ok(signal?.priceActionTags.includes("INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"));
+  assert.ok(signal?.priceActionTags.includes("EXCEPTIONAL_CONFIRMED_PRICE_ACTION"));
 });
 
 test("the candle-structure reversal detector handles bearish liquidity sweeps symmetrically", () => {
-  const points = bullishSweepPoints().map((point) => ({
+  const points = exceptionalBullishSweepPoints().map((point) => ({
     ...point,
     v: 200 - point.v,
     o: 200 - point.o,
@@ -226,7 +242,7 @@ test("the candle-structure reversal detector handles bearish liquidity sweeps sy
 
   assert.equal(signal?.direction, "bearish");
   assert.equal(signal?.setupType, "liquidity-sweep");
-  assert.equal(signal?.indicatorBypass, false);
+  assert.equal(signal?.indicatorBypass, true);
 });
 
 test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
@@ -245,31 +261,80 @@ test("a lone price spike without reclaim and momentum confirmation cannot bypass
   assert.equal(signal, null);
 });
 
-test("ADX above 40 rejects even a strong confirmed reversal", () => {
+test("ADX above 40 still rejects a non-exceptional confirmed reversal", () => {
   const points = bullishSweepPoints();
-  const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
+  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  const priceAction = analyzeScalpPriceAction(points, profile);
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points,
     indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 0.01 }),
-    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+    profile,
   });
 
   assert.equal(priceAction.strong, true);
   assert.equal(priceAction.confirmed, true);
+  assert.ok(priceAction.score < SCALP_EXCEPTIONAL_REVERSAL_SCORE);
   assert.equal(signal, null);
 });
 
 test("a confirmed reversal at the ADX 40 ceiling remains eligible", () => {
+  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points: bullishSweepPoints(),
     indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX }),
-    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+    profile,
   });
 
   assert.equal(signal?.setupType, "liquidity-sweep");
   assert.equal(signal?.indicatorBypass, false);
+});
+
+test("a profitable scalp permits an exceptional opposite reversal five minutes after closing", () => {
+  const points = exceptionalBullishSweepPoints();
+  const latestTimestamp = points.at(-1)!.t;
+  const lastSignalAt = latestTimestamp - 12 * 60_000;
+  const signal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 20 }),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+    lastSignalAt,
+    recentClosedTrade: {
+      openedAt: lastSignalAt + 30_000,
+      closedAt: latestTimestamp - SCALP_PROFIT_COOLDOWN_SECONDS * 1_000,
+      side: "short",
+      netPnlUsd: 3.5,
+    },
+  });
+
+  assert.equal(SCALP_PROFIT_COOLDOWN_SECONDS, 300);
+  assert.equal(signal?.direction, "bullish");
+  assert.equal(signal?.indicatorBypass, true);
+});
+
+test("the shortened cooldown does not apply to losses, same-direction entries, or early reversals", () => {
+  const points = exceptionalBullishSweepPoints();
+  const latestTimestamp = points.at(-1)!.t;
+  const lastSignalAt = latestTimestamp - 12 * 60_000;
+  const detect = (side: "long" | "short", netPnlUsd: number, closedMinutesAgo: number) => detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 20 }),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+    lastSignalAt,
+    recentClosedTrade: {
+      openedAt: lastSignalAt,
+      closedAt: latestTimestamp - closedMinutesAgo * 60_000,
+      side,
+      netPnlUsd,
+    },
+  });
+
+  assert.equal(detect("short", -1, 6), null);
+  assert.equal(detect("long", 3.5, 6), null);
+  assert.equal(detect("short", 3.5, 4), null);
 });
 
 test("raw scalp confidence must clear the learned threshold instead of being raised to it", () => {
@@ -305,10 +370,12 @@ test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net tar
   assert.equal(triggers.stopLossPrice, null);
 });
 
-test("scalp planning uses 50 percent wallet allocation", () => {
+test("scalp planning uses 50 percent wallet allocation and 25x leverage", () => {
   const planningConfig = getScalpTradePlanningConfig(createConfig());
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
+  assert.equal(planningConfig.settings.perpsLeverage, SCALP_TRADE_LEVERAGE);
+  assert.equal(SCALP_TRADE_LEVERAGE, 25);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
@@ -319,6 +386,58 @@ test("low-balance collateral uses exactly $12 from $12 up to but not including $
   assert.equal(resolveAutonomousCollateralUsd(25, 20), 12);
   assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 12);
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
+});
+
+test("monitor combines the profitable cooldown exception with 25x protected scalp execution", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const latestTimestamp = points.at(-1)!.t;
+  const lastSignalAt = latestTimestamp - 12 * 60_000;
+  let routedSignal: PerpsAgentSignal | null = null;
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsLeverage: 10,
+      scalpModeEnabled: true,
+      stopLossPercent: 25,
+    },
+    params: {
+      ...base.params,
+      trendWindow: 24,
+    },
+  });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLatestClosedScalpOutcome: async () => ({
+      openedAt: new Date(lastSignalAt + 30_000).toISOString(),
+      closedAt: new Date(latestTimestamp - SCALP_PROFIT_COOLDOWN_SECONDS * 1_000).toISOString(),
+      side: "short",
+      netPnlUsd: 3.5,
+    }) as never,
+    readLastSignal: async (_wallet, _asset, strategyClass) => strategyClass === "scalp" ? lastSignalAt : null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const routed = routedSignal as PerpsAgentSignal | null;
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routed?.strategyClass, "scalp");
+  assert.equal(routed?.leverage, SCALP_TRADE_LEVERAGE);
+  assert.equal(routed?.collateralUsd, 50);
+  assert.ok((routed?.takeProfitPrice ?? 0) > (routed?.marketContext?.spotPrice ?? Number.POSITIVE_INFINITY));
+  assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < (routed?.marketContext?.spotPrice ?? 0));
 });
 
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {

@@ -15,6 +15,7 @@ type PerpsClockCardProps = {
   onClockOut: () => void;
   onViewLog: () => void;
   scalpModeEnabled: boolean;
+  scalpLeverage: number;
   scalpTakeProfitUsd: number;
   onToggleScalpMode: (enabled: boolean) => void;
   onToggleMode: () => void;
@@ -96,6 +97,9 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
             </div>
             <div className="perps-scalp-rule">
               Wallet allocation <strong>50%</strong>
+            </div>
+            <div className="perps-scalp-rule">
+              Leverage <strong>{props.scalpLeverage}×</strong>
             </div>
             <div className="subtext">Automatically turns off when a trend or breakout signal appears.</div>
           </div>

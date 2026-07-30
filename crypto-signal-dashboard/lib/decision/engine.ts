@@ -284,10 +284,12 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       : 1;
 
   const recommendedCollateralUsd = round(payload.requestedTrade.collateralUsd * sizeMultiplier, 2);
-  const recommendedLeverage = round(Math.min(
-    payload.requestedTrade.leverage * leverageMultiplier,
-    learningProfile?.leverageCap ?? Number.POSITIVE_INFINITY
-  ), 2);
+  const recommendedLeverage = payload.strategyClass === "scalp"
+    ? payload.requestedTrade.leverage
+    : round(Math.min(
+        payload.requestedTrade.leverage * leverageMultiplier,
+        learningProfile?.leverageCap ?? Number.POSITIVE_INFINITY
+      ), 2);
   const recommendedTakeProfitPrice = adjustTriggerPrice(
     payload.direction,
     "tp",

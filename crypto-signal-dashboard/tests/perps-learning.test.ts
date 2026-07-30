@@ -261,6 +261,7 @@ test("Smart and scalp losses update only their respective learning algorithms", 
   assert.deepEqual(afterScalp.profile.assetAdjustments, baseline.profile.assetAdjustments);
   assert.ok((afterScalp.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
   assert.ok((afterScalp.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
+  assert.ok((afterScalp.profile.scalpProfile?.cooldownSeconds ?? 0) >= 1_500);
 
   const scalpSnapshot = structuredClone(afterScalp.profile.scalpProfile);
   await learningStore.saveTradeLearningOutcomes([makeOutcome(2, "trend")]);

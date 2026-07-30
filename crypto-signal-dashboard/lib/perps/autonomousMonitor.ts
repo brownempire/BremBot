@@ -36,7 +36,10 @@ import {
   type IndicatorSettings,
 } from "@/lib/signal/indicators";
 import { getRedisClient } from "@/lib/server/redis";
-import { getActiveDecisionLearningProfile } from "@/lib/decision/learningStore";
+import {
+  getActiveDecisionLearningProfile,
+  listTradeLearningOutcomes,
+} from "@/lib/decision/learningStore";
 import { getLearnedSignalParams, applyLearnedTradePlan } from "@/lib/decision/learningRuntime";
 import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
@@ -47,6 +50,8 @@ import {
 } from "@/lib/decision/learningTypes";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_STANDARD_COOLDOWN_SECONDS,
+  SCALP_TRADE_LEVERAGE,
   detectAdaptiveScalpSignal,
   getScalpLearningProfile,
   type ScalpSignal,
@@ -65,7 +70,7 @@ const MONITOR_LOCK_TTL_MS = 55_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const LOW_BALANCE_TRADE_USD = 12;
 const LOW_BALANCE_TRADE_MAX_USDC = 50;
-export const SCALP_SIGNAL_COOLDOWN_SECONDS = 25 * 60;
+export const SCALP_SIGNAL_COOLDOWN_SECONDS = SCALP_STANDARD_COOLDOWN_SECONDS;
 
 type AutonomousSignal = Omit<Signal, "type"> & {
   type: Signal["type"] | "scalp";
@@ -107,6 +112,7 @@ type MonitorDependencies = {
   getAgentWallet: typeof getAgentWalletForOwner;
   isWalletAllowed: typeof isPerpsLiveWalletAllowed;
   getLearningProfile: (walletAddress: string) => Promise<DecisionLearningProfile | null>;
+  getLatestClosedScalpOutcome: (walletAddress: string) => Promise<Awaited<ReturnType<typeof listTradeLearningOutcomes>>[number] | null>;
   reconcileLearningHistory: (walletAddress: string, snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>) => Promise<number>;
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
@@ -130,6 +136,13 @@ const defaultDependencies: MonitorDependencies = {
   getAgentWallet: getAgentWalletForOwner,
   isWalletAllowed: isPerpsLiveWalletAllowed,
   getLearningProfile: getActiveDecisionLearningProfile,
+  getLatestClosedScalpOutcome: async (walletAddress) => {
+    const outcomes = await listTradeLearningOutcomes(walletAddress);
+    return [...outcomes].reverse().find((outcome) => (
+      outcome.signalType === "scalp"
+      || outcome.scalpSetupType !== null
+    )) ?? null;
+  },
   reconcileLearningHistory: async (walletAddress, snapshot) => {
     const [executions, decisions] = await Promise.all([
       listUserPerpsExecutions(walletAddress),
@@ -339,6 +352,7 @@ export function getScalpTradePlanningConfig(config: PerpsAutomationConfig): Perp
       perpsExecutionMode: "set-parameters",
       walletAllocationMode: "percent",
       walletPercent: 50,
+      perpsLeverage: SCALP_TRADE_LEVERAGE,
     },
   };
 }
@@ -521,6 +535,9 @@ export async function runAutonomousPerpsMonitor(
         deps.readLastSignal(config.walletAddress, asset, "smart"),
         deps.readLastSignal(config.walletAddress, asset, "scalp"),
       ]);
+      const latestClosedScalpOutcome = config.settings.scalpModeEnabled && lastScalpSignalAt
+        ? await deps.getLatestClosedScalpOutcome(config.walletAddress).catch(() => null)
+        : null;
       const volatilityPercent = computeVolatilityPercent(windowPoints);
       const signalMetrics = computeSignalMetrics(windowPoints);
       const smartSignalCandidate = detectSignals({
@@ -573,6 +590,14 @@ export async function runAutonomousPerpsMonitor(
             indicators,
             profile: scalpProfile,
             lastSignalAt: lastScalpSignalAt,
+            recentClosedTrade: latestClosedScalpOutcome
+              ? {
+                  openedAt: Date.parse(latestClosedScalpOutcome.openedAt),
+                  closedAt: Date.parse(latestClosedScalpOutcome.closedAt),
+                  side: latestClosedScalpOutcome.side,
+                  netPnlUsd: latestClosedScalpOutcome.netPnlUsd,
+                }
+              : null,
           })
         : null;
       const signal = smartEligible ? smartSignal! : scalpSignal;
@@ -644,7 +669,7 @@ export async function runAutonomousPerpsMonitor(
         ? {
             ...learnedPlan,
             collateralPercent: Number((learnedPlan.collateralPercent * scalpProfile.riskMultiplier).toFixed(2)),
-            leverage: Number((learnedPlan.leverage * Math.max(0.65, scalpProfile.riskMultiplier)).toFixed(2)),
+            leverage: learnedPlan.leverage,
             profileId: learningProfile?.profileId ?? null,
           }
         : learnedPlan;

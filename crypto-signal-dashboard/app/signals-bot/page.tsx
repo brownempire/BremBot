@@ -37,6 +37,7 @@ import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
 import { pnlPointsForRange } from "@/lib/perps/pnlChart";
+import { SCALP_TRADE_LEVERAGE } from "@/lib/perps/scalpEngine";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -5576,6 +5577,7 @@ function DashboardPage() {
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
             onViewLog={() => { void openDecisionLog(); }}
             scalpModeEnabled={autoTradeSettings.scalpModeEnabled}
+            scalpLeverage={SCALP_TRADE_LEVERAGE}
             scalpTakeProfitUsd={autoTradeSettings.scalpTakeProfitUsd}
             onToggleScalpMode={(enabled) => persistAutoTradeSettings({
               ...autoTradeSettings,
