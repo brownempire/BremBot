@@ -1618,59 +1618,20 @@ button:disabled {
   overscroll-behavior: contain;
 }
 
-.tradingview-overlay-layer {
+.tradingview-load-error {
   position: absolute;
   inset: 0;
-  pointer-events: none;
-  z-index: 3;
-  overflow: hidden;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #9fb0ca;
+  background: #07111f;
+  font-size: 13px;
+  text-align: center;
 }
 
-.tradingview-overlay-line {
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  height: 0;
-  border-top: 2px dashed rgba(255, 255, 255, 0.55);
-  transform: translateY(-50%);
-}
-
-.tradingview-overlay-line-entry {
-  border-top-color: rgba(101, 217, 255, 0.95);
-}
-
-.tradingview-overlay-line-tp {
-  border-top-color: rgba(76, 227, 138, 0.95);
-}
-
-.tradingview-overlay-line-sl {
-  border-top-color: rgba(255, 122, 122, 0.95);
-}
-
-.tradingview-overlay-line-liquidation {
-  border-top-color: rgba(255, 159, 67, 0.98);
-}
-
-.tradingview-overlay-line-above,
-.tradingview-overlay-line-below {
-  border-top-style: solid;
-}
-
-.tradingview-overlay-label {
-  position: absolute;
-  right: 0;
-  top: 0;
-  transform: translateY(-50%);
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(7, 12, 20, 0.88);
-  color: #f5f8ff;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+.tradingview-load-error code {
+  color: #65d9ff;
 }
 
 .wallet-holdings {

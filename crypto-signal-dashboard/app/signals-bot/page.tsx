@@ -32,6 +32,7 @@ import type {
   JupiterPerpsWidgetSnapshot,
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
+import { buildPositionOverlayGuides } from "@/lib/chart/positionOverlay";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
@@ -4587,7 +4588,6 @@ function DashboardPage() {
 
   const selectedChartMarket =
     trackedMarkets.find((market) => market.id === selectedChartSlotId) ?? trackedMarkets[0];
-  const selectedChartPricePoints = priceHistory[selectedChartMarket?.id ?? ""] ?? [];
   const selectedSignalMarket =
     trackedMarkets.find((market) => market.id === receiveSignalsForSlotId) ?? trackedMarkets[0];
   const selectedChartGuideKey = normalizeMarketGuideKey(selectedChartMarket?.pair ?? selectedChartMarket?.tvSymbol);
@@ -4602,58 +4602,10 @@ function DashboardPage() {
       normalizeMarketGuideKey(position.custodyAddress) === selectedChartGuideKey
     );
   });
-  const selectedChartGuides = useMemo(() => {
-    if (selectedChartPerpsPositions.length === 0) return [];
-
-    const guides: Array<{
-      id: string;
-      label: string;
-      price: number;
-      tone: "entry" | "tp" | "sl" | "liquidation";
-    }> = [];
-
-    selectedChartPerpsPositions.forEach((position, index) => {
-      const labelPrefix = selectedChartPerpsPositions.length > 1 ? `${index + 1} ` : "";
-
-      if (typeof position.entryPrice === "number" && Number.isFinite(position.entryPrice)) {
-        guides.push({
-          id: `${position.id}-entry`,
-          label: `${labelPrefix}Entry`,
-          price: position.entryPrice,
-          tone: "entry",
-        });
-      }
-
-      if (typeof position.takeProfit === "number" && Number.isFinite(position.takeProfit)) {
-        guides.push({
-          id: `${position.id}-tp`,
-          label: `${labelPrefix}TP`,
-          price: position.takeProfit,
-          tone: "tp",
-        });
-      }
-
-      if (typeof position.liquidationPrice === "number" && Number.isFinite(position.liquidationPrice)) {
-        guides.push({
-          id: `${position.id}-liquidation`,
-          label: `${labelPrefix}Liq`,
-          price: position.liquidationPrice,
-          tone: "liquidation",
-        });
-      }
-
-      if (typeof position.stopLoss === "number" && Number.isFinite(position.stopLoss)) {
-        guides.push({
-          id: `${position.id}-sl`,
-          label: `${labelPrefix}SL`,
-          price: position.stopLoss,
-          tone: "sl",
-        });
-      }
-    });
-
-    return guides;
-  }, [selectedChartPerpsPositions]);
+  const selectedChartGuides = useMemo(
+    () => buildPositionOverlayGuides(selectedChartPerpsPositions),
+    [selectedChartPerpsPositions]
+  );
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];
@@ -5449,7 +5401,6 @@ function DashboardPage() {
           <div className="tradingview-wrap">
             <TradingViewChart
               symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
-              pricePoints={selectedChartPricePoints}
               guides={positionOverlayEnabled ? selectedChartGuides : []}
             />
           </div>

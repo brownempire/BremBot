@@ -24,6 +24,15 @@ coverage/
 # Editor/system artifacts
 .vscode/
 
+# TradingView Advanced Charts is proprietary. Keep the licensed distribution
+# and all locally staged browser assets out of this public repository.
+/charting_library/
+/crypto-signal-dashboard/public/vendor/tradingview/
+
+# Local browser-test artifacts
+/crypto-signal-dashboard/.playwright-cli/
+/crypto-signal-dashboard/output/playwright/
+
 # Keys
 BBkey
 BBkey.pub

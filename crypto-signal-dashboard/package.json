@@ -6,6 +6,7 @@
     "node": "24.x"
   },
   "scripts": {
+    "stage:tradingview": "node scripts/stage-tradingview-assets.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
