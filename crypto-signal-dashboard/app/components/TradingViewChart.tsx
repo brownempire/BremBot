@@ -116,6 +116,7 @@ export function TradingViewChart({
   const guidesRef = useRef(guides);
   const [chartReadyVersion, setChartReadyVersion] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isAppFullscreen, setIsAppFullscreen] = useState(false);
   guidesRef.current = guides;
 
   const guideSignature = validOverlayGuides(guides)
@@ -155,6 +156,7 @@ export function TradingViewChart({
           locale: "en",
           load_last_chart: false,
           disabled_features: [
+            "header_fullscreen_button",
             "header_saveload",
             "header_symbol_search",
             "symbol_search_hot_key",
@@ -358,9 +360,46 @@ export function TradingViewChart({
     };
   }, []);
 
+  useEffect(() => {
+    document.body.classList.toggle("chart-app-fullscreen", isAppFullscreen);
+
+    const resizeChart = () => window.dispatchEvent(new Event("resize"));
+    const firstFrame = window.requestAnimationFrame(() => {
+      resizeChart();
+      window.requestAnimationFrame(resizeChart);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      document.body.classList.remove("chart-app-fullscreen");
+    };
+  }, [isAppFullscreen]);
+
   return (
-    <div ref={frameRef} className="tradingview-frame" data-chart-engine="advanced-charts">
+    <div
+      ref={frameRef}
+      className={`tradingview-frame${isAppFullscreen ? " tradingview-frame--app-fullscreen" : ""}`}
+      data-chart-engine="advanced-charts"
+      data-app-fullscreen={isAppFullscreen ? "true" : "false"}
+    >
       <div id={containerId} className="tradingview-container" />
+      <button
+        type="button"
+        className={`tradingview-fullscreen-button${isAppFullscreen ? " is-close" : ""}`}
+        aria-label={isAppFullscreen ? "Close chart fullscreen" : "Open chart fullscreen"}
+        aria-pressed={isAppFullscreen}
+        onClick={() => setIsAppFullscreen((current) => !current)}
+      >
+        {isAppFullscreen ? (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" />
+          </svg>
+        )}
+      </button>
       {loadError ? (
         <div className="tradingview-load-error" role="alert">
           {loadError}. Run <code>npm run stage:tradingview</code> before building.
