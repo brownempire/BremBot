@@ -32,7 +32,7 @@ export function getPerpsRuntimeSettings(): PerpsRuntimeSettings {
     killSwitch: readBoolean(process.env.PERPS_KILL_SWITCH, false),
     paperTrading: readBoolean(process.env.PERPS_PAPER_TRADING, true),
     allowedMarkets: readAllowedMarkets(process.env.PERPS_ALLOWED_MARKETS),
-    maxLeverage: readNumber(process.env.PERPS_MAX_LEVERAGE, 25),
+    maxLeverage: readNumber(process.env.PERPS_MAX_LEVERAGE, 50),
     maxTradePct: readNumber(process.env.PERPS_MAX_TRADE_PCT, 0.1),
     maxExposurePct: readNumber(process.env.PERPS_MAX_EXPOSURE_PCT, 0.5),
     maxDailyLossPct: readNumber(process.env.PERPS_MAX_DAILY_LOSS_PCT, 0.03),

@@ -370,12 +370,12 @@ test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net tar
   assert.equal(triggers.stopLossPrice, null);
 });
 
-test("scalp planning uses 50 percent wallet allocation and 25x leverage", () => {
+test("scalp planning uses 50 percent wallet allocation and 50x leverage", () => {
   const planningConfig = getScalpTradePlanningConfig(createConfig());
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
   assert.equal(planningConfig.settings.perpsLeverage, SCALP_TRADE_LEVERAGE);
-  assert.equal(SCALP_TRADE_LEVERAGE, 25);
+  assert.equal(SCALP_TRADE_LEVERAGE, 50);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
@@ -388,7 +388,7 @@ test("low-balance collateral uses exactly $12 from $12 up to but not including $
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
 });
 
-test("monitor combines the profitable cooldown exception with 25x protected scalp execution", async () => {
+test("monitor combines the profitable cooldown exception with 50x protected scalp execution", async () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const lastSignalAt = latestTimestamp - 12 * 60_000;
@@ -986,7 +986,7 @@ test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", asyn
     strategyBaselineVersion: 3,
     minimumConfidence: 0.68,
     leverageFloor: 2,
-    leverageCap: 10,
+    leverageCap: 20,
     leverageQualityExponent: 2.5,
     leverageVolatilityPenalty: 1.25,
     leverageLossStepdown: 1,
@@ -1023,7 +1023,7 @@ test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", asyn
 
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(result.results[0]?.status, "executed");
-  assert.ok((routed?.leverage ?? 0) >= 2 && (routed?.leverage ?? 0) <= 10);
+  assert.ok((routed?.leverage ?? 0) >= 2 && (routed?.leverage ?? 0) <= 20);
   assert.ok((routed?.collateralUsd ?? 0) <= 12);
   const entryPrice = points.at(-1)?.v ?? 0;
   const leverage = routed?.leverage ?? 1;

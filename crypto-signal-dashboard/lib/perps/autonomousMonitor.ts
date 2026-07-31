@@ -41,6 +41,7 @@ import {
   listTradeLearningOutcomes,
 } from "@/lib/decision/learningStore";
 import { getLearnedSignalParams, applyLearnedTradePlan } from "@/lib/decision/learningRuntime";
+import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
 import { trainWalletDecisionProfile } from "@/lib/decision/trainer";
@@ -318,6 +319,7 @@ function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], si
     balanced: { collateralBase: 0.65, leverageBase: 0.5, defaultTp: 1.5, defaultSl: 3.5, leverageCapMultiplier: 0.65 },
     aggressive: { collateralBase: 0.8, leverageBase: 1.35, defaultTp: 3, defaultSl: 7, leverageCapMultiplier: 2 },
   }[config.settings.smartTradeProfile];
+  const smartTradeBaseLeverage = OPERATOR_TRAINING_BASELINE.leverageCap;
   const volatilityFactor = clamp(volatilityPercent / 2.5, 0, 1.35);
   const confidenceBias = clamp((signal.confidence - 0.55) / 0.35, -0.5, 1);
   const collateralPercent = clamp(
@@ -326,9 +328,9 @@ function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], si
     100
   );
   const leverage = clamp(
-    config.settings.perpsLeverage * (profile.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
+    smartTradeBaseLeverage * (profile.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
     1,
-    Math.min(250, Math.max(1, config.settings.perpsLeverage * profile.leverageCapMultiplier))
+    Math.min(250, Math.max(1, smartTradeBaseLeverage * profile.leverageCapMultiplier))
   );
   const baseTp = config.settings.perpsTakeProfitMode === "percent" && config.settings.perpsTakeProfitValue > 0
     ? config.settings.perpsTakeProfitValue

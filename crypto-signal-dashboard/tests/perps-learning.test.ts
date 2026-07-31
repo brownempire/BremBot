@@ -49,19 +49,19 @@ test("manual training activates the operator-selected baseline before enough out
   }
   assert.equal(result.profile.cooldownSeconds, 27_000);
   assert.equal(result.profile.leverageFloor, 2);
-  assert.equal(result.profile.leverageCap, 10);
+  assert.equal(result.profile.leverageCap, 20);
   assert.equal(result.profile.maximumAllocationPercent, 50);
   assert.equal(result.profile.targetWalletRiskPercent, 3);
   assert.equal(result.profile.takeProfitRoePercent, 25);
   assert.equal(result.profile.stopLossRoePercent, 25);
   const plan = runtime.applyLearnedTradePlan({
-    basePlan: { collateralPercent: 80, leverage: 10, stopLossPercent: 10, takeProfitPercent: 10, volatilityPercent: 2 },
+    basePlan: { collateralPercent: 80, leverage: 20, stopLossPercent: 10, takeProfitPercent: 10, volatilityPercent: 2 },
     asset: "SOL",
     points: Array.from({ length: 16 }, (_, index) => ({ t: index * 60_000, v: 100 + index * 0.1 })),
     profile: result.profile,
   });
   assert.equal(plan.collateralPercent, 12);
-  assert.ok(plan.leverage >= 2 && plan.leverage <= 10);
+  assert.ok(plan.leverage >= 2 && plan.leverage <= 20);
   assert.equal(plan.takeProfitPercent, 25);
   assert.equal(plan.stopLossPercent, 25);
 });
@@ -117,11 +117,11 @@ test("automatic training migrates a legacy active profile before applying new ou
 
   assert.equal(result.activated, true);
   assert.equal(result.migrated, true);
-  assert.equal(result.profile.strategyBaselineVersion, 4);
+  assert.equal(result.profile.strategyBaselineVersion, 5);
   assert.equal(result.profile.trendWindow, 145);
   assert.equal(result.profile.cooldownSeconds, 27_000);
   assert.equal(result.profile.leverageFloor, 2);
-  assert.equal(result.profile.leverageCap, 10);
+  assert.equal(result.profile.leverageCap, 20);
   assert.equal(result.profile.takeProfitRoePercent, 25);
   assert.equal(result.profile.stopLossRoePercent, 25);
 });
@@ -387,7 +387,7 @@ test("profitable chronological holdout history promotes a versioned learned prof
   assert.equal(result.profile.source, "manual-training");
   assert.equal(result.profile.validation.passed, true);
   assert.equal(result.profile.learnedFromClosedTrades, 60);
-  assert.equal(result.profile.strategyBaselineVersion, 4);
+  assert.equal(result.profile.strategyBaselineVersion, 5);
   assert.ok(result.profile.trendWindow >= 120 && result.profile.trendWindow <= 180);
   assert.ok(result.profile.cooldownSeconds >= 27_000 && result.profile.cooldownSeconds <= 43_200);
   assert.ok(result.profile.takeProfitRoePercent >= 20 && result.profile.takeProfitRoePercent <= 30);
@@ -395,7 +395,7 @@ test("profitable chronological holdout history promotes a versioned learned prof
   assert.equal(result.profile.targetWalletRiskPercent, 3);
   assert.equal(result.profile.maximumAllocationPercent, 50);
   assert.equal(result.profile.leverageFloor, 2);
-  assert.equal(result.profile.leverageCap, 10);
+  assert.equal(result.profile.leverageCap, 20);
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
 });
 

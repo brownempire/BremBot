@@ -908,15 +908,16 @@ function deriveSmartPerpsTradePlan(options: {
   };
 
   const profileConfig = profileSettings[profile];
+  const smartTradeBaseLeverage = OPERATOR_TRAINING_BASELINE.leverageCap;
   const collateralPercent = clampNumber(
     options.collateralPercentBase * (profileConfig.collateralBase + confidenceBias * 0.18 - volatilityFactor * 0.16),
     5,
     100
   );
   const leverage = clampNumber(
-    options.settings.perpsLeverage * (profileConfig.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
+    smartTradeBaseLeverage * (profileConfig.leverageBase + confidenceBias * 0.12 - volatilityFactor * 0.14),
     1,
-    Math.min(250, Math.max(1, options.settings.perpsLeverage * profileConfig.leverageCapMultiplier))
+    Math.min(250, Math.max(1, smartTradeBaseLeverage * profileConfig.leverageCapMultiplier))
   );
   const baseTp = options.settings.perpsTakeProfitMode === "percent" && options.settings.perpsTakeProfitValue > 0
     ? options.settings.perpsTakeProfitValue
@@ -3579,7 +3580,9 @@ function DashboardPage() {
         spotTakeProfitValue,
         spotTakeProfitMode,
         stopLossPercent,
-        perpsLeverage,
+        perpsLeverage: perpsExecutionMode === "smart-trades"
+          ? OPERATOR_TRAINING_BASELINE.leverageCap
+          : perpsLeverage,
         perpsExecutionMode,
         scalpModeEnabled,
         scalpTakeProfitUsd,

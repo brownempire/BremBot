@@ -67,6 +67,6 @@ export function makeOperatorTrainingBaselineProfile(
       passed: true,
       reasons: ["Operator-selected baseline activated while BremLogic collects enough closed trades for walk-forward training."],
     },
-    summary: "Research baseline: isolated Smart trend/breakout learning plus adaptive scalp range/reversal learning, a 145-minute Smart window, 1.65% trend, 0.35% breakout, 7.5-hour Smart cooldown, 50% allocation ceiling, 3% target wallet risk, 25% TP, 25% SL, and quality-adjusted 2–10x leverage.",
+    summary: "Research baseline: isolated Smart trend/breakout learning plus adaptive scalp range/reversal learning, a 145-minute Smart window, 1.65% trend, 0.35% breakout, 7.5-hour Smart cooldown, 50% allocation ceiling, 3% target wallet risk, 25% TP, 25% SL, and quality-adjusted 2–20x leverage.",
   };
 }

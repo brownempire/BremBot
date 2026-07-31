@@ -10,7 +10,7 @@ export const SCALP_STANDARD_COOLDOWN_SECONDS = 25 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
 export const SCALP_REVERSAL_MAX_ADX = 40;
-export const SCALP_TRADE_LEVERAGE = 25;
+export const SCALP_TRADE_LEVERAGE = 50;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   learnedFromClosedTrades: 0,
