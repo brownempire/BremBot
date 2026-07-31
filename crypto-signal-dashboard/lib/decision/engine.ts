@@ -134,8 +134,61 @@ export function buildTradeDecisionPayload(input: {
 
 export function evaluateTradeDecision(payload: TradeDecisionPayload, learningProfile: DecisionLearningProfile | null = null): TradeDecisionRecommendation {
   const config = getTradeDecisionConfig();
+  if (payload.strategyClass === "scalp") {
+    const context = payload.strategyContext;
+    const detectorQualified = Boolean(
+      context
+      && context.signalType === "scalp"
+      && context.scalpSetupType
+      && typeof context.priceActionScore === "number"
+      && context.priceActionScore > 0
+      && context.priceActionTags
+      && context.priceActionTags.length > 0
+    );
+    const confidence = clamp(
+      typeof payload.signalConfidence === "number"
+        ? payload.signalConfidence
+        : context?.priceActionScore ?? 0,
+      0,
+      1
+    );
+    const shouldTrade = detectorQualified && !payload.marketContext.hasOpenPosition;
+    const tags = new Set<string>([
+      "scalp-detector-authoritative",
+      payload.shadowMode ? "shadow-mode" : "active-mode",
+    ]);
+    if (context?.scalpSetupType) tags.add(`scalp-${context.scalpSetupType}`);
+    context?.priceActionTags?.forEach((tag) => tags.add(tag));
+    if (context?.indicatorBypass) tags.add("scalp-reversal-indicator-bypass");
+    if (payload.requestedTrade.takeProfitPrice && payload.requestedTrade.stopLossPrice) {
+      tags.add("structured-exits");
+    }
+    if (!detectorQualified) tags.add("scalp-detector-context-required");
+    if (payload.marketContext.hasOpenPosition) tags.add("existing-position-open");
+    if (shouldTrade) tags.add("scalp-detector-qualified");
+
+    return {
+      shouldTrade,
+      confidenceScore: round(confidence, 4),
+      riskGrade: confidence >= 0.72 ? "low" : confidence >= 0.5 ? "medium" : "high",
+      sizeMultiplier: 1,
+      leverageMultiplier: 1,
+      recommendedCollateralUsd: round(payload.requestedTrade.collateralUsd, 2),
+      recommendedLeverage: payload.requestedTrade.leverage,
+      recommendedTakeProfitPrice: payload.requestedTrade.takeProfitPrice,
+      recommendedStopLossPrice: payload.requestedTrade.stopLossPrice,
+      explanationTags: [...tags],
+      explanationSummary: shouldTrade
+        ? `The independent scalp detector qualified a ${context?.scalpSetupType ?? "reversal"} setup; Smart Trade scoring is not applied.`
+        : detectorQualified
+          ? "The scalp detector qualified the setup, but an existing position prevents another entry."
+          : "Scalp execution requires a signal produced by the independent scalp reversal detector.",
+      shadowMode: payload.shadowMode,
+    };
+  }
+
   const tags = new Set<string>(["decision-layer", payload.shadowMode ? "shadow-mode" : "active-mode"]);
-  tags.add(payload.strategyClass === "scalp" ? "scalp-trade" : "smart-trade");
+  tags.add("smart-trade");
   let confidence = 0.55;
 
   if (typeof payload.signalConfidence === "number") {
@@ -284,12 +337,10 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       : 1;
 
   const recommendedCollateralUsd = round(payload.requestedTrade.collateralUsd * sizeMultiplier, 2);
-  const recommendedLeverage = payload.strategyClass === "scalp"
-    ? payload.requestedTrade.leverage
-    : round(Math.min(
-        payload.requestedTrade.leverage * leverageMultiplier,
-        learningProfile?.leverageCap ?? Number.POSITIVE_INFINITY
-      ), 2);
+  const recommendedLeverage = round(Math.min(
+    payload.requestedTrade.leverage * leverageMultiplier,
+    learningProfile?.leverageCap ?? Number.POSITIVE_INFINITY
+  ), 2);
   const recommendedTakeProfitPrice = adjustTriggerPrice(
     payload.direction,
     "tp",
@@ -305,13 +356,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     triggerDistanceMultiplier
   );
 
-  // Scalp admission already clears the independently learned scalp confidence
-  // threshold before reaching this layer. The decision score is a second,
-  // differently scaled risk score, so compare it with the decision threshold
-  // instead of the Smart Trade learning threshold.
-  const confidenceThreshold = payload.strategyClass === "scalp"
-    ? config.confidenceThreshold
-    : learningProfile?.minimumConfidence ?? config.confidenceThreshold;
+  const confidenceThreshold = learningProfile?.minimumConfidence ?? config.confidenceThreshold;
   const exceedsLearnedVolatility = Boolean(
     learningProfile
     && typeof payload.marketContext.volatilityPercent === "number"

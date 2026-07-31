@@ -1,6 +1,7 @@
 import type { ScalpLearningProfile, TradeLearningOutcome } from "@/lib/decision/learningTypes";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_POLICY_VERSION,
   SCALP_STANDARD_COOLDOWN_SECONDS,
 } from "@/lib/perps/scalpEngine";
 
@@ -50,11 +51,21 @@ export function updateScalpLearningProfile(
   current: ScalpLearningProfile | null | undefined,
   allScalpOutcomes: TradeLearningOutcome[]
 ): ScalpLearningProfile {
-  const profile = structuredClone(current ?? DEFAULT_SCALP_LEARNING_PROFILE);
   const ordered = allScalpOutcomes
     .filter((outcome) => outcome.signalType === "scalp")
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
+  if (!current || current.policyVersion !== SCALP_POLICY_VERSION) {
+    const refreshed = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+    refreshed.policyOutcomeOffset = ordered.length;
+    refreshed.learnedFromClosedTrades = ordered.length;
+    refreshed.validation.reasons = [
+      "Scalp policy refreshed to the authoritative reversal detector; outcomes and decision flags from the former shared Smart scoring era are excluded.",
+    ];
+    return refreshed;
+  }
+  const profile = structuredClone(current);
   const newOutcomes = ordered.slice(profile.learnedFromClosedTrades);
+  const policyOutcomes = ordered.slice(profile.policyOutcomeOffset);
   const setupAdjustmentKey = (outcome: TradeLearningOutcome) => outcome.scalpSetupType === "range-reversal"
     ? "rangeReversal" as const
     : outcome.scalpSetupType === "liquidity-sweep"
@@ -139,9 +150,9 @@ export function updateScalpLearningProfile(
     }
   }
 
-  const validationStart = Math.max(0, Math.floor(ordered.length * 0.8));
-  const validationOutcomes = ordered.length >= 20 ? ordered.slice(validationStart) : [];
-  const measured = stats(validationOutcomes.length > 0 ? validationOutcomes : ordered);
+  const validationStart = Math.max(0, Math.floor(policyOutcomes.length * 0.8));
+  const validationOutcomes = policyOutcomes.length >= 20 ? policyOutcomes.slice(validationStart) : [];
+  const measured = stats(validationOutcomes.length > 0 ? validationOutcomes : policyOutcomes);
   const validationPassed = validationOutcomes.length < 4
     || (measured.expectancyUsd > 0 && measured.profitFactor >= 1.05);
   if (!validationPassed) {
@@ -150,7 +161,7 @@ export function updateScalpLearningProfile(
     profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore + 0.01, 0.52, 0.8);
   }
   profile.learnedFromClosedTrades = ordered.length;
-  profile.preferredDirection = directionPreference(ordered);
+  profile.preferredDirection = directionPreference(policyOutcomes);
   profile.minimumConfidence = Number(profile.minimumConfidence.toFixed(4));
   profile.longRsiMaximum = Number(profile.longRsiMaximum.toFixed(2));
   profile.shortRsiMinimum = Number(profile.shortRsiMinimum.toFixed(2));
@@ -166,8 +177,8 @@ export function updateScalpLearningProfile(
     profile.setupConfidenceAdjustments[typedKey] = Number(profile.setupConfidenceAdjustments[typedKey].toFixed(3));
   });
   profile.validation = {
-    sampleSize: ordered.length,
-    trainingSize: validationOutcomes.length > 0 ? validationStart : ordered.length,
+    sampleSize: policyOutcomes.length,
+    trainingSize: validationOutcomes.length > 0 ? validationStart : policyOutcomes.length,
     validationSize: validationOutcomes.length,
     winRate: Number(measured.winRate.toFixed(4)),
     expectancyUsd: Number(measured.expectancyUsd.toFixed(4)),

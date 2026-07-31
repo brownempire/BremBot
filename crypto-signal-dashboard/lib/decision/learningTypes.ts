@@ -81,6 +81,8 @@ export const learningValidationSchema = z.object({
 });
 
 export const scalpLearningProfileSchema = z.object({
+  policyVersion: z.number().int().positive().default(1),
+  policyOutcomeOffset: z.number().int().min(0).default(0),
   learnedFromClosedTrades: z.number().int().min(0),
   minimumConfidence: z.number().finite().min(0.55).max(0.85),
   cooldownSeconds: z.number().int().min(300).max(7_200),

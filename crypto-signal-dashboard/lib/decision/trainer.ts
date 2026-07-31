@@ -17,7 +17,7 @@ import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrai
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 import { updateScalpLearningProfile } from "@/lib/decision/scalpTrainer";
-import { DEFAULT_SCALP_LEARNING_PROFILE } from "@/lib/perps/scalpEngine";
+import { DEFAULT_SCALP_LEARNING_PROFILE, SCALP_POLICY_VERSION } from "@/lib/perps/scalpEngine";
 
 const MIN_TRAINING_SAMPLE = 50;
 const MIN_VALIDATION_SAMPLE = 10;
@@ -421,6 +421,32 @@ export async function trainWalletDecisionProfile(input: {
       skipped: false,
       incremental: true,
       migrated: true,
+      activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+    };
+  }
+  if (
+    active
+    && (active.scalpProfile?.policyVersion ?? 1) < SCALP_POLICY_VERSION
+  ) {
+    const refreshedProfile = {
+      ...active,
+      profileId: `learn_${crypto.randomUUID()}`,
+      version,
+      status: "candidate" as const,
+      source: input.source,
+      createdAt: new Date().toISOString(),
+      promotedAt: null,
+      scalpProfile: updateScalpLearningProfile(active.scalpProfile, outcomes),
+      summary: `${active.summary} Scalp profile refreshed for independent authoritative reversal detection; Smart profile settings were preserved.`,
+    } satisfies DecisionLearningProfile;
+    const profile = await saveDecisionLearningProfile(refreshedProfile, true);
+    return {
+      profile,
+      activated: true,
+      outcomeCount: outcomes.length,
+      excludedOutcomeCount,
+      skipped: false,
+      scalpPolicyMigrated: true,
       activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
     };
   }

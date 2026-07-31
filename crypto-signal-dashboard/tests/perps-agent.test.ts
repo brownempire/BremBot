@@ -208,7 +208,7 @@ test("set-parameter execution remains authoritative when the decision layer is a
   assert.equal(result.execution.leverage, 8);
 });
 
-test("active decision rejection blocks a weak scalp even in set-parameters mode", async () => {
+test("authoritative scalp reversal is not vetoed by Smart leverage, allocation, trend, or blocked-history scoring", async () => {
   process.env.PERPS_DECISION_SHADOW_MODE = "false";
   process.env.PERPS_MAX_LEVERAGE = "50";
   process.env.PERPS_MAX_TRADE_PCT = "1";
@@ -221,14 +221,80 @@ test("active decision rejection blocks a weak scalp even in set-parameters mode"
   });
 
   const result = await tradingAgent.routePerpsSignalForUser(wallet, {
-    signalId: "sig-weak-scalp-active-decision",
+    signalId: "sig-authoritative-scalp-reversal",
     symbol: "SOL/USD",
-    summary: "Weak range scalp",
+    summary: "Confirmed liquidity-sweep reversal",
     direction: "bearish",
-    signalConfidence: 0.7,
+    signalConfidence: 0.886,
     asset: "SOL",
     collateralUsd: 50,
-    leverage: 32.5,
+    leverage: 50,
+    takeProfitPrice: 99.8,
+    stopLossPrice: 100.8,
+    maxSlippageBps: 100,
+    executionStyle: "set-parameters",
+    strategyClass: "scalp",
+    strategyContext: {
+      signalType: "scalp",
+      trendWindow: 24,
+      trendThreshold: 0,
+      breakoutPercent: 0,
+      cooldownSeconds: 1_500,
+      trendStrengthPercent: 0,
+      breakoutStrengthPercent: 0,
+      atrPercent: 0.18,
+      scalpSetupType: "liquidity-sweep",
+      priceActionScore: 0.96,
+      priceActionTags: [
+        "SCALP_LIQUIDITY_SWEEP",
+        "SCALP_RECLAIM",
+        "EXCEPTIONAL_CONFIRMED_PRICE_ACTION",
+      ],
+      indicatorBypass: true,
+    },
+    marketContext: {
+      spotPrice: 100,
+      volatilityPercent: 1.5,
+      trendBias: "sideways",
+      availableUsdc: 100,
+      hasOpenPosition: false,
+      recentPriceChangePercent: 0,
+    },
+  });
+
+  assert.equal(result.decision?.shouldTrade, true);
+  assert.equal(result.ok, true);
+  assert.equal(result.execution.status, "paper_executed");
+  assert.equal(result.execution.collateralUsd, 50);
+  assert.equal(result.execution.leverage, 50);
+  assert.equal(result.decision?.explanationTags.includes("scalp-detector-authoritative"), true);
+  assert.equal(result.decision?.explanationTags.includes("very-high-leverage"), false);
+  assert.equal(result.decision?.explanationTags.includes("heavy-wallet-allocation"), false);
+  assert.equal(result.decision?.explanationTags.includes("recent-blocked-drag"), false);
+  assert.equal(result.decision?.explanationTags.includes("trend-counter"), false);
+});
+
+test("a scalp-labeled request that did not come from the scalp detector fails closed", async () => {
+  process.env.PERPS_DECISION_SHADOW_MODE = "false";
+  process.env.PERPS_MAX_LEVERAGE = "50";
+  process.env.PERPS_MAX_TRADE_PCT = "1";
+  process.env.PERPS_MAX_EXPOSURE_PCT = "1";
+  const wallet = "TestWalletUnverifiedScalp333333333333333333333";
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "paper",
+    platform: "native",
+    walletProvider: "Jupiter Mobile",
+  });
+
+  const result = await tradingAgent.routePerpsSignalForUser(wallet, {
+    signalId: "sig-unverified-scalp",
+    symbol: "SOL/USD",
+    summary: "Unverified scalp label",
+    direction: "bearish",
+    signalConfidence: 0.99,
+    asset: "SOL",
+    collateralUsd: 10,
+    leverage: 50,
     takeProfitPrice: 99.8,
     stopLossPrice: 100.8,
     maxSlippageBps: 100,
@@ -247,7 +313,7 @@ test("active decision rejection blocks a weak scalp even in set-parameters mode"
   assert.equal(result.decision?.shouldTrade, false);
   assert.equal(result.ok, false);
   assert.equal(result.code, "DECISION_LAYER_SKIP");
-  assert.equal(result.execution.status, "blocked");
+  assert.equal(result.decision?.explanationTags.includes("scalp-detector-context-required"), true);
 });
 
 test("scalp execution fails closed when a required protection is missing", async () => {

@@ -11,8 +11,11 @@ export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
 export const SCALP_REVERSAL_MAX_ADX = 40;
 export const SCALP_TRADE_LEVERAGE = 50;
+export const SCALP_POLICY_VERSION = 2;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
+  policyVersion: SCALP_POLICY_VERSION,
+  policyOutcomeOffset: 0,
   learnedFromClosedTrades: 0,
   minimumConfidence: 0.62,
   cooldownSeconds: SCALP_STANDARD_COOLDOWN_SECONDS,
@@ -165,7 +168,7 @@ function doubleReversal(points: PricePoint[], direction: "bullish" | "bearish") 
 }
 
 export function getScalpLearningProfile(profile: DecisionLearningProfile | null): ScalpLearningProfile {
-  return profile?.scalpProfile
+  return profile?.scalpProfile?.policyVersion === SCALP_POLICY_VERSION
     ? structuredClone(profile.scalpProfile)
     : structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
 }

@@ -89,6 +89,54 @@ test("forced manual training replaces an existing pre-sample profile with the cu
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, reset.profile.profileId);
 });
 
+test("stale scalp policy is refreshed without changing the Smart learning profile", async () => {
+  const walletAddress = "learning-wallet-scalp-policy-refresh";
+  const baseline = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "manual-training",
+    force: true,
+  });
+  const legacyProfile = learningTypes.decisionLearningProfileSchema.parse({
+    ...baseline.profile,
+    profileId: "legacy-shared-smart-scalp-profile",
+    version: baseline.profile.version + 1,
+    minimumConfidence: 0.71,
+    preferredDirection: "bearish",
+    scalpProfile: {
+      ...baseline.profile.scalpProfile,
+      policyVersion: 1,
+      minimumConfidence: 0.81,
+      cooldownSeconds: 4_800,
+      minimumPriceActionScore: 0.79,
+      strongReversalScore: 0.89,
+      maximumAdx: 16,
+      riskMultiplier: 0.5,
+      preferredDirection: "bearish",
+      consecutiveLosses: 5,
+    },
+  });
+  await learningStore.saveDecisionLearningProfile(legacyProfile, true);
+
+  const refreshed = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+
+  assert.equal(refreshed.scalpPolicyMigrated, true);
+  assert.equal(refreshed.profile.minimumConfidence, 0.71);
+  assert.equal(refreshed.profile.preferredDirection, "bearish");
+  assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
+  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 2);
+  assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.62);
+  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 1_500);
+  assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.56);
+  assert.equal(refreshed.profile.scalpProfile?.maximumAdx, 22);
+  assert.equal(refreshed.profile.scalpProfile?.riskMultiplier, 1);
+  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /former shared Smart scoring era/i);
+});
+
 test("automatic training migrates a legacy active profile before applying new outcomes", async () => {
   const walletAddress = "learning-wallet-legacy-migration";
   const seeded = await trainer.trainWalletDecisionProfile({
