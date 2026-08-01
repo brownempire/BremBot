@@ -924,8 +924,6 @@ function JupiterPerpsPositionWidgetBody({
   onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
   primaryWalletAddress?: string | null;
 }) {
-  const widgetRef = useRef<HTMLDivElement | null>(null);
-  const [isWidgetVisible, setIsWidgetVisible] = useState(true);
   const [activeTab, setActiveTab] = useState<"open" | "recent" | "new">("open");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
@@ -951,7 +949,7 @@ function JupiterPerpsPositionWidgetBody({
     authToken,
     walletAddress: portfolioWalletAddress,
     showMockData,
-    pollingEnabled: isWidgetVisible,
+    pollingEnabled: true,
   });
   const {
     closePosition,
@@ -1130,23 +1128,6 @@ function JupiterPerpsPositionWidgetBody({
     // a parent/child render feedback loop in the native shell.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoTradeController?.canWrite, autoTradeController?.connected, autoTradeController?.walletAddress, onControllerChange]);
-
-  useEffect(() => {
-    const node = widgetRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        setIsWidgetVisible(entry?.isIntersecting ?? true);
-      },
-      { threshold: 0.15 }
-    );
-
-    observer.observe(node);
-
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     if (isConnected) {
@@ -1405,7 +1386,7 @@ function JupiterPerpsPositionWidgetBody({
     pendingTriggers.length === 0;
 
   return (
-    <div ref={widgetRef} className="perps-widget-shell">
+    <div className="perps-widget-shell">
       <div className="perps-widget-header">
         <div>
           <div className="perps-widget-title-row">

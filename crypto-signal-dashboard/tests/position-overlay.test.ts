@@ -3,9 +3,21 @@ import test from "node:test";
 
 import {
   buildPositionOverlayGuides,
+  summarizePositionOverlayPnl,
   validOverlayGuides,
   type PositionOverlayGuide,
 } from "../lib/chart/positionOverlay";
+
+test("chart overlay PnL summarizes the same visible positions", () => {
+  assert.equal(summarizePositionOverlayPnl([]), null);
+  assert.equal(summarizePositionOverlayPnl([
+    { id: "one", entryPrice: 1, takeProfit: 2, stopLoss: null, liquidationPrice: null, unrealizedPnl: 1.26 },
+    { id: "two", entryPrice: 1, takeProfit: 2, stopLoss: null, liquidationPrice: null, unrealizedPnl: -0.5 },
+  ]), 0.76);
+  assert.equal(summarizePositionOverlayPnl([
+    { id: "pending", entryPrice: 1, takeProfit: null, stopLoss: null, liquidationPrice: null, unrealizedPnl: null },
+  ]), null);
+});
 
 test("live position fields map to all four native Advanced Chart levels", () => {
   assert.deepEqual(

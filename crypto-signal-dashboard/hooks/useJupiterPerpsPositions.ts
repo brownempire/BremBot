@@ -29,7 +29,7 @@ type JupiterPerpsPositionsState = {
   refetch: () => Promise<void>;
 };
 
-const LIVE_PERPS_REFRESH_MS = 20_000;
+const LIVE_PERPS_REFRESH_MS = 5_000;
 const PERPS_ERROR_AUTO_CLEAR_MS = 20_000;
 
 function getFriendlyErrorMessage(error: unknown) {
@@ -97,8 +97,11 @@ export function useJupiterPerpsPositions({
   const [error, setError] = useState<string | null>(null);
   const [isMock, setIsMock] = useState(false);
   const hasResolvedInitialLoadRef = useRef(false);
-  const activeRequestRef = useRef<Promise<void> | null>(null);
+  const activeRequestRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const requestKey = `${walletAddress ?? "no-wallet"}:${authToken ?? "no-auth"}:${showMockData ? "mock" : "live"}`;
+  const latestRequestKeyRef = useRef(requestKey);
   const errorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  latestRequestKeyRef.current = requestKey;
 
   const clearErrorTimeout = useCallback(() => {
     if (errorTimeoutRef.current) {
@@ -123,7 +126,11 @@ export function useJupiterPerpsPositions({
 
   const loadPositions = useCallback(async (options?: { silent?: boolean }) => {
     if (activeRequestRef.current) {
-      await activeRequestRef.current;
+      const activeRequest = activeRequestRef.current;
+      await activeRequest.promise;
+      if (activeRequest.key !== requestKey && latestRequestKeyRef.current === requestKey) {
+        await loadPositions(options);
+      }
       return;
     }
 
@@ -153,6 +160,7 @@ export function useJupiterPerpsPositions({
     const request = (async () => {
       try {
         const next = await fetchPerpsSnapshotFromApi(walletAddress, authToken);
+        if (latestRequestKeyRef.current !== requestKey) return;
         hasResolvedInitialLoadRef.current = true;
         setPositions(next.positions);
         setAgentWalletAddress(next.agentWalletAddress ?? null);
@@ -162,6 +170,7 @@ export function useJupiterPerpsPositions({
         setIsMock(false);
         clearError();
       } catch (loadError) {
+        if (latestRequestKeyRef.current !== requestKey) return;
         const friendlyError = getFriendlyErrorMessage(loadError);
         setTimedError(friendlyError);
         if (!silent) {
@@ -184,16 +193,18 @@ export function useJupiterPerpsPositions({
           }
         }
       } finally {
-        if (shouldShowLoading) {
+        if (shouldShowLoading && latestRequestKeyRef.current === requestKey) {
           setIsLoading(false);
         }
-        activeRequestRef.current = null;
+        if (activeRequestRef.current?.key === requestKey) {
+          activeRequestRef.current = null;
+        }
       }
     })();
 
-    activeRequestRef.current = request;
+    activeRequestRef.current = { key: requestKey, promise: request };
     await request;
-  }, [authToken, clearError, setTimedError, showMockData, walletAddress]);
+  }, [authToken, clearError, requestKey, setTimedError, showMockData, walletAddress]);
 
   useEffect(() => {
     hasResolvedInitialLoadRef.current = false;
@@ -210,6 +221,25 @@ export function useJupiterPerpsPositions({
 
     return () => {
       window.clearInterval(intervalId);
+    };
+  }, [loadPositions, pollingEnabled, showMockData, walletAddress]);
+
+  useEffect(() => {
+    if (!walletAddress || showMockData || !pollingEnabled) return;
+
+    const refreshWhenForegrounded = () => {
+      if (document.visibilityState === "hidden") return;
+      void loadPositions({ silent: hasResolvedInitialLoadRef.current });
+    };
+
+    window.addEventListener("focus", refreshWhenForegrounded);
+    window.addEventListener("pageshow", refreshWhenForegrounded);
+    document.addEventListener("visibilitychange", refreshWhenForegrounded);
+
+    return () => {
+      window.removeEventListener("focus", refreshWhenForegrounded);
+      window.removeEventListener("pageshow", refreshWhenForegrounded);
+      document.removeEventListener("visibilitychange", refreshWhenForegrounded);
     };
   }, [loadPositions, pollingEnabled, showMockData, walletAddress]);
 

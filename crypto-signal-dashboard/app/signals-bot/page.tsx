@@ -32,7 +32,7 @@ import type {
   JupiterPerpsWidgetSnapshot,
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
-import { buildPositionOverlayGuides } from "@/lib/chart/positionOverlay";
+import { buildPositionOverlayGuides, summarizePositionOverlayPnl } from "@/lib/chart/positionOverlay";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
@@ -4610,6 +4610,10 @@ function DashboardPage() {
     () => buildPositionOverlayGuides(selectedChartPerpsPositions),
     [selectedChartPerpsPositions]
   );
+  const selectedChartUnrealizedPnl = useMemo(
+    () => summarizePositionOverlayPnl(selectedChartPerpsPositions),
+    [selectedChartPerpsPositions]
+  );
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];
@@ -5991,9 +5995,22 @@ function DashboardPage() {
               ) : null}
             </div>
             {id === "chart" && selectedChartCard ? (
-              <span className="subtext">
-                {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
-                {selectedChartCard.change24h.toFixed(2)}%
+              <span className="subtext chart-market-summary">
+                <span>
+                  {selectedChartCard.pair} {formatUsd(selectedChartCard.current)} · 24h {selectedChartCard.change24h >= 0 ? "+" : ""}
+                  {selectedChartCard.change24h.toFixed(2)}%
+                </span>
+                <span
+                  className={`chart-unrealized-pnl${selectedChartUnrealizedPnl === null
+                    ? ""
+                    : selectedChartUnrealizedPnl >= 0
+                      ? " pnl-positive"
+                      : " pnl-negative"}`}
+                >
+                  Unrealized PnL {selectedChartUnrealizedPnl === null
+                    ? "--"
+                    : `${selectedChartUnrealizedPnl >= 0 ? "+" : ""}${formatUsd(selectedChartUnrealizedPnl)}`}
+                </span>
               </span>
             ) : null}
           </div>

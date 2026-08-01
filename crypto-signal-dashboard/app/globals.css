@@ -1552,6 +1552,17 @@ button:disabled {
   min-width: 0;
 }
 
+.chart-market-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chart-unrealized-pnl {
+  white-space: nowrap;
+}
+
 .position-overlay-toggle {
   display: inline-flex;
   align-items: center;

@@ -11,7 +11,21 @@ export type PositionGuideSource = {
   takeProfit: number | null;
   stopLoss: number | null;
   liquidationPrice: number | null;
+  unrealizedPnl?: number | null;
 };
+
+export function summarizePositionOverlayPnl(
+  positions: readonly PositionGuideSource[]
+) {
+  if (positions.length === 0) return null;
+
+  const pnlValues = positions
+    .map((position) => position.unrealizedPnl)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+
+  if (pnlValues.length === 0) return null;
+  return Number(pnlValues.reduce((sum, value) => sum + value, 0).toFixed(2));
+}
 
 export function buildPositionOverlayGuides(
   positions: readonly PositionGuideSource[]
