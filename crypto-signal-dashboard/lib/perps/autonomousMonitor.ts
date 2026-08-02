@@ -58,7 +58,7 @@ import {
   type ScalpSignal,
 } from "@/lib/perps/scalpEngine";
 import {
-  computeFeeAwareScalpExitPlan,
+  computePercentageScalpExitPlan,
   ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
   MIN_TPSL_EXPECTED_PNL_USD,
 } from "@/lib/perps/scalpExit";
@@ -693,10 +693,11 @@ export async function runAutonomousPerpsMonitor(
       const side = signal.direction === "bullish" ? "long" : "short";
       const entryPrice = windowPoints[windowPoints.length - 1]?.v ?? 0;
       const scalpExitPlan = strategyClass === "scalp"
-        ? computeFeeAwareScalpExitPlan({
+        ? computePercentageScalpExitPlan({
             positionSizeUsd: collateralUsd * plan.leverage,
+            leverage: plan.leverage,
             atrPercent: plan.atrPercent,
-            configuredNetProfitUsd: config.settings.scalpTakeProfitUsd,
+            configuredTakeProfitRoePercent: config.settings.scalpTakeProfitRoePercent,
           })
         : null;
       const triggers = computeTriggerPrices({

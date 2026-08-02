@@ -446,7 +446,7 @@ export async function routePerpsSignalForUser(walletAddress: string, signal: Per
                 successfulSignal,
                 agentWalletAddress,
                 positionPubkey,
-                signal.strategyClass === "scalp" ? SCALP_MINIMUM_NET_PROFIT_USD : 1
+                SCALP_MINIMUM_NET_PROFIT_USD
               );
               if (!protection) break;
               const signedProtection = signSerializedPerpsTransaction(protection.serializedTxBase64);

@@ -28,7 +28,7 @@ function createInput(): PerpsAutomationConfigInput {
       perpsLeverage: 25,
       perpsExecutionMode: "set-parameters",
       scalpModeEnabled: false,
-      scalpTakeProfitUsd: 3.5,
+      scalpTakeProfitRoePercent: 25,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [{ id: "slot-sol", token: "SOL" }],
@@ -51,7 +51,7 @@ test("legacy wallet automation configs migrate to revision one", () => {
   const {
     decisionMode: _decisionMode,
     scalpModeEnabled: _scalpModeEnabled,
-    scalpTakeProfitUsd: _scalpTakeProfitUsd,
+    scalpTakeProfitRoePercent: _scalpTakeProfitRoePercent,
     ...legacySettings
   } = input.settings;
   const parsed = parsePerpsAutomationConfig(JSON.stringify({
@@ -64,7 +64,7 @@ test("legacy wallet automation configs migrate to revision one", () => {
   assert.equal(parsed?.revision, 1);
   assert.equal(parsed?.settings.decisionMode, "active");
   assert.equal(parsed?.settings.scalpModeEnabled, false);
-  assert.equal(parsed?.settings.scalpTakeProfitUsd, 3.5);
+  assert.equal(parsed?.settings.scalpTakeProfitRoePercent, 25);
   assert.equal(parsed?.settings.stopLossPercent, 25);
   assert.equal(parsed?.walletAddress, walletAddress);
 });
@@ -92,18 +92,35 @@ test("wallet automation writes require a non-negative expected revision", () => 
   }).success, false);
 });
 
-test("saved scalp targets migrate to the $3.50 minimum", () => {
+test("saved scalp targets use a 25–100% ROE range above the full ladder", () => {
   const input = createInput();
   const parsed = perpsAutomationConfigWriteSchema.safeParse({
     ...input,
-    settings: { ...input.settings, scalpTakeProfitUsd: 1 },
+    settings: { ...input.settings, scalpTakeProfitRoePercent: 25 },
     expectedRevision: 0,
   });
   assert.equal(parsed.success, true);
-  assert.equal(parsed.success ? parsed.data.settings.scalpTakeProfitUsd : null, 3.5);
+  assert.equal(parsed.success ? parsed.data.settings.scalpTakeProfitRoePercent : null, 25);
   assert.equal(perpsAutomationConfigWriteSchema.safeParse({
     ...input,
-    settings: { ...input.settings, scalpTakeProfitUsd: 0.99 },
+    settings: { ...input.settings, scalpTakeProfitRoePercent: 24.99 },
     expectedRevision: 0,
   }).success, false);
+  assert.equal(perpsAutomationConfigWriteSchema.safeParse({
+    ...input,
+    settings: { ...input.settings, scalpTakeProfitRoePercent: 100.01 },
+    expectedRevision: 0,
+  }).success, false);
+});
+
+test("legacy flat-dollar scalp targets migrate to the 25% ROE default", () => {
+  const input = createInput();
+  const { scalpTakeProfitRoePercent: _scalpTakeProfitRoePercent, ...legacySettings } = input.settings;
+  const parsed = perpsAutomationConfigWriteSchema.parse({
+    ...input,
+    settings: { ...legacySettings, scalpTakeProfitUsd: 3.5 },
+    expectedRevision: 0,
+  });
+
+  assert.equal(parsed.settings.scalpTakeProfitRoePercent, 25);
 });

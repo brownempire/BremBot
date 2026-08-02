@@ -2,6 +2,10 @@ import { z } from "zod";
 
 import type { UserParams } from "@/lib/signal/engine";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
+import {
+  DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
+  SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
+} from "@/lib/perps/scalpExit";
 
 export const automationTokenSchema = z.enum(["SOL", "ETH", "BTC", "USDC", "JUP", "BONK"]);
 
@@ -16,7 +20,10 @@ export const perpsAutomationSettingsSchema = z.object({
   perpsLeverage: z.number().finite().min(1).max(250),
   perpsExecutionMode: z.enum(["set-parameters", "smart-trades"]),
   scalpModeEnabled: z.boolean().default(false),
-  scalpTakeProfitUsd: z.number().finite().min(1).default(3.5).transform((value) => Math.max(3.5, value)),
+  scalpTakeProfitRoePercent: z.number().finite()
+    .min(SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT)
+    .max(100)
+    .default(DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT),
   decisionMode: z.enum(["shadow", "active"]).default("active"),
   smartTradeProfile: z.enum(["conservative", "balanced", "aggressive"]),
   slots: z.array(z.object({

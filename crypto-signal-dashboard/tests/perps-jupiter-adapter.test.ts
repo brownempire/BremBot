@@ -51,7 +51,7 @@ test("a deferred scalp TP preserves its volatility target above fees and the net
       sizeUsd: "5253436400",
       totalFeesUsd: "6309618",
     },
-    0.25
+    1
   );
 
   assert.equal(typeof rebased, "number");

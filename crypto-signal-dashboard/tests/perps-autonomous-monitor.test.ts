@@ -46,7 +46,7 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
       perpsLeverage: 2,
       perpsExecutionMode: "set-parameters",
       scalpModeEnabled: false,
-      scalpTakeProfitUsd: 3.5,
+      scalpTakeProfitRoePercent: 25,
       decisionMode: "active",
       smartTradeProfile: "balanced",
       slots: [
@@ -352,7 +352,7 @@ test("raw scalp confidence must clear the learned threshold instead of being rai
   assert.equal(signal, null);
 });
 
-test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net target", () => {
+test("scalp trigger pricing adds estimated fees to the adaptive net target", () => {
   const config = createConfig();
   const triggers = computeTriggerPrices({
     config,
@@ -362,11 +362,11 @@ test("scalp trigger pricing covers estimated fees plus the $3.50 minimum net tar
     side: "long",
     stopLossPercent: 0,
     takeProfitPercent: 0,
-    takeProfitUsd: 3.5,
+    takeProfitUsd: 5,
   });
   const targetPnl = (((triggers.takeProfitPrice ?? 0) - 100) / 100) * 50;
 
-  assert.ok(targetPnl - 50 * 0.0012 >= 3.499999);
+  assert.ok(targetPnl - 50 * 0.0012 >= 4.999999);
   assert.equal(triggers.stopLossPrice, null);
 });
 
@@ -438,6 +438,12 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   assert.equal(routed?.collateralUsd, 50);
   assert.ok((routed?.takeProfitPrice ?? 0) > (routed?.marketContext?.spotPrice ?? Number.POSITIVE_INFINITY));
   assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < (routed?.marketContext?.spotPrice ?? 0));
+  const entryPrice = routed?.marketContext?.spotPrice ?? 0;
+  const takeProfitRoe = entryPrice > 0
+    ? (((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
+    : 0;
+  assert.ok(takeProfitRoe >= 24.99);
+  assert.ok(takeProfitRoe <= 100.01);
 });
 
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {

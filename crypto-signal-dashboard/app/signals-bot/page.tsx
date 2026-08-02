@@ -38,6 +38,10 @@ import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBasel
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
 import { pnlPointsForRange } from "@/lib/perps/pnlChart";
 import { SCALP_TRADE_LEVERAGE } from "@/lib/perps/scalpEngine";
+import {
+  DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
+  SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
+} from "@/lib/perps/scalpExit";
 import { createSimulatedFeed } from "@/lib/price/simulated";
 import type { PricePoint } from "@/lib/price/simulated";
 import { detectSignals, type Signal, type UserParams } from "@/lib/signal/engine";
@@ -150,7 +154,7 @@ type AutoTradeSettings = {
   perpsLeverage: number;
   perpsExecutionMode: PerpsExecutionMode;
   scalpModeEnabled: boolean;
-  scalpTakeProfitUsd: number;
+  scalpTakeProfitRoePercent: number;
   decisionMode: DecisionMode;
   smartTradeProfile: SmartTradeProfile;
   slots: AutoTradeSlot[];
@@ -179,7 +183,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   perpsLeverage: OPERATOR_TRAINING_BASELINE.leverageCap,
   perpsExecutionMode: "set-parameters",
   scalpModeEnabled: false,
-  scalpTakeProfitUsd: 3.5,
+  scalpTakeProfitRoePercent: DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
   decisionMode: "active",
   smartTradeProfile: "balanced",
   slots: [
@@ -3532,10 +3536,10 @@ function DashboardPage() {
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
       const scalpModeEnabled = Boolean(parsed.scalpModeEnabled);
-      const parsedScalpTakeProfitUsd = Number(parsed.scalpTakeProfitUsd);
-      const scalpTakeProfitUsd = Number.isFinite(parsedScalpTakeProfitUsd)
-        ? Math.max(3.5, parsedScalpTakeProfitUsd)
-        : DEFAULT_AUTO_TRADE_SETTINGS.scalpTakeProfitUsd;
+      const parsedScalpTakeProfitRoePercent = Number(parsed.scalpTakeProfitRoePercent);
+      const scalpTakeProfitRoePercent = Number.isFinite(parsedScalpTakeProfitRoePercent)
+        ? Math.min(100, Math.max(SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT, parsedScalpTakeProfitRoePercent))
+        : DEFAULT_AUTO_TRADE_SETTINGS.scalpTakeProfitRoePercent;
       const decisionMode = parsed.decisionMode === "shadow" ? "shadow" : "active";
       const smartTradeProfile =
         parsed.smartTradeProfile === "conservative" || parsed.smartTradeProfile === "aggressive"
@@ -3585,7 +3589,7 @@ function DashboardPage() {
           : perpsLeverage,
         perpsExecutionMode,
         scalpModeEnabled,
-        scalpTakeProfitUsd,
+        scalpTakeProfitRoePercent,
         decisionMode,
         smartTradeProfile,
         slots: normalizedSlots,
@@ -5585,7 +5589,7 @@ function DashboardPage() {
             onViewLog={() => { void openDecisionLog(); }}
             scalpModeEnabled={autoTradeSettings.scalpModeEnabled}
             scalpLeverage={SCALP_TRADE_LEVERAGE}
-            scalpTakeProfitUsd={autoTradeSettings.scalpTakeProfitUsd}
+            scalpTakeProfitRoePercent={autoTradeSettings.scalpTakeProfitRoePercent}
             onToggleScalpMode={(enabled) => persistAutoTradeSettings({
               ...autoTradeSettings,
               scalpModeEnabled: enabled,

@@ -16,7 +16,7 @@ type PerpsClockCardProps = {
   onViewLog: () => void;
   scalpModeEnabled: boolean;
   scalpLeverage: number;
-  scalpTakeProfitUsd: number;
+  scalpTakeProfitRoePercent: number;
   onToggleScalpMode: (enabled: boolean) => void;
   onToggleMode: () => void;
   onToggleDecisionMode: () => void;
@@ -93,7 +93,7 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
               <span aria-hidden="true" />
             </label>
             <div className="perps-scalp-rule">
-              Minimum take profit <strong>${props.scalpTakeProfitUsd.toFixed(2)}</strong>
+              Adaptive take profit <strong>{props.scalpTakeProfitRoePercent.toFixed(0)}% ROE</strong>
             </div>
             <div className="perps-scalp-rule">
               Wallet allocation <strong>50%</strong>
@@ -101,6 +101,7 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
             <div className="perps-scalp-rule">
               Leverage <strong>{props.scalpLeverage}×</strong>
             </div>
+            <div className="subtext">25% ROE base · 2× ATR extension · profit-lock ladder · at least $1 net after estimated fees.</div>
             <div className="subtext">Automatically turns off when a trend or breakout signal appears.</div>
           </div>
         </details>
