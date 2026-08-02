@@ -413,11 +413,15 @@ enum BremLogicWidgetStore {
 
     static func save(_ snapshot: BremLogicWidgetSnapshot) throws {
         let data = try JSONEncoder().encode(snapshot)
-        UserDefaults(suiteName: BremLogicWidgetAppGroup)?.set(
-            data,
-            forKey: BremLogicWidgetSnapshotDefaultsKey
-        )
+        if let sharedDefaults = UserDefaults(suiteName: BremLogicWidgetAppGroup) {
+            sharedDefaults.set(data, forKey: BremLogicWidgetSnapshotDefaultsKey)
+            // AppIntent and WidgetKit can run in separate short-lived
+            // processes. Flush before requesting a timeline reload so the new
+            // process cannot race and redisplay the previous snapshot.
+            sharedDefaults.synchronize()
+        }
         UserDefaults.standard.set(data, forKey: BremLogicWidgetSnapshotDefaultsKey)
+        UserDefaults.standard.synchronize()
     }
 }
 

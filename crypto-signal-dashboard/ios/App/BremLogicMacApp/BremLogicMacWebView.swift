@@ -7,6 +7,7 @@ import WebKit
 @MainActor
 final class BremLogicMacBrowser: NSObject, ObservableObject {
     private static let homeURL = URL(string: "https://app.bremlogic.com/signals-bot")!
+    private static let webViewSchemes: Set<String> = ["about", "blob", "data", "file", "http", "https"]
 
     @Published private(set) var isLoading = true
     @Published private(set) var estimatedProgress = 0.0
@@ -49,6 +50,31 @@ final class BremLogicMacBrowser: NSObject, ObservableObject {
 
     private func loadHome() {
         webView.load(URLRequest(url: Self.homeURL, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+    }
+
+    private func loadBremLogicURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "bremlogic" else { return false }
+
+        let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "target" })?
+            .value
+        guard let target, let destination = URL(string: target, relativeTo: Self.homeURL)?.absoluteURL,
+              destination.host == Self.homeURL.host else {
+            loadHome()
+            return true
+        }
+
+        webView.load(URLRequest(url: destination, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 30))
+        return true
+    }
+
+    private func openExternalURLIfSupported(_ url: URL) {
+        // Asking Launch Services to open an internal WebKit URL (notably the
+        // blob: URLs used by TradingView) displays "no application can open
+        // this URL" and prevents the chart from finishing initialization.
+        guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func handleFailure(_ error: Error) {
@@ -150,14 +176,19 @@ extension BremLogicMacBrowser: WKNavigationDelegate {
             return
         }
 
-        let scheme = url.scheme?.lowercased()
-        if scheme != "http" && scheme != "https" && scheme != "about" {
-            NSWorkspace.shared.open(url)
+        let scheme = url.scheme?.lowercased() ?? ""
+        if Self.webViewSchemes.contains(scheme) {
+            decisionHandler(.allow)
+            return
+        }
+
+        if loadBremLogicURL(url) {
             decisionHandler(.cancel)
             return
         }
 
-        decisionHandler(.allow)
+        openExternalURLIfSupported(url)
+        decisionHandler(.cancel)
     }
 }
 
@@ -202,10 +233,14 @@ extension BremLogicMacBrowser: WKUIDelegate {
     ) -> WKWebView? {
         guard navigationAction.targetFrame == nil, let url = navigationAction.request.url else { return nil }
 
-        if url.host?.hasSuffix("bremlogic.com") == true {
+        let scheme = url.scheme?.lowercased() ?? ""
+        let isInternalWebKitURL = ["about", "blob", "data", "file"].contains(scheme)
+        let isBremLogicWebURL = ["http", "https"].contains(scheme)
+            && url.host?.hasSuffix("bremlogic.com") == true
+        if isInternalWebKitURL || isBremLogicWebURL {
             webView.load(navigationAction.request)
-        } else {
-            NSWorkspace.shared.open(url)
+        } else if !loadBremLogicURL(url) {
+            openExternalURLIfSupported(url)
         }
         return nil
     }

@@ -5,6 +5,17 @@ import WidgetKit
 import ActivityKit
 #endif
 
+private func bremLogicWidgetTargetURL(_ target: String) -> URL? {
+    // An iPhone/iPad app installed on Apple-silicon Mac is wrapped by macOS;
+    // Launch Services does not reliably register the inner app's custom URL
+    // scheme. Use the equivalent HTTPS destination there to avoid the system
+    // "no application can open this URL" alert.
+    if ProcessInfo.processInfo.isiOSAppOnMac {
+        return URL(string: "https://app.bremlogic.com/signals-bot?tab=perps")
+    }
+    return URL(string: target)
+}
+
 struct BremLogicWidgetEntry: TimelineEntry {
     let date: Date
     let snapshot: BremLogicWidgetSnapshot
@@ -623,7 +634,7 @@ struct BremLogicWidgetEntryView: View {
         )
         .padding(.horizontal, widgetFamily == .systemSmall ? 5 : widgetFamily == .systemMedium ? 6 : 8)
         .padding(.vertical, widgetFamily == .systemSmall ? 4 : widgetFamily == .systemMedium ? 6 : 8)
-        .widgetURL(URL(string: entry.snapshot.targetURL))
+        .widgetURL(bremLogicWidgetTargetURL(entry.snapshot.targetURL))
     }
 }
 
@@ -794,7 +805,7 @@ struct BremLogicLockScreenWidgetEntryView: View {
                 }
             }
         )
-        .widgetURL(URL(string: entry.snapshot.targetURL))
+        .widgetURL(bremLogicWidgetTargetURL(entry.snapshot.targetURL))
     }
 }
 
@@ -945,7 +956,7 @@ private struct BremLogicTradeLiveActivityConfiguration {
         .clipped()
         .activityBackgroundTint(Color(red: 0.045, green: 0.06, blue: 0.095))
         .activitySystemActionForegroundColor(.white)
-        .widgetURL(URL(string: state.targetURL))
+        .widgetURL(bremLogicWidgetTargetURL(state.targetURL))
     }
 
     @available(iOS 18.0, *)
@@ -990,7 +1001,7 @@ private struct BremLogicTradeLiveActivityConfiguration {
         .clipped()
         .activityBackgroundTint(Color(red: 0.045, green: 0.06, blue: 0.095))
         .activitySystemActionForegroundColor(.white)
-        .widgetURL(URL(string: state.targetURL))
+        .widgetURL(bremLogicWidgetTargetURL(state.targetURL))
     }
 
     @ViewBuilder
@@ -1069,7 +1080,7 @@ private struct BremLogicTradeLiveActivityConfiguration {
                 Image(systemName: state.pnlUsd ?? 0 >= 0 ? "arrow.up.right" : "arrow.down.right")
                     .foregroundStyle(pnlColor(state))
             }
-            .widgetURL(URL(string: state.targetURL))
+            .widgetURL(bremLogicWidgetTargetURL(state.targetURL))
             .keylineTint(pnlColor(state))
         }
     }

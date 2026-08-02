@@ -13,10 +13,9 @@ struct BremLogicMacWidgetRefreshIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         URLCache.shared.removeAllCachedResponses()
-        if let snapshot = try? await BremLogicWidgetServerClient.fetch() {
-            try? BremLogicWidgetStore.save(snapshot)
-        }
-        WidgetCenter.shared.reloadTimelines(ofKind: BremLogicMacWidgetIdentity.kind)
+        let snapshot = try await BremLogicWidgetServerClient.fetch()
+        try BremLogicWidgetStore.save(snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
 }

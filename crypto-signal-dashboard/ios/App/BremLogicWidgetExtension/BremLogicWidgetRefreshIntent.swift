@@ -10,11 +10,9 @@ struct BremLogicWidgetRefreshIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         URLCache.shared.removeAllCachedResponses()
-        if let snapshot = try? await BremLogicWidgetServerClient.fetch() {
-            try? BremLogicWidgetStore.save(snapshot)
-        }
-        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicWidget")
-        WidgetCenter.shared.reloadTimelines(ofKind: "BremLogicLockScreenWidget")
+        let snapshot = try await BremLogicWidgetServerClient.fetch()
+        try BremLogicWidgetStore.save(snapshot)
+        WidgetCenter.shared.reloadAllTimelines()
         return .result()
     }
 }
