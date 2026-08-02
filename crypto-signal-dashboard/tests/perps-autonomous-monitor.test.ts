@@ -3,6 +3,7 @@ import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
 import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
+import { SCALP_STOP_LOSS_ROE_PERCENT } from "../lib/perps/scalpExit";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
@@ -375,6 +376,7 @@ test("scalp planning uses 50 percent wallet allocation and 50x leverage", () => 
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
   assert.equal(planningConfig.settings.perpsLeverage, SCALP_TRADE_LEVERAGE);
+  assert.equal(planningConfig.settings.stopLossPercent, SCALP_STOP_LOSS_ROE_PERCENT);
   assert.equal(SCALP_TRADE_LEVERAGE, 50);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
@@ -442,8 +444,12 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   const takeProfitRoe = entryPrice > 0
     ? (((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
     : 0;
+  const stopLossRoe = entryPrice > 0
+    ? ((entryPrice - (routed?.stopLossPrice ?? entryPrice)) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
+    : 0;
   assert.ok(takeProfitRoe >= 24.99);
   assert.ok(takeProfitRoe <= 100.01);
+  assert.ok(Math.abs(stopLossRoe - SCALP_STOP_LOSS_ROE_PERCENT) < 0.01);
 });
 
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {

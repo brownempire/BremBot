@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createBremLogicDatafeed } from "@/lib/chart/tradingViewDatafeed";
 import {
+  projectOverlayGuideNetPnl,
   validOverlayGuides,
   type PositionOverlayGuide,
 } from "@/lib/chart/positionOverlay";
@@ -20,6 +21,15 @@ type IntervalSubscription = {
   subscribe?: (context: unknown, callback: (interval: unknown) => void) => void;
 };
 
+type ShapePoint = { price: number; time?: number };
+
+type DrawingShapeApi = {
+  getPoints?: () => ShapePoint[];
+  setPoints?: (points: ShapePoint[]) => void;
+  setSelectionEnabled?: (enabled: boolean) => void;
+  setUserEditEnabled?: (enabled: boolean) => void;
+};
+
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   resolution?: () => string;
@@ -27,6 +37,7 @@ type WidgetChart = {
     point: { price: number },
     options: Record<string, unknown>
   ) => Promise<string>;
+  getShapeById?: (id: string) => DrawingShapeApi;
   removeEntity?: (id: string) => void;
 };
 
@@ -35,12 +46,27 @@ type WidgetApi = {
   chartReady?: () => Promise<void>;
   activeChart?: () => WidgetChart;
   remove?: () => void;
+  subscribe?: (event: "drawing_event", callback: (id: string, type: string) => void) => void;
+  unsubscribe?: (event: "drawing_event", callback: (id: string, type: string) => void) => void;
 };
 
 type TradingViewChartProps = {
   symbol?: string;
   guides?: PositionOverlayGuide[];
+  onModifyGuide?: (guide: PositionOverlayGuide, price: number) => Promise<void>;
 };
+
+type GuideEditorState = {
+  draftValue: string;
+  draftPrice: number;
+  guide: PositionOverlayGuide;
+  mode: "view" | "edit";
+  status: string | null;
+};
+
+function editablePriceValue(price: number) {
+  return Number(price.toFixed(6)).toString();
+}
 
 const SCRIPT_ID = "tradingview-advanced-charts-script";
 const DEFAULT_LIBRARY_PATH =
@@ -101,23 +127,83 @@ function shouldLockPageScrollForChartHover() {
 export function TradingViewChart({
   symbol = "COINBASE:BTCUSD",
   guides = [],
+  onModifyGuide,
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_advanced_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
   const shapeIdsRef = useRef<string[]>([]);
+  const shapeGuideByIdRef = useRef(new Map<string, PositionOverlayGuide>());
+  const shapeIdByGuideIdRef = useRef(new Map<string, string>());
+  const suppressedShapeEventsRef = useRef(new Set<string>());
+  const drawingEventCallbackRef = useRef<((id: string, type: string) => void) | null>(null);
+  const drawingEventHandlerRef = useRef<(id: string, type: string) => void>(() => undefined);
   const guidesRef = useRef(guides);
   const [chartReadyVersion, setChartReadyVersion] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isAppFullscreen, setIsAppFullscreen] = useState(false);
+  const [guideEditor, setGuideEditor] = useState<GuideEditorState | null>(null);
+  const [isSavingGuide, setIsSavingGuide] = useState(false);
   guidesRef.current = guides;
 
   const guideSignature = validOverlayGuides(guides)
-    .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}`)
+    .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}:${guide.editable ? 1 : 0}:${guide.estimatedNetPnlUsd ?? ""}:${guide.pnlPerPriceUnit ?? ""}`)
     .join("|");
+
+  function shapeForGuide(guideId: string) {
+    const shapeId = shapeIdByGuideIdRef.current.get(guideId);
+    return shapeId ? widgetRef.current?.activeChart?.()?.getShapeById?.(shapeId) ?? null : null;
+  }
+
+  function setShapePrice(guideId: string, price: number) {
+    const shapeId = shapeIdByGuideIdRef.current.get(guideId);
+    const shape = shapeId ? widgetRef.current?.activeChart?.()?.getShapeById?.(shapeId) : null;
+    if (!shapeId || !shape?.setPoints) return;
+    suppressedShapeEventsRef.current.add(shapeId);
+    shape.setPoints([{ price }]);
+    window.setTimeout(() => suppressedShapeEventsRef.current.delete(shapeId), 80);
+  }
+
+  function setShapeEditing(guideId: string, enabled: boolean) {
+    const shape = shapeForGuide(guideId);
+    shape?.setSelectionEnabled?.(true);
+    shape?.setUserEditEnabled?.(enabled);
+  }
+
+  function resetGuideEditor(close = false) {
+    if (!guideEditor) return;
+    setShapePrice(guideEditor.guide.id, guideEditor.guide.price);
+    setShapeEditing(guideEditor.guide.id, false);
+    setGuideEditor(close ? null : {
+      ...guideEditor,
+      draftPrice: guideEditor.guide.price,
+      draftValue: editablePriceValue(guideEditor.guide.price),
+      mode: "view",
+      status: null,
+    });
+  }
+
+  drawingEventHandlerRef.current = (shapeId, eventType) => {
+    const guide = shapeGuideByIdRef.current.get(String(shapeId));
+    if (!guide?.editable || !guide.kind) return;
+    if (eventType === "click") {
+      setGuideEditor((current) => (
+        current?.guide.id === guide.id && current.mode === "edit"
+          ? current
+          : { draftPrice: guide.price, draftValue: editablePriceValue(guide.price), guide, mode: "view", status: null }
+      ));
+      return;
+    }
+    if (eventType !== "points_changed" || suppressedShapeEventsRef.current.has(String(shapeId))) return;
+    const point = widgetRef.current?.activeChart?.()?.getShapeById?.(String(shapeId))?.getPoints?.()[0];
+    if (!point || !Number.isFinite(point.price) || point.price <= 0) return;
+    setGuideEditor({ draftPrice: point.price, draftValue: editablePriceValue(point.price), guide, mode: "edit", status: null });
+  };
 
   useEffect(() => {
     let cancelled = false;
+    const shapeGuideById = shapeGuideByIdRef.current;
+    const shapeIdByGuideId = shapeIdByGuideIdRef.current;
 
     const renderWidget = async () => {
       const container = document.getElementById(containerId);
@@ -198,6 +284,14 @@ export function TradingViewChart({
               window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
             }
           });
+          if (drawingEventCallbackRef.current) {
+            widget.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+          }
+          const drawingEventCallback = (id: string, type: string) => {
+            drawingEventHandlerRef.current(String(id), String(type));
+          };
+          drawingEventCallbackRef.current = drawingEventCallback;
+          widget.subscribe?.("drawing_event", drawingEventCallback);
         };
 
         if (widget.chartReady) {
@@ -219,6 +313,12 @@ export function TradingViewChart({
     return () => {
       cancelled = true;
       shapeIdsRef.current = [];
+      shapeGuideById.clear();
+      shapeIdByGuideId.clear();
+      if (drawingEventCallbackRef.current) {
+        widgetRef.current?.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+        drawingEventCallbackRef.current = null;
+      }
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
@@ -231,6 +331,8 @@ export function TradingViewChart({
     const removeShapes = () => {
       shapeIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
       shapeIdsRef.current = [];
+      shapeGuideByIdRef.current.clear();
+      shapeIdByGuideIdRef.current.clear();
     };
 
     const syncPositionShapes = async () => {
@@ -258,8 +360,8 @@ export function TradingViewChart({
               text: `${guide.label}  ${guide.price.toLocaleString(undefined, {
                 maximumFractionDigits: 3,
               })}`,
-              lock: true,
-              disableSelection: true,
+              lock: !guide.editable,
+              disableSelection: !guide.editable,
               disableSave: true,
               disableUndo: true,
               showInObjectsTree: false,
@@ -276,6 +378,13 @@ export function TradingViewChart({
               },
             }
           );
+          shapeGuideByIdRef.current.set(String(id), guide);
+          shapeIdByGuideIdRef.current.set(guide.id, String(id));
+          if (guide.editable) {
+            const shape = chart.getShapeById?.(String(id));
+            shape?.setSelectionEnabled?.(true);
+            shape?.setUserEditEnabled?.(false);
+          }
           if (cancelled) {
             chart.removeEntity(id);
           } else {
@@ -297,6 +406,38 @@ export function TradingViewChart({
       removeShapes();
     };
   }, [chartReadyVersion, guideSignature]);
+
+  useEffect(() => {
+    setGuideEditor((current) => {
+      if (!current) return null;
+      const nextGuide = validOverlayGuides(guidesRef.current).find((guide) => guide.id === current.guide.id);
+      if (!nextGuide) return null;
+      if (current.mode === "edit") return { ...current, guide: nextGuide };
+      return { draftPrice: nextGuide.price, draftValue: editablePriceValue(nextGuide.price), guide: nextGuide, mode: "view", status: null };
+    });
+  }, [guideSignature]);
+
+  const projectedNetPnl = guideEditor
+    ? projectOverlayGuideNetPnl(guideEditor.guide, guideEditor.draftPrice)
+    : null;
+
+  async function confirmGuideChange() {
+    if (!guideEditor || !onModifyGuide || !Number.isFinite(guideEditor.draftPrice) || guideEditor.draftPrice <= 0) return;
+    setIsSavingGuide(true);
+    setGuideEditor((current) => current ? { ...current, status: "Updating on-chain request…" } : null);
+    try {
+      await onModifyGuide(guideEditor.guide, guideEditor.draftPrice);
+      setShapeEditing(guideEditor.guide.id, false);
+      setGuideEditor(null);
+    } catch (error) {
+      setGuideEditor((current) => current ? {
+        ...current,
+        status: error instanceof Error ? error.message : "Unable to update this TP/SL request.",
+      } : null);
+    } finally {
+      setIsSavingGuide(false);
+    }
+  }
 
   useEffect(() => {
     const node = frameRef.current;
@@ -367,6 +508,59 @@ export function TradingViewChart({
           </svg>
         )}
       </button>
+      {guideEditor ? (
+        <div className="chart-tpsl-editor" data-testid="chart-tpsl-editor" role="dialog" aria-label={`${guideEditor.guide.kind === "tp" ? "Take profit" : "Stop loss"} chart control`}>
+          <div className="chart-tpsl-editor-heading">
+            <div>
+              <span>{guideEditor.guide.kind === "tp" ? "Take Profit" : "Stop Loss"}</span>
+              <strong>${guideEditor.draftPrice.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</strong>
+            </div>
+            <button type="button" className="chart-tpsl-editor-close" aria-label="Close TP/SL chart control" onClick={() => resetGuideEditor(true)}>×</button>
+          </div>
+          <div className={`chart-tpsl-net${projectedNetPnl == null ? "" : projectedNetPnl >= 0 ? " pnl-positive" : " pnl-negative"}`}>
+            Est. net P&amp;L {projectedNetPnl == null ? "--" : `${projectedNetPnl >= 0 ? "+" : "-"}$${Math.abs(projectedNetPnl).toFixed(2)}`}
+          </div>
+          {guideEditor.mode === "edit" ? (
+            <label className="chart-tpsl-price-input">
+              <span>New trigger</span>
+              <input
+                aria-label="New TP/SL trigger price"
+                inputMode="decimal"
+                value={guideEditor.draftValue}
+                onChange={(event) => {
+                  const draftValue = event.target.value;
+                  const price = Number(draftValue);
+                  setGuideEditor((current) => current ? {
+                    ...current,
+                    ...(Number.isFinite(price) && price > 0 ? { draftPrice: price } : {}),
+                    draftValue,
+                    status: null,
+                  } : null);
+                  if (Number.isFinite(price) && price > 0) setShapePrice(guideEditor.guide.id, price);
+                }}
+              />
+            </label>
+          ) : null}
+          {guideEditor.status ? <div className="chart-tpsl-editor-status" role="status">{guideEditor.status}</div> : null}
+          <div className="chart-tpsl-editor-actions">
+            {guideEditor.mode === "view" ? (
+              <button type="button" onClick={() => {
+                setShapeEditing(guideEditor.guide.id, true);
+                setGuideEditor((current) => current ? { ...current, mode: "edit", status: "Drag the line or enter a price, then confirm." } : null);
+              }}>Modify</button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={isSavingGuide || !guideEditor.draftValue.trim() || !Number.isFinite(Number(guideEditor.draftValue)) || Number(guideEditor.draftValue) <= 0}
+                  onClick={() => void confirmGuideChange()}
+                >{isSavingGuide ? "Saving…" : "Confirm"}</button>
+                <button type="button" className="secondary" disabled={isSavingGuide} onClick={() => resetGuideEditor(false)}>Cancel</button>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
       {loadError ? (
         <div className="tradingview-load-error" role="alert">
           {loadError}. Run <code>npm run stage:tradingview</code> before building.

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildPositionOverlayGuides,
+  projectOverlayGuideNetPnl,
   summarizePositionOverlayPnl,
   validOverlayGuides,
   type PositionOverlayGuide,
@@ -32,16 +33,57 @@ test("live position fields map to all four native Advanced Chart levels", () => 
     ]),
     [
       { id: "position-sol-entry", label: "Entry", price: 74.1, tone: "entry" },
-      { id: "position-sol-tp", label: "TP", price: 75.5, tone: "tp" },
+      {
+        editable: true,
+        estimatedNetPnlUsd: null,
+        id: "position-sol-tp",
+        kind: "tp",
+        label: "TP",
+        pnlPerPriceUnit: null,
+        positionId: "position-sol",
+        price: 75.5,
+        tone: "tp",
+      },
       {
         id: "position-sol-liquidation",
         label: "Liq",
         price: 71.5,
         tone: "liquidation",
       },
-      { id: "position-sol-sl", label: "SL", price: 72.5, tone: "sl" },
+      {
+        editable: true,
+        estimatedNetPnlUsd: null,
+        id: "position-sol-sl",
+        kind: "sl",
+        label: "SL",
+        pnlPerPriceUnit: null,
+        positionId: "position-sol",
+        price: 72.5,
+        tone: "sl",
+      },
     ]
   );
+});
+
+test("editable TP and SL guides project Jupiter's live post-fee PnL", () => {
+  const guides = buildPositionOverlayGuides([{
+    id: "position-sol",
+    entryPrice: 72.86,
+    markPrice: 72.9,
+    positionSize: 7.5,
+    takeProfit: 73,
+    stopLoss: 72.52,
+    liquidationPrice: 71,
+    side: "long",
+    unrealizedPnl: -0.1,
+  }]);
+
+  const tp = guides.find((guide) => guide.kind === "tp");
+  const sl = guides.find((guide) => guide.kind === "sl");
+  assert.equal(tp?.estimatedNetPnlUsd, 0.65);
+  assert.equal(tp?.pnlPerPriceUnit, 7.5);
+  assert.equal(sl?.estimatedNetPnlUsd, -2.95);
+  assert.equal(tp ? projectOverlayGuideNetPnl(tp, 73.1) : null, 1.4);
 });
 
 test("multiple live positions receive distinct numbered chart labels", () => {

@@ -28,11 +28,16 @@ import { PerpsPnlChart } from "@/app/components/PerpsPnlChart";
 import { SolanaWalletProvider } from "@/app/components/SolanaWalletProvider";
 import { EmbeddedSimulatorPanel } from "@/app/components/EmbeddedSimulatorPanel";
 import type {
+  JupiterPerpsTpslModifier,
   JupiterPerpsWidgetController,
   JupiterPerpsWidgetSnapshot,
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
-import { buildPositionOverlayGuides, summarizePositionOverlayPnl } from "@/lib/chart/positionOverlay";
+import {
+  buildPositionOverlayGuides,
+  summarizePositionOverlayPnl,
+  type PositionOverlayGuide,
+} from "@/lib/chart/positionOverlay";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
@@ -1188,6 +1193,7 @@ function DashboardPage() {
     isMock: false,
     connected: false,
   });
+  const chartTpslModifierRef = useRef<JupiterPerpsTpslModifier | null>(null);
   const lastTpAttemptAtRef = useRef(0);
   const perpsAutoTradeAttemptIdRef = useRef(0);
   const perpsAutoTradeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -5406,6 +5412,40 @@ function DashboardPage() {
     }
   }
 
+  const handleChartTpslModifierChange = useCallback((modifier: JupiterPerpsTpslModifier | null) => {
+    chartTpslModifierRef.current = modifier;
+  }, []);
+
+  const handleChartGuideModify = useCallback(async (guide: PositionOverlayGuide, triggerPrice: number) => {
+    if (!guide.positionId || !guide.kind) throw new Error("This chart level is view-only.");
+    const snapshot = readOnlyPerpsSnapshotRef.current;
+    const position = snapshot.positions.find((candidate) => candidate.id === guide.positionId);
+    if (!position) throw new Error("The open position changed. Refresh the chart and try again.");
+    const modifier = chartTpslModifierRef.current;
+    if (!modifier) throw new Error("TP/SL editing is still connecting. Try again in a moment.");
+
+    const triggerKind = guide.kind === "tp" ? "take-profit" : "stop-loss";
+    const trigger = snapshot.pendingTriggers.find((candidate) => {
+      if (candidate.kind !== triggerKind) return false;
+      if (position.walletAddress && candidate.walletAddress && position.walletAddress !== candidate.walletAddress) return false;
+      if (position.accountRef && candidate.positionPubkey) {
+        return position.accountRef === candidate.positionPubkey;
+      }
+      return (
+        position.custodyAddress === candidate.custodyAddress
+        && position.collateralCustodyAddress === candidate.collateralCustodyAddress
+        && position.side === candidate.side
+      );
+    });
+
+    await modifier({
+      kind: guide.kind,
+      position,
+      positionRequestPubkey: trigger?.positionRequestPubkey ?? null,
+      triggerPrice: triggerPrice.toFixed(6),
+    });
+  }, []);
+
   function renderDashboardSection(id: DashboardSectionId) {
     if (id === "chart") {
       return (
@@ -5414,6 +5454,7 @@ function DashboardPage() {
             <TradingViewChart
               symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
               guides={positionOverlayEnabled ? selectedChartGuides : []}
+              onModifyGuide={handleChartGuideModify}
             />
           </div>
         </>
@@ -5617,6 +5658,7 @@ function DashboardPage() {
             authToken={remoteAuthToken}
             onSnapshotChange={setReadOnlyPerpsSnapshot}
             onControllerChange={setJupiterPerpsController}
+            onTpslModifierChange={handleChartTpslModifierChange}
             primaryWalletAddress={remoteAuthAddress ?? remoteSyncWalletAddress ?? walletAddress}
           />
         </>

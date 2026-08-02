@@ -61,6 +61,7 @@ import {
   computePercentageScalpExitPlan,
   ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
   MIN_TPSL_EXPECTED_PNL_USD,
+  SCALP_STOP_LOSS_ROE_PERCENT,
 } from "@/lib/perps/scalpExit";
 
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
@@ -355,6 +356,7 @@ export function getScalpTradePlanningConfig(config: PerpsAutomationConfig): Perp
       walletAllocationMode: "percent",
       walletPercent: 50,
       perpsLeverage: SCALP_TRADE_LEVERAGE,
+      stopLossPercent: SCALP_STOP_LOSS_ROE_PERCENT,
     },
   };
 }
@@ -657,7 +659,7 @@ export async function runAutonomousPerpsMonitor(
         ? getScalpTradePlanningConfig(config)
         : config;
       const basePlan = deriveTradePlan(planningConfig, windowPoints, signal, availableUsdc);
-      const learnedPlan = applyLearnedTradePlan({
+      const learnedPlanBase = applyLearnedTradePlan({
         basePlan,
         asset,
         points: windowPoints,
@@ -667,6 +669,9 @@ export async function runAutonomousPerpsMonitor(
         adx: indicators.adx,
         volumeRatio: indicators.volumeRatio,
       });
+      const learnedPlan = strategyClass === "scalp"
+        ? { ...learnedPlanBase, stopLossPercent: SCALP_STOP_LOSS_ROE_PERCENT }
+        : learnedPlanBase;
       const plan = strategyClass === "scalp"
         ? {
             ...learnedPlan,

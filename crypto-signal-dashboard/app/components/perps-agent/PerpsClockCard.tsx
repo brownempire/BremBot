@@ -101,7 +101,10 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
             <div className="perps-scalp-rule">
               Leverage <strong>{props.scalpLeverage}×</strong>
             </div>
-            <div className="subtext">25% ROE base · 2× ATR extension · profit-lock ladder · at least $1 net after estimated fees.</div>
+            <div className="perps-scalp-rule">
+              Stop loss <strong>15% ROE</strong>
+            </div>
+            <div className="subtext">25% ROE TP base · 2× ATR extension · 15% ROE SL · profit-lock ladder · at least $1 net after estimated fees.</div>
             <div className="subtext">Automatically turns off when a trend or breakout signal appears.</div>
           </div>
         </details>

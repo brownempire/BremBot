@@ -41,6 +41,15 @@ export type JupiterPerpsWidgetSnapshot = {
   connected: boolean;
 };
 
+export type JupiterPerpsTpslModifyRequest = {
+  kind: "tp" | "sl";
+  position: JupiterPerpsPosition;
+  positionRequestPubkey: string | null;
+  triggerPrice: string;
+};
+
+export type JupiterPerpsTpslModifier = (request: JupiterPerpsTpslModifyRequest) => Promise<void>;
+
 export type JupiterPerpsAutoTradeRequest = {
   asset: "BTC" | "ETH" | "SOL";
   collateralToken: "BTC" | "ETH" | "SOL" | "USDC";
@@ -917,11 +926,13 @@ function JupiterPerpsPositionWidgetBody({
   authToken,
   onSnapshotChange,
   onControllerChange,
+  onTpslModifierChange,
   primaryWalletAddress,
 }: {
   authToken?: string | null;
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
   onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
+  onTpslModifierChange?: (modifier: JupiterPerpsTpslModifier | null) => void;
   primaryWalletAddress?: string | null;
 }) {
   const [activeTab, setActiveTab] = useState<"open" | "recent" | "new">("open");
@@ -929,6 +940,7 @@ function JupiterPerpsPositionWidgetBody({
   const [showMockData, setShowMockData] = useState(process.env.NEXT_PUBLIC_JUPITER_PERPS_DEMO === "true");
   const [pendingClosePositionPubkeys, setPendingClosePositionPubkeys] = useState<string[]>([]);
   const [pendingTpslMutationKey, setPendingTpslMutationKey] = useState<string | null>(null);
+  const tpslModifierRef = useRef<JupiterPerpsTpslModifier | null>(null);
   const nativeShell = isNativeShellRuntime();
   const nativeMacShell = isNativeMacRuntime();
   const walletConnectShell = nativeShell || nativeMacShell;
@@ -1211,12 +1223,15 @@ function JupiterPerpsPositionWidgetBody({
     await refetch();
   }
 
-  async function handleModifyTpsl(request: {
-    kind: "tp" | "sl";
-    position: JupiterPerpsPosition;
-    positionRequestPubkey: string | null;
-    triggerPrice: string;
-  }) {
+  async function handleModifyTpsl(request: JupiterPerpsTpslModifyRequest) {
+    const nextTriggerPrice = Number(request.triggerPrice);
+    const validationMessage = validatePerpsTriggerPrice(request.kind, request.position, nextTriggerPrice);
+    if (validationMessage) throw new Error(validationMessage);
+    const nextEstimatedPnl = estimateTriggerPnl(request.position, nextTriggerPrice);
+    if (nextEstimatedPnl !== null && Math.abs(nextEstimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD) {
+      throw new Error(`Expected PnL is ${formatSignedUsd(nextEstimatedPnl)}. Move the trigger farther from entry so expected PnL is at least ${formatUsd(MIN_TPSL_EXPECTED_PNL_USD)}.`);
+    }
+
     const positionPubkey = request.position.accountRef?.trim();
     const isAgentPosition = request.position.walletRole === "agent";
     if (!positionPubkey || (!isAgentPosition && !walletAddress)) {
@@ -1372,6 +1387,18 @@ function JupiterPerpsPositionWidgetBody({
       setPendingTpslMutationKey(null);
     }
   }
+
+  tpslModifierRef.current = handleModifyTpsl;
+
+  useEffect(() => {
+    if (!onTpslModifierChange) return;
+    const modifier: JupiterPerpsTpslModifier = async (request) => {
+      if (!tpslModifierRef.current) throw new Error("TP/SL editing is not ready yet.");
+      await tpslModifierRef.current(request);
+    };
+    onTpslModifierChange(modifier);
+    return () => onTpslModifierChange(null);
+  }, [onTpslModifierChange]);
 
   const shouldShowDisconnectedState =
     !isConnected &&
@@ -1652,11 +1679,13 @@ export function JupiterPerpsPositionWidget({
   authToken,
   onSnapshotChange,
   onControllerChange,
+  onTpslModifierChange,
   primaryWalletAddress,
 }: {
   authToken?: string | null;
   onSnapshotChange?: (snapshot: JupiterPerpsWidgetSnapshot) => void;
   onControllerChange?: (controller: JupiterPerpsWidgetController | null) => void;
+  onTpslModifierChange?: (modifier: JupiterPerpsTpslModifier | null) => void;
   primaryWalletAddress?: string | null;
 }) {
   return (
@@ -1664,6 +1693,7 @@ export function JupiterPerpsPositionWidget({
       authToken={authToken}
       onSnapshotChange={onSnapshotChange}
       onControllerChange={onControllerChange}
+      onTpslModifierChange={onTpslModifierChange}
       primaryWalletAddress={primaryWalletAddress}
     />
   );
