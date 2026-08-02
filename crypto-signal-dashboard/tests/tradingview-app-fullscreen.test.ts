@@ -17,6 +17,15 @@ test("TradingView uses app-controlled fullscreen instead of the browser fullscre
   assert.doesNotMatch(chart, /requestFullscreen|webkitRequestFullscreen/);
 });
 
+test("position refreshes never change TradingView auto scale or the visible price range", () => {
+  const chart = read("app/components/TradingViewChart.tsx");
+
+  assert.match(chart, /syncPositionShapes/);
+  assert.match(chart, /createShape/);
+  assert.doesNotMatch(chart, /setAutoScale/);
+  assert.doesNotMatch(chart, /setVisiblePriceRange/);
+});
+
 test("app fullscreen covers the viewport with a dark surface and a dedicated close control", () => {
   const css = read("app/globals.css");
 

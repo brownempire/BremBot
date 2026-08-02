@@ -23,13 +23,6 @@ type IntervalSubscription = {
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   resolution?: () => string;
-  getPanes?: () => Array<{
-    getMainSourcePriceScale?: () => {
-      getVisiblePriceRange?: () => { from: number; to: number } | null;
-      setAutoScale?: (enabled: boolean) => void;
-      setVisiblePriceRange?: (range: { from: number; to: number }) => void;
-    } | null;
-  }>;
   createShape?: (
     point: { price: number },
     options: Record<string, unknown>
@@ -240,35 +233,10 @@ export function TradingViewChart({
       shapeIdsRef.current = [];
     };
 
-    const includePositionLevelsInScale = (currentGuides: PositionOverlayGuide[]) => {
-      const priceScale = chart
-        ?.getPanes?.()
-        ?.[0]
-        ?.getMainSourcePriceScale?.();
-      const currentRange = priceScale?.getVisiblePriceRange?.();
-      if (!priceScale || !currentRange || currentGuides.length === 0) return;
-
-      const prices = [
-        currentRange.from,
-        currentRange.to,
-        ...currentGuides.map((guide) => guide.price),
-      ];
-      const minimum = Math.min(...prices);
-      const maximum = Math.max(...prices);
-      const span = Math.max(maximum - minimum, maximum * 0.002);
-      const padding = span * 0.08;
-      priceScale.setAutoScale?.(false);
-      priceScale.setVisiblePriceRange?.({
-        from: minimum - padding,
-        to: maximum + padding,
-      });
-    };
-
     const syncPositionShapes = async () => {
       removeShapes();
       const currentGuides = validOverlayGuides(guidesRef.current);
       if (!chart?.createShape || !chart.removeEntity || currentGuides.length === 0) {
-        chart?.getPanes?.()?.[0]?.getMainSourcePriceScale?.()?.setAutoScale?.(true);
         return;
       }
 
@@ -316,7 +284,6 @@ export function TradingViewChart({
         }
         if (!cancelled) {
           shapeIdsRef.current = created;
-          includePositionLevelsInScale(currentGuides);
         }
       } catch {
         created.forEach((id) => chart.removeEntity?.(id));
