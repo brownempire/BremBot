@@ -35,7 +35,7 @@ const position: JupiterPerpsPosition = {
   positionValue: 202,
   collateralValue: 20,
   leverage: 10,
-  unrealizedPnl: 2,
+  unrealizedPnl: 1.76,
   realizedPnl: 0,
   liquidationPrice: 91,
   fundingSnapshot: null,
@@ -131,14 +131,14 @@ function snapshot(
   return { positions, pendingTriggers, recentTrades };
 }
 
-test("entry notification includes strategy, side, mark, sizing, TP/SL expected PnL, and liquidation", () => {
+test("entry notification shows concise estimated net TP/SL PnL and liquidation", () => {
   const notification = buildTradeEntryNotification({ walletAddress, position, execution });
 
   assert.equal(notification.title, "Smart Long Opened · SOL");
   assert.match(notification.body, /Entry \$100\.00 · Mark \$101\.00/);
   assert.match(notification.body, /\$202\.00 position \/ \$20\.00 collateral · 10x/);
-  assert.match(notification.body, /TP \$110\.00 \(\+\$20\.00\)/);
-  assert.match(notification.body, /SL \$95\.00 \(-\$10\.00\)/);
+  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.76\)/);
+  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.24\)/);
   assert.match(notification.body, /Liq \$91\.00/);
   assert.equal(notification.sound, "brem_approval.wav");
 });
@@ -151,6 +151,17 @@ test("entry notification identifies scalp trades", () => {
   });
 
   assert.equal(notification.title, "Scalp Short Opened · SOL");
+});
+
+test("entry notification falls back to the round-trip fee estimate when live net PnL is unavailable", () => {
+  const notification = buildTradeEntryNotification({
+    walletAddress,
+    position: { ...position, markPrice: null, unrealizedPnl: null },
+    execution,
+  });
+
+  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.76\)/);
+  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.24\)/);
 });
 
 test("an exit near SL is not mislabeled as TP when both triggers existed", () => {
@@ -171,7 +182,7 @@ test("an exit near SL is not mislabeled as TP when both triggers existed", () =>
     execution,
   });
   assert.equal(notification.title, "SL Hit · Smart SOL Long");
-  assert.match(notification.body, /Exit \$95\.01 · P&L -\$10\.20/);
+  assert.match(notification.body, /Exit \$95\.01 · Realized -\$10\.20/);
   assert.equal(notification.sound, "brem_sl.wav");
 });
 

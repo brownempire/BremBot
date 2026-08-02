@@ -6,6 +6,7 @@ import {
   type JupiterPerpsTrade,
 } from "@/lib/jupiterPerps";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
+import { ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE } from "@/lib/perps/scalpExit";
 import type { PerpsUserExecution } from "@/lib/perps/sessionTypes";
 import { listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
 import { getPerpsWatchState, savePerpsWatchState } from "@/lib/perpsWatchStore";
@@ -109,8 +110,9 @@ function matchesPrice(price: number | null | undefined, target: number | null | 
     && Math.abs(nextPrice - nextTarget) <= nextTarget * EXIT_PRICE_TOLERANCE;
 }
 
-function expectedPnl(position: JupiterPerpsPosition, targetPrice: number | null | undefined) {
+function expectedNetPnl(position: JupiterPerpsPosition, targetPrice: number | null | undefined) {
   const entry = finite(position.entryPrice);
+  const mark = finite(position.markPrice);
   const target = finite(targetPrice);
   const size = finite(position.positionSize)
     ?? (
@@ -120,7 +122,20 @@ function expectedPnl(position: JupiterPerpsPosition, targetPrice: number | null 
     );
   if (entry === null || target === null || size === null || size <= 0) return null;
   const priceDelta = position.side === "long" ? target - entry : entry - target;
-  return Number((priceDelta * size).toFixed(2));
+  const grossTargetPnl = priceDelta * size;
+  const liveNetPnl = finite(position.unrealizedPnl);
+
+  // Jupiter's live unrealized PnL is already fee-adjusted. Projecting from that
+  // value preserves the fees and borrow accrued on the actual position instead
+  // of showing the user a misleading gross-price result.
+  if (mark !== null && liveNetPnl !== null) {
+    const markToTargetDelta = position.side === "long" ? target - mark : mark - target;
+    return Number((liveNetPnl + markToTargetDelta * size).toFixed(2));
+  }
+
+  const positionSizeUsd = finite(position.positionValue) ?? Math.abs(entry * size);
+  const estimatedFeesUsd = positionSizeUsd * ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE;
+  return Number((grossTargetPnl - estimatedFeesUsd).toFixed(2));
 }
 
 function strategyLabel(execution: PerpsUserExecution | null) {
@@ -157,8 +172,8 @@ function targetSummary(
 ) {
   const nextPrice = finite(price);
   if (nextPrice === null) return `${label} not set`;
-  const pnl = expectedPnl(position, nextPrice);
-  return `${label} ${formatPrice(nextPrice)}${pnl === null ? "" : ` (${formatUsd(pnl, true)})`}`;
+  const pnl = expectedNetPnl(position, nextPrice);
+  return `${label} ${formatPrice(nextPrice)}${pnl === null ? "" : ` (Est. net ${formatUsd(pnl, true)})`}`;
 }
 
 function latestExitTrade(position: JupiterPerpsPosition, trades: JupiterPerpsTrade[]) {
@@ -255,7 +270,7 @@ export function buildTradeExitNotification(options: {
     ? Math.max(0, (exitTimestamp - Date.parse(execution.createdAt)) / 60_000)
     : null;
   const body = [
-    `Exit ${formatPrice(trade?.price)}${netPnl === null ? "" : ` · P&L ${formatUsd(netPnl, true)}`}`,
+    `Exit ${formatPrice(trade?.price)}${netPnl === null ? "" : ` · Realized ${formatUsd(netPnl, true)}`}`,
     `Entry ${formatPrice(options.position.entryPrice)} · ${formatLeverage(options.position.leverage ?? execution?.leverage)}`,
     `${targetSummary("TP", options.position, tp)} · ${targetSummary("SL", options.position, sl)}`,
     durationMinutes === null ? null : `Held ${durationMinutes < 60 ? `${Math.round(durationMinutes)}m` : `${(durationMinutes / 60).toFixed(1)}h`}`,
