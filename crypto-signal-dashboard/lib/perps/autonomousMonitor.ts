@@ -53,6 +53,7 @@ import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   SCALP_STANDARD_COOLDOWN_SECONDS,
   SCALP_TRADE_LEVERAGE,
+  scalpProfileAllowsLiveEntries,
   detectAdaptiveScalpSignal,
   getScalpLearningProfile,
   type ScalpSignal,
@@ -587,7 +588,9 @@ export async function runAutonomousPerpsMonitor(
         && smartDirectionAllowed
       );
       const scalpProfile = getScalpLearningProfile(learningProfile);
-      const scalpSignal = config.settings.scalpModeEnabled
+      const scalpValidationPaused = config.settings.scalpModeEnabled
+        && !scalpProfileAllowsLiveEntries(scalpProfile);
+      const scalpSignal = config.settings.scalpModeEnabled && !scalpValidationPaused
         ? detectAdaptiveScalpSignal({
             symbol: `${asset}/USD`,
             points: windowPoints,
@@ -620,7 +623,9 @@ export async function runAutonomousPerpsMonitor(
             ? smartIndicatorScore?.vetoed ? "INDICATOR_RSI_VETO" : "INDICATOR_CONFIRMATION_SKIP"
             : smartRejectedByDirection ? "LEARNED_DIRECTION_SKIP"
               : smartRejectedByLearning ? "LEARNED_CONFIRMATION_SKIP"
-                : smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN" : "NO_SIGNAL",
+                : smartSignalCandidate ? "SMART_SIGNAL_COOLDOWN"
+                  : scalpValidationPaused ? "SCALP_VALIDATION_PAUSED"
+                    : "NO_SIGNAL",
           smartRejectedByIndicators
             ? smartIndicatorScore?.vetoed
               ? `The ${smartSignal.direction} Smart candidate was skipped by the RSI extreme veto, and no qualifying scalp/reversal setup replaced it.`
@@ -631,9 +636,11 @@ export async function runAutonomousPerpsMonitor(
                 ? "The Smart candidate lacked matching trend and breakout confirmation, and no qualifying independent scalp/reversal setup replaced it."
                 : smartSignalCandidate
                   ? "A Smart candidate was in cooldown; Scalp Mode remains enabled, but no qualifying independent scalp/reversal setup was detected."
-            : config.settings.scalpModeEnabled
-              ? "No qualifying Smart, range scalp, or candle-structure reversal signal was detected in the latest window."
-              : "No qualifying signal was detected in the latest candle window."
+                : scalpValidationPaused
+                  ? "Scalp Mode is paused because its winner-derived profile has not passed loss-history validation."
+                  : config.settings.scalpModeEnabled
+                    ? "No qualifying Smart, range scalp, or candle-structure reversal signal was detected in the latest window."
+                    : "No qualifying signal was detected in the latest candle window."
         ));
         continue;
       }

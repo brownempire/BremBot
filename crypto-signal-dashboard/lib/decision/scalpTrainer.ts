@@ -9,6 +9,29 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+const MIN_PROFITABLE_BASELINE_TRADES = 5;
+const MIN_BASELINE_VALIDATION_TRADES = 4;
+
+function quantile(values: Array<number | null | undefined>, percentile: number) {
+  const sorted = values
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (sorted.length === 0) return null;
+  return sorted[Math.round((sorted.length - 1) * percentile)] ?? null;
+}
+
+function setupAdjustmentKey(outcome: TradeLearningOutcome) {
+  return outcome.scalpSetupType === "range-reversal"
+    ? "rangeReversal" as const
+    : outcome.scalpSetupType === "liquidity-sweep"
+      ? "liquiditySweep" as const
+      : outcome.scalpSetupType === "v-reversal"
+        ? "vReversal" as const
+        : outcome.scalpSetupType === "double-reversal"
+          ? "doubleReversal" as const
+          : null;
+}
+
 function expectancy(outcomes: TradeLearningOutcome[]) {
   return outcomes.length > 0
     ? outcomes.reduce((sum, outcome) => sum + outcome.netPnlUsd, 0) / outcomes.length
@@ -47,6 +70,140 @@ function stats(outcomes: TradeLearningOutcome[]) {
   };
 }
 
+function winnerDirectionPreference(winners: TradeLearningOutcome[]) {
+  const longs = winners.filter((outcome) => outcome.side === "long");
+  const shorts = winners.filter((outcome) => outcome.side === "short");
+  const longProfit = longs.reduce((sum, outcome) => sum + outcome.netPnlUsd, 0);
+  const shortProfit = shorts.reduce((sum, outcome) => sum + outcome.netPnlUsd, 0);
+  if (longs.length >= 2 && longProfit > shortProfit * 1.5) return "bullish" as const;
+  if (shorts.length >= 2 && shortProfit > longProfit * 1.5) return "bearish" as const;
+  return "balanced" as const;
+}
+
+function outcomeMatchesWinnerBaseline(outcome: TradeLearningOutcome, profile: ScalpLearningProfile) {
+  const direction = outcome.side === "long" ? "bullish" : "bearish";
+  if (profile.preferredDirection !== "balanced" && profile.preferredDirection !== direction) return false;
+  const setupKey = setupAdjustmentKey(outcome);
+  if (!setupKey || outcome.signalConfidence == null || outcome.priceActionScore == null) return false;
+  const requiredConfidence = clamp(
+    profile.minimumConfidence + profile.setupConfidenceAdjustments[setupKey],
+    0.55,
+    0.9
+  );
+  if (outcome.signalConfidence < requiredConfidence || outcome.priceActionScore < profile.minimumPriceActionScore) {
+    return false;
+  }
+
+  if (outcome.scalpSetupType === "range-reversal") {
+    if (outcome.adx == null || outcome.adx > profile.maximumAdx) return false;
+    if (outcome.emaSpreadPercent != null && Math.abs(outcome.emaSpreadPercent) > profile.maximumEmaSpreadPercent) return false;
+    if (outcome.atrPercent != null && outcome.atrPercent < profile.minimumAtrPercent) return false;
+    if (outcome.bollingerBandwidthPercent != null && outcome.bollingerBandwidthPercent < profile.minimumBandwidthPercent) return false;
+    if (outcome.volumeRatio != null && outcome.volumeRatio < profile.minimumVolumeRatio) return false;
+    if (outcome.side === "long") {
+      return outcome.rsi != null && outcome.rsi <= profile.longRsiMaximum
+        && outcome.bollingerPosition != null && outcome.bollingerPosition <= profile.longBollingerMaximum;
+    }
+    return outcome.rsi != null && outcome.rsi >= profile.shortRsiMinimum
+      && outcome.bollingerPosition != null && outcome.bollingerPosition >= profile.shortBollingerMinimum;
+  }
+
+  const exceptional = outcome.priceActionTags?.includes("EXCEPTIONAL_CONFIRMED_PRICE_ACTION") === true;
+  if (exceptional) return true;
+  if (outcome.adx == null || outcome.adx > 40) return false;
+  if (outcome.emaSpreadPercent != null
+    && Math.abs(outcome.emaSpreadPercent) > Math.min(1.5, profile.maximumEmaSpreadPercent + 0.55)) return false;
+  return outcome.rsi != null && (outcome.side === "long" ? outcome.rsi <= 62 : outcome.rsi >= 38);
+}
+
+export function createProfitableScalpBaseline(
+  current: ScalpLearningProfile | null | undefined,
+  allScalpOutcomes: TradeLearningOutcome[]
+): ScalpLearningProfile {
+  const ordered = allScalpOutcomes
+    .filter((outcome) => outcome.signalType === "scalp")
+    .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
+  const compatibleOffset = Math.min(current?.policyOutcomeOffset ?? ordered.length, ordered.length);
+  const compatibleOutcomes = ordered.slice(compatibleOffset);
+  const winners = compatibleOutcomes.filter((outcome) => (
+    outcome.netPnlUsd > 0
+    && outcome.scalpSetupType != null
+    && outcome.signalConfidence != null
+    && outcome.priceActionScore != null
+  ));
+  const baseline = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  baseline.policyOutcomeOffset = ordered.length;
+  baseline.learnedFromClosedTrades = ordered.length;
+  baseline.riskMultiplier = 0.5;
+  baseline.cooldownSeconds = 3_600;
+
+  if (winners.length < MIN_PROFITABLE_BASELINE_TRADES) {
+    baseline.validation = {
+      sampleSize: compatibleOutcomes.length,
+      trainingSize: winners.length,
+      validationSize: 0,
+      winRate: 0,
+      expectancyUsd: 0,
+      profitFactor: 0,
+      maxDrawdownUsd: 0,
+      passed: false,
+      reasons: [`Scalp Mode paused: only ${winners.length} compatible post-fee winner${winners.length === 1 ? "" : "s"} were available; ${MIN_PROFITABLE_BASELINE_TRADES} are required for a winner-derived baseline.`],
+    };
+    return baseline;
+  }
+
+  const rangeWinners = winners.filter((outcome) => outcome.scalpSetupType === "range-reversal");
+  const longRangeWinners = rangeWinners.filter((outcome) => outcome.side === "long");
+  const shortRangeWinners = rangeWinners.filter((outcome) => outcome.side === "short");
+  baseline.minimumConfidence = Number(clamp(quantile(winners.map((outcome) => outcome.signalConfidence), 0.25) ?? 0.82, 0.68, 0.82).toFixed(4));
+  baseline.minimumPriceActionScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.25) ?? 0.75, 0.65, 0.82).toFixed(3));
+  baseline.strongReversalScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.75) ?? 0.9, 0.78, 0.9).toFixed(3));
+  baseline.preferredDirection = winnerDirectionPreference(winners);
+  baseline.longRsiMaximum = Number(clamp(quantile(longRangeWinners.map((outcome) => outcome.rsi), 0.75) ?? 46, 38, 58).toFixed(2));
+  baseline.shortRsiMinimum = Number(clamp(quantile(shortRangeWinners.map((outcome) => outcome.rsi), 0.25) ?? 54, 42, 62).toFixed(2));
+  baseline.longBollingerMaximum = Number(clamp(quantile(longRangeWinners.map((outcome) => outcome.bollingerPosition), 0.75) ?? 0.22, -0.1, 0.35).toFixed(3));
+  baseline.shortBollingerMinimum = Number(clamp(quantile(shortRangeWinners.map((outcome) => outcome.bollingerPosition), 0.25) ?? 0.78, 0.65, 1.1).toFixed(3));
+  baseline.maximumAdx = Number(clamp(quantile(rangeWinners.map((outcome) => outcome.adx), 0.75) ?? 22, 16, 32).toFixed(2));
+  baseline.minimumVolumeRatio = Number(clamp(quantile(rangeWinners.map((outcome) => outcome.volumeRatio), 0.25) ?? 0.75, 0.65, 1.25).toFixed(3));
+
+  const setupKeys = ["rangeReversal", "liquiditySweep", "vReversal", "doubleReversal"] as const;
+  const winningAverageBySetup = Object.fromEntries(setupKeys.map((key) => {
+    const setupWinners = winners.filter((outcome) => setupAdjustmentKey(outcome) === key);
+    return [key, setupWinners.length > 0 ? expectancy(setupWinners) : null];
+  })) as Record<(typeof setupKeys)[number], number | null>;
+  const bestWinningAverage = Math.max(...Object.values(winningAverageBySetup).filter((value): value is number => value != null));
+  setupKeys.forEach((key) => {
+    const average = winningAverageBySetup[key];
+    baseline.setupConfidenceAdjustments[key] = average == null
+      ? 0.15
+      : Number(clamp(
+          average === bestWinningAverage ? -0.02 : (bestWinningAverage - average) / Math.max(bestWinningAverage, 0.01) * 0.08,
+          -0.02,
+          0.15
+        ).toFixed(3));
+  });
+
+  const admittedValidation = compatibleOutcomes.filter((outcome) => outcomeMatchesWinnerBaseline(outcome, baseline));
+  const measured = stats(admittedValidation);
+  const validationPassed = admittedValidation.length >= MIN_BASELINE_VALIDATION_TRADES
+    && measured.expectancyUsd > 0
+    && measured.profitFactor >= 1.05;
+  baseline.validation = {
+    sampleSize: compatibleOutcomes.length,
+    trainingSize: winners.length,
+    validationSize: admittedValidation.length,
+    winRate: Number(measured.winRate.toFixed(4)),
+    expectancyUsd: Number(measured.expectancyUsd.toFixed(4)),
+    profitFactor: Number(measured.profitFactor.toFixed(4)),
+    maxDrawdownUsd: Number(measured.maxDrawdownUsd.toFixed(4)),
+    passed: validationPassed,
+    reasons: validationPassed
+      ? [`Winner-derived scalp baseline passed counterfactual validation against ${compatibleOutcomes.length} compatible closed outcomes.`]
+      : [`Scalp Mode paused: the baseline learned from ${winners.length} compatible post-fee winners, but admitted loss-history validation remained negative.`],
+  };
+  return baseline;
+}
+
 export function updateScalpLearningProfile(
   current: ScalpLearningProfile | null | undefined,
   allScalpOutcomes: TradeLearningOutcome[]
@@ -55,27 +212,17 @@ export function updateScalpLearningProfile(
     .filter((outcome) => outcome.signalType === "scalp")
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
   if (!current || current.policyVersion !== SCALP_POLICY_VERSION) {
-    const refreshed = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
-    refreshed.policyOutcomeOffset = ordered.length;
-    refreshed.learnedFromClosedTrades = ordered.length;
-    refreshed.validation.reasons = [
-      "Scalp policy refreshed to the authoritative reversal detector; outcomes and decision flags from the former shared Smart scoring era are excluded.",
-    ];
-    return refreshed;
+    return createProfitableScalpBaseline(current, ordered);
   }
   const profile = structuredClone(current);
   const newOutcomes = ordered.slice(profile.learnedFromClosedTrades);
   const policyOutcomes = ordered.slice(profile.policyOutcomeOffset);
-  const setupAdjustmentKey = (outcome: TradeLearningOutcome) => outcome.scalpSetupType === "range-reversal"
-    ? "rangeReversal" as const
-    : outcome.scalpSetupType === "liquidity-sweep"
-      ? "liquiditySweep" as const
-      : outcome.scalpSetupType === "v-reversal"
-        ? "vReversal" as const
-        : outcome.scalpSetupType === "double-reversal"
-          ? "doubleReversal" as const
-          : null;
 
+  if (newOutcomes.length === 0) {
+    profile.learnedFromClosedTrades = ordered.length;
+    profile.validation.reasons = ["No new closed scalp outcomes were available; the existing validation gate was preserved."];
+    return profile;
+  }
   for (const outcome of newOutcomes) {
     const won = outcome.netPnlUsd > 0;
     const setupKey = setupAdjustmentKey(outcome);
@@ -154,7 +301,8 @@ export function updateScalpLearningProfile(
   const validationOutcomes = policyOutcomes.length >= 20 ? policyOutcomes.slice(validationStart) : [];
   const measured = stats(validationOutcomes.length > 0 ? validationOutcomes : policyOutcomes);
   const validationPassed = validationOutcomes.length < 4
-    || (measured.expectancyUsd > 0 && measured.profitFactor >= 1.05);
+    ? profile.validation.passed
+    : measured.expectancyUsd > 0 && measured.profitFactor >= 1.05;
   if (!validationPassed) {
     profile.riskMultiplier = clamp(profile.riskMultiplier, 0.5, 0.65);
     profile.minimumConfidence = clamp(profile.minimumConfidence + 0.01, 0.58, 0.82);

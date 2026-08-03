@@ -128,13 +128,99 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.equal(refreshed.profile.minimumConfidence, 0.71);
   assert.equal(refreshed.profile.preferredDirection, "bearish");
   assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
-  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 2);
+  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 3);
   assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.62);
-  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 1_500);
+  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 3_600);
   assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.56);
   assert.equal(refreshed.profile.scalpProfile?.maximumAdx, 22);
-  assert.equal(refreshed.profile.scalpProfile?.riskMultiplier, 1);
-  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /former shared Smart scoring era/i);
+  assert.equal(refreshed.profile.scalpProfile?.riskMultiplier, 0.5);
+  assert.equal(refreshed.profile.scalpProfile?.validation.passed, false);
+  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /winner-derived baseline/i);
+});
+
+test("winner-derived scalp reset learns only from compatible post-fee winners and preserves a failed gate", async () => {
+  const scalpTrainer = await import("../lib/decision/scalpTrainer");
+  const scalpEngine = await import("../lib/perps/scalpEngine");
+  const walletAddress = "winner-derived-scalp-baseline";
+  const outcome = (index: number, netPnlUsd: number) => learningTypes.tradeLearningOutcomeSchema.parse({
+    outcomeId: `${walletAddress}:${index}`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
+    walletAddress,
+    executionId: `execution-${index}`,
+    decisionId: `decision-${index}`,
+    signalId: `signal-${index}`,
+    asset: "SOL",
+    side: "long",
+    openedAt: new Date(1_780_000_000_000 + index * 7_200_000).toISOString(),
+    closedAt: new Date(1_780_003_600_000 + index * 7_200_000).toISOString(),
+    positionPubkey: `position-${index}`,
+    entryPrice: 100,
+    exitPrice: netPnlUsd > 0 ? 101 : 99,
+    collateralUsd: 10,
+    sizeUsd: 500,
+    leverage: 50,
+    takeProfitPrice: 101,
+    stopLossPrice: 99,
+    grossPnlUsd: netPnlUsd + 0.2,
+    feesUsd: 0.2,
+    netPnlUsd,
+    returnOnCollateralPercent: netPnlUsd * 10,
+    durationMinutes: 60,
+    exitReason: netPnlUsd > 0 ? "take-profit" : "stop-loss",
+    signalConfidence: 0.86,
+    signalType: "scalp",
+    trendWindow: 25,
+    trendThreshold: 1.65,
+    breakoutPercent: 0.35,
+    cooldownSeconds: 1_500,
+    trendStrengthPercent: 0.1,
+    breakoutStrengthPercent: 0.1,
+    volatilityPercent: 1,
+    atrPercent: 0.1,
+    indicatorScore: 4.3,
+    emaSpreadPercent: 0.1,
+    emaSlopePercent: 0.01,
+    rsi: 35,
+    macdHistogram: 0.01,
+    macdHistogramChange: 0.01,
+    adx: 16,
+    plusDi: 25,
+    minusDi: 15,
+    volumeRatio: 1.5,
+    bollingerBandwidthPercent: 0.5,
+    bollingerPosition: 0,
+    scalpSetupType: "range-reversal",
+    priceActionScore: 0.78,
+    priceActionTags: ["SCALP_RANGE_LOW"],
+    trendBias: "sideways",
+    createdAt: new Date().toISOString(),
+  });
+  const outcomes = [
+    ...Array.from({ length: 5 }, (_, index) => outcome(index, 1)),
+    ...Array.from({ length: 5 }, (_, index) => outcome(index + 5, -2)),
+  ];
+  const prior = {
+    ...structuredClone(scalpEngine.DEFAULT_SCALP_LEARNING_PROFILE),
+    policyVersion: 2,
+    policyOutcomeOffset: 0,
+  };
+
+  const baseline = scalpTrainer.createProfitableScalpBaseline(prior, outcomes);
+
+  assert.equal(baseline.policyVersion, 3);
+  assert.equal(baseline.learnedFromClosedTrades, outcomes.length);
+  assert.equal(baseline.policyOutcomeOffset, outcomes.length);
+  assert.equal(baseline.validation.trainingSize, 5);
+  assert.equal(baseline.validation.passed, false);
+  assert.equal(baseline.riskMultiplier, 0.5);
+  assert.equal(baseline.preferredDirection, "bullish");
+  assert.match(baseline.validation.reasons[0] ?? "", /paused/i);
+
+  const unchanged = scalpTrainer.updateScalpLearningProfile(baseline, outcomes);
+  assert.equal(unchanged.validation.passed, false);
+  assert.equal(unchanged.minimumConfidence, baseline.minimumConfidence);
+  assert.match(unchanged.validation.reasons[0] ?? "", /preserved/i);
 });
 
 test("automatic training migrates a legacy active profile before applying new outcomes", async () => {

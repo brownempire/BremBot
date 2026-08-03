@@ -452,6 +452,54 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   assert.ok(Math.abs(stopLossRoe - SCALP_STOP_LOSS_ROE_PERCENT) < 0.01);
 });
 
+test("monitor pauses scalp entries while the winner-derived profile fails validation", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      scalpModeEnabled: true,
+    },
+    params: {
+      ...base.params,
+      trendWindow: 24,
+    },
+  });
+  const profile = createLearningProfile();
+  profile.scalpProfile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  profile.scalpProfile.validation = {
+    ...profile.scalpProfile.validation,
+    passed: false,
+    reasons: ["Loss-history validation failed."],
+  };
+  let routeCalls = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => profile,
+    reconcileLearningHistory: async () => 0,
+    autoTrain: async () => undefined,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(routeCalls, 0);
+  assert.equal(result.results[0]?.code, "SCALP_VALIDATION_PAUSED");
+  assert.match(result.results[0]?.message ?? "", /winner-derived profile/i);
+});
+
 test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {
   let disabledWallet: string | null = null;
   let routedStrategy: PerpsAgentSignal["strategyClass"] = undefined;

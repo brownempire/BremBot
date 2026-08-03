@@ -437,7 +437,7 @@ export async function trainWalletDecisionProfile(input: {
       createdAt: new Date().toISOString(),
       promotedAt: null,
       scalpProfile: updateScalpLearningProfile(active.scalpProfile, outcomes),
-      summary: `${active.summary} Scalp profile refreshed for independent authoritative reversal detection; Smart profile settings were preserved.`,
+      summary: `${active.summary} Scalp profile reset from compatible post-fee winners and gated against loss history; Smart profile settings were preserved.`,
     } satisfies DecisionLearningProfile;
     const profile = await saveDecisionLearningProfile(refreshedProfile, true);
     return {
