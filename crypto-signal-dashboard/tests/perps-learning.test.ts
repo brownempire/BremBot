@@ -223,6 +223,78 @@ test("winner-derived scalp reset learns only from compatible post-fee winners an
   assert.match(unchanged.validation.reasons[0] ?? "", /preserved/i);
 });
 
+test("operator activation re-enables a conservative winner-derived scalp baseline", async () => {
+  const scalpTrainer = await import("../lib/decision/scalpTrainer");
+  const scalpEngine = await import("../lib/perps/scalpEngine");
+  const outcomes = Array.from({ length: 6 }, (_, index) => ({
+    outcomeId: `operator-winner-${index}`,
+    reconciliationVersion: 2,
+    trainingEligible: true,
+    walletAddress: "operator-reset-wallet",
+    executionId: `execution-${index}`,
+    decisionId: `decision-${index}`,
+    signalId: `signal-${index}`,
+    asset: "SOL" as const,
+    side: "long" as const,
+    openedAt: new Date(1_780_000_000_000 + index * 7_200_000).toISOString(),
+    closedAt: new Date(1_780_003_600_000 + index * 7_200_000).toISOString(),
+    positionPubkey: `position-${index}`,
+    entryPrice: 100,
+    exitPrice: 101,
+    collateralUsd: 10,
+    sizeUsd: 500,
+    leverage: 50,
+    takeProfitPrice: 101,
+    stopLossPrice: 99,
+    grossPnlUsd: 1.2,
+    feesUsd: 0.2,
+    netPnlUsd: 1,
+    returnOnCollateralPercent: 10,
+    durationMinutes: 60,
+    exitReason: "take-profit" as const,
+    signalConfidence: 0.86,
+    signalType: "scalp" as const,
+    trendWindow: 25,
+    trendThreshold: 1.65,
+    breakoutPercent: 0.35,
+    cooldownSeconds: 1_500,
+    trendStrengthPercent: 0.1,
+    breakoutStrengthPercent: 0.1,
+    volatilityPercent: 1,
+    atrPercent: 0.1,
+    indicatorScore: 4.3,
+    emaSpreadPercent: 0.1,
+    emaSlopePercent: 0.01,
+    rsi: 35,
+    macdHistogram: 0.01,
+    macdHistogramChange: 0.01,
+    adx: 16,
+    plusDi: 25,
+    minusDi: 15,
+    volumeRatio: 1.5,
+    bollingerBandwidthPercent: 0.5,
+    bollingerPosition: 0,
+    scalpSetupType: "range-reversal" as const,
+    priceActionScore: 0.86,
+    priceActionTags: ["SCALP_RANGE_LOW"],
+    trendBias: "sideways" as const,
+    createdAt: new Date().toISOString(),
+  }));
+
+  const profile = scalpTrainer.createOperatorActivatedProfitableScalpBaseline(
+    outcomes,
+    new Date("2026-08-05T05:00:00.000Z")
+  );
+
+  assert.equal(profile.validation.trainingSize, 6);
+  assert.equal(profile.validation.passed, true);
+  assert.equal(profile.operatorActivation?.historicalValidationPassed, true);
+  assert.equal(profile.riskMultiplier, 0.5);
+  assert.equal(profile.cooldownSeconds, 3_600);
+  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(profile), true);
+  assert.match(profile.validation.reasons[0] ?? "", /operator activated/i);
+});
+
 test("automatic training migrates a legacy active profile before applying new outcomes", async () => {
   const walletAddress = "learning-wallet-legacy-migration";
   const seeded = await trainer.trainWalletDecisionProfile({

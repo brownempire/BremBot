@@ -16,7 +16,10 @@ import { CURRENT_OUTCOME_RECONCILIATION_VERSION } from "@/lib/decision/learningT
 import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
-import { updateScalpLearningProfile } from "@/lib/decision/scalpTrainer";
+import {
+  createOperatorActivatedProfitableScalpBaseline,
+  updateScalpLearningProfile,
+} from "@/lib/decision/scalpTrainer";
 import { DEFAULT_SCALP_LEARNING_PROFILE, SCALP_POLICY_VERSION } from "@/lib/perps/scalpEngine";
 
 const MIN_TRAINING_SAMPLE = 50;
@@ -28,6 +31,42 @@ const BASE_THRESHOLDS: Record<LearningAsset, { trend: number; breakout: number }
   ETH: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
   SOL: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
 };
+
+export async function resetWalletScalpToProfitableProfile(input: {
+  walletAddress: string;
+  source: "manual-training";
+}) {
+  const [active, history, storedOutcomes] = await Promise.all([
+    getActiveDecisionLearningProfile(input.walletAddress),
+    listDecisionLearningProfileHistory(input.walletAddress),
+    listTradeLearningOutcomes(input.walletAddress),
+  ]);
+  if (!active) throw new Error("No active learning profile is available to preserve Smart Trade settings.");
+  const outcomes = storedOutcomes.filter((outcome) => (
+    outcome.trainingEligible !== false
+    && outcome.reconciliationVersion === CURRENT_OUTCOME_RECONCILIATION_VERSION
+  ));
+  const version = Math.max(active.version, ...history.map((profile) => profile.version)) + 1;
+  const scalpProfile = createOperatorActivatedProfitableScalpBaseline(outcomes);
+  const next = {
+    ...active,
+    profileId: `learn_${crypto.randomUUID()}`,
+    version,
+    status: "candidate" as const,
+    source: input.source,
+    createdAt: new Date().toISOString(),
+    promotedAt: null,
+    scalpProfile,
+    summary: `${active.summary} Scalp profile was operator-reset from compatible post-fee winners and reactivated at conservative risk; Smart settings were preserved.`,
+  } satisfies DecisionLearningProfile;
+  const profile = await saveDecisionLearningProfile(next, true);
+  return {
+    profile,
+    activated: true,
+    outcomeCount: outcomes.length,
+    profitableBaselineCount: scalpProfile.validation.trainingSize,
+  };
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));

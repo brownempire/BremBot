@@ -1,7 +1,7 @@
 import { getActiveDecisionLearningProfile, listDecisionLearningProfileHistory, listTradeLearningOutcomes } from "@/lib/decision/learningStore";
 import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
-import { trainWalletDecisionProfile } from "@/lib/decision/trainer";
+import { resetWalletScalpToProfitableProfile, trainWalletDecisionProfile } from "@/lib/decision/trainer";
 import { fetchJupiterPerpsAccountSnapshot, fetchJupiterPerpsTradeHistory } from "@/lib/jupiterPerps";
 import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
@@ -29,6 +29,14 @@ export async function POST(request: Request) {
   if (!walletAddress) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
+    const body = await request.json().catch(() => null) as { action?: string } | null;
+    if (body?.action === "reset-profitable-scalp") {
+      const result = await resetWalletScalpToProfitableProfile({
+        walletAddress,
+        source: "manual-training",
+      });
+      return Response.json(result, { headers: { "Cache-Control": "no-store" } });
+    }
     const [config, executions, decisions] = await Promise.all([
       getPerpsAutomationConfig(walletAddress),
       listUserPerpsExecutions(walletAddress),

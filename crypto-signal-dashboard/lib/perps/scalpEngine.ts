@@ -41,6 +41,7 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   riskMultiplier: 1,
   preferredDirection: "balanced",
   consecutiveLosses: 0,
+  operatorActivation: null,
   validation: {
     sampleSize: 0,
     trainingSize: 0,
@@ -178,7 +179,8 @@ export function getScalpLearningProfile(profile: DecisionLearningProfile | null)
 }
 
 export function scalpProfileAllowsLiveEntries(profile: ScalpLearningProfile) {
-  return profile.policyVersion === SCALP_POLICY_VERSION && profile.validation.passed;
+  return profile.policyVersion === SCALP_POLICY_VERSION
+    && (profile.validation.passed || profile.operatorActivation !== null);
 }
 
 export function analyzeScalpPriceAction(

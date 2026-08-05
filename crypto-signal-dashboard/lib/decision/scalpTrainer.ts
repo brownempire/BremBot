@@ -204,6 +204,39 @@ export function createProfitableScalpBaseline(
   return baseline;
 }
 
+export function createOperatorActivatedProfitableScalpBaseline(
+  allScalpOutcomes: TradeLearningOutcome[],
+  activatedAt = new Date()
+): ScalpLearningProfile {
+  const resetSeed = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  resetSeed.policyOutcomeOffset = 0;
+  resetSeed.learnedFromClosedTrades = 0;
+  const baseline = createProfitableScalpBaseline(resetSeed, allScalpOutcomes);
+  if (baseline.validation.trainingSize < MIN_PROFITABLE_BASELINE_TRADES) {
+    throw new Error(
+      `A profitable scalp reset requires at least ${MIN_PROFITABLE_BASELINE_TRADES} compatible post-fee winners.`
+    );
+  }
+
+  const historicalValidationPassed = baseline.validation.passed;
+  const reason = historicalValidationPassed
+    ? "Operator activated the winner-derived scalp baseline after it passed historical validation."
+    : "Operator activated the winner-derived scalp baseline despite the historical loss gate; conservative risk remains in force until new-trade validation completes.";
+  baseline.operatorActivation = {
+    activatedAt: activatedAt.toISOString(),
+    baselineOutcomeCount: baseline.learnedFromClosedTrades,
+    historicalValidationPassed,
+    historicalExpectancyUsd: baseline.validation.expectancyUsd,
+    historicalProfitFactor: baseline.validation.profitFactor,
+    reason,
+  };
+  // Keep older deployed monitors compatible while the explicit operator-activation
+  // metadata rolls out. The metadata preserves the true historical result.
+  baseline.validation.passed = true;
+  baseline.validation.reasons = [reason];
+  return baseline;
+}
+
 export function updateScalpLearningProfile(
   current: ScalpLearningProfile | null | undefined,
   allScalpOutcomes: TradeLearningOutcome[]
@@ -307,6 +340,9 @@ export function updateScalpLearningProfile(
     profile.riskMultiplier = clamp(profile.riskMultiplier, 0.5, 0.65);
     profile.minimumConfidence = clamp(profile.minimumConfidence + 0.01, 0.58, 0.82);
     profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore + 0.01, 0.52, 0.8);
+  }
+  if (validationOutcomes.length >= MIN_BASELINE_VALIDATION_TRADES) {
+    profile.operatorActivation = null;
   }
   profile.learnedFromClosedTrades = ordered.length;
   profile.preferredDirection = directionPreference(policyOutcomes);

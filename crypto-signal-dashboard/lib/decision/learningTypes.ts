@@ -108,6 +108,14 @@ export const scalpLearningProfileSchema = z.object({
   riskMultiplier: z.number().finite().min(0.5).max(1),
   preferredDirection: z.enum(["bullish", "bearish", "balanced"]),
   consecutiveLosses: z.number().int().min(0).max(5),
+  operatorActivation: z.object({
+    activatedAt: z.string().datetime(),
+    baselineOutcomeCount: z.number().int().min(0),
+    historicalValidationPassed: z.boolean(),
+    historicalExpectancyUsd: z.number().finite(),
+    historicalProfitFactor: z.number().finite().min(0),
+    reason: z.string().trim().min(1),
+  }).nullable().default(null),
   validation: learningValidationSchema,
 });
 
