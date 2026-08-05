@@ -1012,6 +1012,7 @@ function extractPhantomPublicKey(provider: PhantomAuthProvider) {
 
 const DASHBOARD_LAYOUT_STORAGE_KEY = "brembot.dashboard.layout.v1";
 const POSITION_OVERLAY_STORAGE_KEY = "brembot.tradingview.position-overlay.v1";
+const SCALP_OVERLAY_STORAGE_KEY = "brembot.tradingview.scalp-agent-overlay.v1";
 const DEFAULT_DASHBOARD_LAYOUT: DashboardSectionLayout[] = [
   { id: "chart", width: 1080, height: 640 },
   { id: "wallet", width: 1080, height: 520 },
@@ -1077,6 +1078,7 @@ function DashboardPage() {
   const [lastSignalAt, setLastSignalAt] = useState<Record<string, number>>({});
   const [selectedChartSlotId, setSelectedChartSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [positionOverlayEnabled, setPositionOverlayEnabled] = useState(true);
+  const [scalpOverlayEnabled, setScalpOverlayEnabled] = useState(false);
   const [receiveSignalsForSlotId, setReceiveSignalsForSlotId] = useState<string>(DEFAULT_TRACKED_MARKETS[0].id);
   const [priceFeedStatus, setPriceFeedStatus] = useState("loading");
   const [marketOptions, setMarketOptions] = useState<MarketOption[]>(DEFAULT_TRACKED_MARKETS);
@@ -1378,6 +1380,7 @@ function DashboardPage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     setPositionOverlayEnabled(window.localStorage.getItem(POSITION_OVERLAY_STORAGE_KEY) !== "false");
+    setScalpOverlayEnabled(window.localStorage.getItem(SCALP_OVERLAY_STORAGE_KEY) === "true");
   }, []);
 
   useEffect(() => {
@@ -5412,6 +5415,15 @@ function DashboardPage() {
     }
   }
 
+  function toggleScalpOverlay(enabled: boolean) {
+    setScalpOverlayEnabled(enabled);
+    try {
+      window.localStorage.setItem(SCALP_OVERLAY_STORAGE_KEY, enabled ? "true" : "false");
+    } catch {
+      // The in-memory setting still applies when local storage is unavailable.
+    }
+  }
+
   const handleChartTpslModifierChange = useCallback((modifier: JupiterPerpsTpslModifier | null) => {
     chartTpslModifierRef.current = modifier;
   }, []);
@@ -5455,6 +5467,8 @@ function DashboardPage() {
               symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
               guides={positionOverlayEnabled ? selectedChartGuides : []}
               onModifyGuide={handleChartGuideModify}
+              scalpOverlayEnabled={scalpOverlayEnabled}
+              scalpOverlayAuthToken={remoteAuthToken}
             />
           </div>
         </>
@@ -6024,20 +6038,36 @@ function DashboardPage() {
             <div className="dashboard-panel-title-row">
               <span className="dashboard-panel-title">{DASHBOARD_SECTION_TITLES[id]}</span>
               {id === "chart" ? (
-                <label className="position-overlay-toggle">
-                  <span>
-                    Position Overlay <strong>{positionOverlayEnabled ? "On" : "Off"}</strong>
-                  </span>
-                  <span className="perps-scalp-switch">
-                    <input
-                      type="checkbox"
-                      checked={positionOverlayEnabled}
-                      onChange={(event) => togglePositionOverlay(event.target.checked)}
-                      aria-label="Toggle position overlay"
-                    />
-                    <span aria-hidden="true" />
-                  </span>
-                </label>
+                <div className="chart-overlay-toggles">
+                  <label className="position-overlay-toggle">
+                    <span>
+                      Position Overlay <strong>{positionOverlayEnabled ? "On" : "Off"}</strong>
+                    </span>
+                    <span className="perps-scalp-switch">
+                      <input
+                        type="checkbox"
+                        checked={positionOverlayEnabled}
+                        onChange={(event) => togglePositionOverlay(event.target.checked)}
+                        aria-label="Toggle position overlay"
+                      />
+                      <span aria-hidden="true" />
+                    </span>
+                  </label>
+                  <label className="position-overlay-toggle scalp-overlay-toggle">
+                    <span>
+                      Scalp Agent <strong>{scalpOverlayEnabled ? "On" : "Off"}</strong>
+                    </span>
+                    <span className="perps-scalp-switch">
+                      <input
+                        type="checkbox"
+                        checked={scalpOverlayEnabled}
+                        onChange={(event) => toggleScalpOverlay(event.target.checked)}
+                        aria-label="Toggle Scalp Agent overlay"
+                      />
+                      <span aria-hidden="true" />
+                    </span>
+                  </label>
+                </div>
               ) : null}
             </div>
             {id === "chart" && selectedChartCard ? (

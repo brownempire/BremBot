@@ -1585,6 +1585,17 @@ button:disabled {
   transform-origin: center;
 }
 
+.chart-overlay-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.scalp-overlay-toggle strong {
+  color: #8fffd2;
+}
+
 .drag-handle {
   cursor: grab;
   padding: 6px 10px;
@@ -1664,6 +1675,157 @@ button:disabled {
   height: 100%;
   background: #07111f;
   overscroll-behavior: contain;
+}
+
+.scalp-chart-status {
+  position: absolute;
+  left: 10px;
+  bottom: 34px;
+  z-index: 16;
+  display: grid;
+  gap: 5px;
+  width: min(760px, calc(100% - 66px));
+  padding: 9px 11px;
+  border: 1px solid rgba(101, 217, 255, 0.28);
+  border-radius: 10px;
+  color: #d9e3f4;
+  background: rgba(7, 17, 31, 0.92);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+}
+
+.scalp-chart-status--ready {
+  border-color: rgba(57, 220, 160, 0.62);
+}
+
+.scalp-chart-status--blocked {
+  border-color: rgba(255, 157, 92, 0.58);
+}
+
+.scalp-chart-status--disabled {
+  border-color: rgba(159, 176, 202, 0.3);
+}
+
+.scalp-chart-status-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.scalp-chart-status-heading strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scalp-chart-status-heading > span:last-child {
+  margin-left: auto;
+  color: #8da0bc;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.scalp-chart-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #65d9ff;
+  box-shadow: 0 0 10px rgba(101, 217, 255, 0.7);
+}
+
+.scalp-chart-status--ready .scalp-chart-status-dot {
+  background: #39dca0;
+  box-shadow: 0 0 10px rgba(57, 220, 160, 0.75);
+}
+
+.scalp-chart-status--blocked .scalp-chart-status-dot {
+  background: #ff9d5c;
+  box-shadow: 0 0 10px rgba(255, 157, 92, 0.72);
+}
+
+.scalp-chart-status--disabled .scalp-chart-status-dot {
+  background: #7f8da5;
+  box-shadow: none;
+}
+
+.scalp-chart-status-detail,
+.scalp-chart-reason {
+  color: #aebbd0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.scalp-chart-reason {
+  color: #d8c0aa;
+}
+
+.scalp-chart-metrics {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.scalp-chart-metrics::-webkit-scrollbar {
+  display: none;
+}
+
+.scalp-chart-metrics > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid rgba(126, 148, 189, 0.2);
+  border-radius: 6px;
+  color: #8da0bc;
+  background: rgba(13, 24, 42, 0.76);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.scalp-chart-metrics b {
+  color: #f3f7ff;
+  font-size: 11px;
+}
+
+.scalp-chart-metrics small {
+  color: #7486a1;
+  font-size: 8px;
+}
+
+.scalp-chart-timeframe-warning {
+  justify-self: start;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-color: rgba(255, 157, 92, 0.45);
+  color: #ffd3b5;
+  background: rgba(255, 157, 92, 0.12);
+  font-size: 10px;
+}
+
+@media (max-width: 700px) {
+  .scalp-chart-status {
+    bottom: 30px;
+    width: calc(100% - 56px);
+    padding: 7px 8px;
+  }
+
+  .scalp-chart-status-detail,
+  .scalp-chart-reason {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .chart-tpsl-editor {

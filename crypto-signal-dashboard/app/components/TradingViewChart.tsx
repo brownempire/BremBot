@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createBremLogicDatafeed } from "@/lib/chart/tradingViewDatafeed";
+import type { ScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
 import {
   projectOverlayGuideNetPnl,
   validOverlayGuides,
@@ -34,11 +35,19 @@ type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   resolution?: () => string;
   createShape?: (
-    point: { price: number },
+    point: ShapePoint,
     options: Record<string, unknown>
   ) => Promise<string>;
   getShapeById?: (id: string) => DrawingShapeApi;
   removeEntity?: (id: string) => void;
+  createStudy?: (
+    name: string,
+    forceOverlay?: boolean,
+    lock?: boolean,
+    inputs?: Record<string, unknown>,
+    overrides?: Record<string, unknown>,
+    options?: Record<string, unknown>
+  ) => Promise<string> | string;
 };
 
 type WidgetApi = {
@@ -54,6 +63,8 @@ type TradingViewChartProps = {
   symbol?: string;
   guides?: PositionOverlayGuide[];
   onModifyGuide?: (guide: PositionOverlayGuide, price: number) => Promise<void>;
+  scalpOverlayEnabled?: boolean;
+  scalpOverlayAuthToken?: string | null;
 };
 
 type GuideEditorState = {
@@ -128,11 +139,15 @@ export function TradingViewChart({
   symbol = "COINBASE:BTCUSD",
   guides = [],
   onModifyGuide,
+  scalpOverlayEnabled = false,
+  scalpOverlayAuthToken = null,
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_advanced_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
   const shapeIdsRef = useRef<string[]>([]);
+  const scalpMarkerIdsRef = useRef<string[]>([]);
+  const scalpOverlayEnabledRef = useRef(scalpOverlayEnabled);
   const shapeGuideByIdRef = useRef(new Map<string, PositionOverlayGuide>());
   const shapeIdByGuideIdRef = useRef(new Map<string, string>());
   const suppressedShapeEventsRef = useRef(new Set<string>());
@@ -144,6 +159,10 @@ export function TradingViewChart({
   const [isAppFullscreen, setIsAppFullscreen] = useState(false);
   const [guideEditor, setGuideEditor] = useState<GuideEditorState | null>(null);
   const [isSavingGuide, setIsSavingGuide] = useState(false);
+  const [chartResolution, setChartResolution] = useState(DEFAULT_INTERVAL);
+  const [scalpSnapshot, setScalpSnapshot] = useState<ScalpAgentOverlaySnapshot | null>(null);
+  const [scalpOverlayError, setScalpOverlayError] = useState<string | null>(null);
+  scalpOverlayEnabledRef.current = scalpOverlayEnabled;
   guidesRef.current = guides;
 
   const guideSignature = validOverlayGuides(guides)
@@ -209,9 +228,9 @@ export function TradingViewChart({
       const container = document.getElementById(containerId);
       if (!container) return;
 
-      container.innerHTML = "";
       widgetRef.current?.remove?.();
       widgetRef.current = null;
+      container.replaceChildren();
       setLoadError(null);
 
       try {
@@ -226,7 +245,7 @@ export function TradingViewChart({
           datafeed: createBremLogicDatafeed(),
           library_path: LIBRARY_PATH,
           symbol,
-          interval: storedInterval,
+          interval: scalpOverlayEnabled ? "1" : storedInterval,
           favorites: {
             intervals: DEFAULT_FAVORITE_INTERVALS,
           },
@@ -239,11 +258,11 @@ export function TradingViewChart({
             "header_saveload",
             "header_symbol_search",
             "symbol_search_hot_key",
+            ...(scalpOverlayEnabled ? ["use_localstorage_for_settings", "save_chart_properties_to_local_storage"] : []),
           ],
-          enabled_features: [
-            "use_localstorage_for_settings",
-            "save_chart_properties_to_local_storage",
-          ],
+          enabled_features: scalpOverlayEnabled
+            ? []
+            : ["use_localstorage_for_settings", "save_chart_properties_to_local_storage"],
           time_frames: [
             { text: "1d", resolution: "5", description: "1 Day" },
             { text: "5d", resolution: "15", description: "5 Days" },
@@ -276,14 +295,52 @@ export function TradingViewChart({
           const chart = widget.activeChart?.();
           const currentResolution = chart?.resolution?.();
           if (currentResolution) {
-            window.localStorage.setItem(INTERVAL_STORAGE_KEY, currentResolution);
+            setChartResolution(currentResolution);
+            if (!scalpOverlayEnabledRef.current) window.localStorage.setItem(INTERVAL_STORAGE_KEY, currentResolution);
           }
           chart?.onIntervalChanged?.().subscribe?.(null, (nextInterval) => {
             const interval = String(nextInterval || "");
             if (interval) {
-              window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
+              setChartResolution(interval);
+              if (!scalpOverlayEnabledRef.current) window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
             }
           });
+          if (scalpOverlayEnabled && chart?.createStudy) {
+            const createStudy = async (
+              names: string[],
+              forceOverlay: boolean,
+              inputs: Record<string, unknown>,
+              overrides: Record<string, unknown> = {}
+            ) => {
+              for (const name of names) {
+                try {
+                  const id = await chart.createStudy?.(name, forceOverlay, false, inputs, overrides, {
+                    disableSave: true,
+                    disableUndo: true,
+                  });
+                  if (id) return;
+                } catch {
+                  // Licensed Advanced Charts releases can expose a fallback study name.
+                }
+              }
+            };
+            void (async () => {
+              await createStudy(["Moving Average Exponential", "EMA"], true, { length: 9 }, { "plot.color": "#39dca0", "plot.linewidth": 2 });
+              await createStudy(["Moving Average Exponential", "EMA"], true, { length: 21 }, { "plot.color": "#4c8dff", "plot.linewidth": 2 });
+              await createStudy(["Bollinger Bands", "BB"], true, { length: 20, mult: 2 }, {
+                "upper.color": "rgba(185, 122, 255, 0.78)",
+                "lower.color": "rgba(185, 122, 255, 0.78)",
+                "basis.color": "rgba(185, 122, 255, 0.38)",
+              });
+              await createStudy(["Relative Strength Index", "RSI"], false, { length: 14 }, { "plot.color": "#e1b855" });
+              await createStudy(["Directional Movement", "Average Directional Index", "ADX"], false, { length: 14 }, {
+                "ADX.color": "#ff9d5c",
+                "+DI.color": "#39dca0",
+                "-DI.color": "#ff647c",
+              });
+              await createStudy(["Volume"], false, { length: 20 });
+            })();
+          }
           if (drawingEventCallbackRef.current) {
             widget.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
           }
@@ -322,7 +379,91 @@ export function TradingViewChart({
       widgetRef.current?.remove?.();
       widgetRef.current = null;
     };
-  }, [containerId, symbol]);
+  }, [containerId, scalpOverlayEnabled, symbol]);
+
+  useEffect(() => {
+    if (!scalpOverlayEnabled || !scalpOverlayAuthToken) {
+      setScalpSnapshot(null);
+      setScalpOverlayError(scalpOverlayEnabled ? "Connect and authenticate the Perps wallet to load the live scalp profile." : null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadSnapshot = async () => {
+      try {
+        const query = new URLSearchParams({ symbol });
+        const response = await fetch(`/api/perps/scalp-overlay?${query}`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${scalpOverlayAuthToken}` },
+        });
+        const payload = await response.json().catch(() => null) as (ScalpAgentOverlaySnapshot & { error?: string }) | null;
+        if (!response.ok || !payload) throw new Error(payload?.error || "Scalp overlay data is unavailable.");
+        if (!cancelled) {
+          setScalpSnapshot(payload);
+          setScalpOverlayError(null);
+        }
+      } catch (error) {
+        if (!cancelled) setScalpOverlayError(error instanceof Error ? error.message : "Scalp overlay data is unavailable.");
+      }
+    };
+
+    void loadSnapshot();
+    const timer = window.setInterval(loadSnapshot, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [scalpOverlayAuthToken, scalpOverlayEnabled, symbol]);
+
+  useEffect(() => {
+    const chart = widgetRef.current?.activeChart?.();
+    const removeMarkers = () => {
+      scalpMarkerIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
+      scalpMarkerIdsRef.current = [];
+    };
+    removeMarkers();
+    if (!scalpOverlayEnabled || !chart?.createShape || !scalpSnapshot?.markers.length) return removeMarkers;
+
+    let cancelled = false;
+    const created: string[] = [];
+    const addMarkers = async () => {
+      for (const marker of scalpSnapshot.markers) {
+        const bullish = marker.direction === "bullish";
+        try {
+          const id = await chart.createShape?.(
+            { time: marker.time, price: marker.price },
+            {
+              shape: bullish ? "arrow_up" : "arrow_down",
+              text: `${bullish ? "LONG" : "SHORT"} ${marker.setupType.replace(/-/g, " ")} · ${(marker.confidence * 100).toFixed(0)}%`,
+              lock: true,
+              disableSelection: true,
+              disableSave: true,
+              disableUndo: true,
+              showInObjectsTree: false,
+              zOrder: "top",
+              overrides: {
+                color: bullish ? "#39dca0" : "#ff647c",
+                textColor: bullish ? "#8fffd2" : "#ffadb9",
+                fontsize: 11,
+              },
+            }
+          );
+          if (!id) continue;
+          if (cancelled) chart.removeEntity?.(id);
+          else created.push(String(id));
+        } catch {
+          // Keep native studies/status available if one historical marker cannot be drawn.
+        }
+      }
+      if (!cancelled) scalpMarkerIdsRef.current = created;
+    };
+    void addMarkers();
+    return () => {
+      cancelled = true;
+      created.forEach((id) => chart.removeEntity?.(id));
+      removeMarkers();
+    };
+  }, [chartReadyVersion, scalpOverlayEnabled, scalpSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -508,6 +649,34 @@ export function TradingViewChart({
           </svg>
         )}
       </button>
+      {scalpOverlayEnabled ? (
+        <div className={`scalp-chart-status scalp-chart-status--${scalpSnapshot?.state ?? "watching"}`} data-testid="scalp-chart-status">
+          <div className="scalp-chart-status-heading">
+            <span className="scalp-chart-status-dot" aria-hidden="true" />
+            <strong>{scalpOverlayError ? "Scalp profile unavailable" : scalpSnapshot?.headline ?? "Loading Scalp Agent…"}</strong>
+            <span>1m agent view</span>
+          </div>
+          <div className="scalp-chart-status-detail">
+            {scalpOverlayError ?? scalpSnapshot?.detail ?? "Loading the learned profile and Coinbase indicator window."}
+          </div>
+          {chartResolution !== "1" ? (
+            <div className="scalp-chart-timeframe-warning" role="status">
+              Chart is {chartResolution}m · Select 1m in the chart toolbar for the exact agent view
+            </div>
+          ) : null}
+          {scalpSnapshot ? (
+            <div className="scalp-chart-metrics" aria-label="Scalp Agent indicators">
+              <span>RSI <b>{scalpSnapshot.indicators.rsi?.toFixed(1) ?? "--"}</b> <small>≤{scalpSnapshot.thresholds.longRsiMaximum.toFixed(0)} / ≥{scalpSnapshot.thresholds.shortRsiMinimum.toFixed(0)}</small></span>
+              <span>ADX <b>{scalpSnapshot.indicators.adx?.toFixed(1) ?? "--"}</b> <small>≤{scalpSnapshot.thresholds.maximumAdx.toFixed(1)}</small></span>
+              <span>EMA Δ <b>{scalpSnapshot.indicators.emaSpreadPercent?.toFixed(2) ?? "--"}%</b> <small>≤{scalpSnapshot.thresholds.maximumEmaSpreadPercent.toFixed(2)}%</small></span>
+              <span>ATR <b>{scalpSnapshot.indicators.atrPercent?.toFixed(2) ?? "--"}%</b> <small>≥{scalpSnapshot.thresholds.minimumAtrPercent.toFixed(2)}%</small></span>
+              <span>VOL <b>{scalpSnapshot.indicators.volumeRatio?.toFixed(2) ?? "--"}×</b> <small>≥{scalpSnapshot.thresholds.minimumVolumeRatio.toFixed(2)}×</small></span>
+              <span>BB <b>{scalpSnapshot.indicators.bollingerPosition?.toFixed(2) ?? "--"}</b> <small>edge position</small></span>
+            </div>
+          ) : null}
+          {scalpSnapshot?.reasons[0] ? <div className="scalp-chart-reason">{scalpSnapshot.reasons[0]}</div> : null}
+        </div>
+      ) : null}
       {guideEditor ? (
         <div className="chart-tpsl-editor" data-testid="chart-tpsl-editor" role="dialog" aria-label={`${guideEditor.guide.kind === "tp" ? "Take profit" : "Stop loss"} chart control`}>
           <div className="chart-tpsl-editor-heading">

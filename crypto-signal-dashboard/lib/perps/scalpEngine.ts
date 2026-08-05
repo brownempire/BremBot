@@ -121,6 +121,10 @@ function computeTrendBias(points: PricePoint[]) {
   return change >= 1 ? "bullish" : change <= -1 ? "bearish" : "sideways";
 }
 
+export function getScalpTrendBias(points: PricePoint[]) {
+  return computeTrendBias(points);
+}
+
 function wickRejection(points: PricePoint[], direction: "bullish" | "bearish") {
   return points.slice(-3).some((point) => {
     const high = candleHigh(point);
@@ -168,7 +172,7 @@ function doubleReversal(points: PricePoint[], direction: "bullish" | "bearish") 
 }
 
 export function getScalpLearningProfile(profile: DecisionLearningProfile | null): ScalpLearningProfile {
-  return profile?.scalpProfile?.policyVersion === SCALP_POLICY_VERSION
+  return profile?.scalpProfile
     ? structuredClone(profile.scalpProfile)
     : structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
 }

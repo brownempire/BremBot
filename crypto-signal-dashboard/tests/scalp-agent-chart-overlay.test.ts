@@ -1,0 +1,90 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+import { buildScalpAgentOverlaySnapshot } from "../lib/chart/scalpAgentOverlay";
+import {
+  DEFAULT_SCALP_LEARNING_PROFILE,
+  getScalpLearningProfile,
+  scalpProfileAllowsLiveEntries,
+} from "../lib/perps/scalpEngine";
+import { BASE_INDICATOR_SETTINGS } from "../lib/signal/indicators";
+import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
+
+const projectRoot = path.resolve(import.meta.dirname, "..");
+
+function candleWindow() {
+  const start = 1_785_600_000_000;
+  return Array.from({ length: 80 }, (_, index) => {
+    const close = 100 + Math.sin(index / 4) * 0.18;
+    return {
+      t: start + index * 60_000,
+      o: close - 0.02,
+      h: close + 0.05,
+      l: close - 0.05,
+      v: close,
+      volume: 100 + (index % 7) * 12,
+    };
+  });
+}
+
+test("scalp chart snapshot uses the live indicator periods and exposes a failed learning gate", () => {
+  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  profile.validation = {
+    ...profile.validation,
+    passed: false,
+    reasons: ["Loss-history validation remained negative."],
+  };
+
+  const snapshot = buildScalpAgentOverlaySnapshot({
+    symbol: "COINBASE:SOLUSD",
+    points: candleWindow(),
+    profile,
+    indicatorSettings: BASE_INDICATOR_SETTINGS,
+    scalpModeEnabled: true,
+    isActiveAsset: true,
+    now: new Date("2026-08-02T12:00:00.000Z"),
+  });
+
+  assert.equal(snapshot.timeframe, "1");
+  assert.equal(snapshot.state, "blocked");
+  assert.equal(snapshot.profilePassed, false);
+  assert.match(snapshot.headline, /validation paused/i);
+  assert.match(snapshot.reasons[0] ?? "", /loss-history validation/i);
+  assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
+  assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
+  assert.ok(snapshot.indicators.emaFast !== null);
+  assert.ok(snapshot.indicators.rsi !== null);
+  assert.ok(snapshot.indicators.adx !== null);
+  assert.ok(snapshot.indicators.bollingerPosition !== null);
+});
+
+test("a stale scalp policy remains visibly blocked until winner-baseline migration", () => {
+  const stale = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  stale.policyVersion = 2;
+  const profile = { scalpProfile: stale } as DecisionLearningProfile;
+  const resolved = getScalpLearningProfile(profile);
+
+  assert.equal(resolved.policyVersion, 2);
+  assert.equal(scalpProfileAllowsLiveEntries(resolved), false);
+});
+
+test("TradingView overlay installs the real studies, forces 1m, and draws candidate markers", () => {
+  const chart = readFileSync(path.join(projectRoot, "app/components/TradingViewChart.tsx"), "utf8");
+  const page = readFileSync(path.join(projectRoot, "app/signals-bot/page.tsx"), "utf8");
+  const route = readFileSync(path.join(projectRoot, "app/api/perps/scalp-overlay/route.ts"), "utf8");
+
+  assert.match(page, /Scalp Agent <strong>\{scalpOverlayEnabled \? "On" : "Off"\}/);
+  assert.match(chart, /interval: scalpOverlayEnabled \? "1" : storedInterval/);
+  assert.match(chart, /Moving Average Exponential/);
+  assert.match(chart, /Bollinger Bands/);
+  assert.match(chart, /Relative Strength Index/);
+  assert.match(chart, /Directional Movement/);
+  assert.match(chart, /\["Volume"\]/);
+  assert.match(chart, /shape: bullish \? "arrow_up" : "arrow_down"/);
+  assert.match(chart, /data-testid="scalp-chart-status"/);
+  assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 180\)/);
+  assert.match(route, /profile\?\.indicatorSettings/);
+  assert.match(route, /LAST_SIGNAL_KEY/);
+});
