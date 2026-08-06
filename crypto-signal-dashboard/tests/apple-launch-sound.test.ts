@@ -13,6 +13,20 @@ const watchSource = read("ios/App/BremLogicWatchApp/BremLogicWatchContentView.sw
 const projectSource = read("ios/App/BremLogic.xcodeproj/project.pbxproj");
 const dashboardSource = read("app/signals-bot/page.tsx");
 
+function projectObject(objectId: string) {
+  const declaration = new RegExp(`^\\t\\t${objectId} /\\*[^\\n]*\\*/ = \\{`, "m").exec(projectSource);
+  assert.ok(declaration, `Missing Xcode project object ${objectId}`);
+  const start = declaration.index;
+  const end = projectSource.indexOf("\n\t\t};", start);
+  assert.notEqual(end, -1, `Unterminated Xcode project object ${objectId}`);
+  return projectSource.slice(start, end + 5);
+}
+
+function assertProjectMembership(containerId: string, ...memberIds: string[]) {
+  const object = projectObject(containerId);
+  memberIds.forEach((memberId) => assert.match(object, new RegExp(`\\b${memberId}\\b`)));
+}
+
 test("iPhone launch sound runs once per native process and not on foreground resumes", () => {
   assert.match(playerSource, /firstForegroundActivationHandled = false/);
   assert.match(playerSource, /guard isActive, !firstForegroundActivationHandled else \{ return \}/);
@@ -45,10 +59,42 @@ test("watch app sounds on every background-to-foreground activation", () => {
     watchSource,
     /phase == \.inactive[\s\S]*handleEveryForegroundActivation\(isActive: false\)/,
   );
-  assert.match(projectSource, /BremLogicLaunchSoundPlayer\.swift in iPhone Sources/);
-  assert.match(projectSource, /BremLogicLaunchSoundPlayer\.swift in Watch App Sources/);
-  assert.match(projectSource, /brem_open\.wav in Watch Resources/);
+  assertProjectMembership("504EC3001FED79650016851F", "AF1000010000000000000001");
+  assertProjectMembership("AB3000010000000000000001", "AF1000020000000000000002");
+  assertProjectMembership("AB3000030000000000000003", "AF1000030000000000000003");
   assert.equal(fs.existsSync(path.join(process.cwd(), "ios/App/App/brem_open.wav")), true);
+});
+
+test("all Apple sounds and widget products belong to their intended targets", () => {
+  assertProjectMembership(
+    "504EC3021FED79650016851F",
+    "4D22ABEA2AF431CB00220026",
+    "4D22ABEB2AF431CB00220026",
+    "4D22ABEC2AF431CB00220026",
+    "4D22ABED2AF431CB00220026",
+    "4D22ABEE2AF431CB00220026",
+  );
+  assertProjectMembership("504EC3031FED79650016851F", "AA3000010000000000000001", "AB3000080000000000000008");
+  assertProjectMembership("AB5000010000000000000001", "AB3000040000000000000004");
+  assertProjectMembership("AC5000010000000000000001", "AD3000040000000000000004");
+  assertProjectMembership("AA3000010000000000000001", "AA1000040000000000000004");
+  assertProjectMembership("AB3000040000000000000004", "AB1000070000000000000007");
+  assertProjectMembership("AB3000080000000000000008", "AB1000080000000000000008");
+  assertProjectMembership("AD3000040000000000000004", "AD1000060000000000000006");
+
+  for (const sound of ["brem_approval.wav", "brem_open.wav", "brem_signal.wav", "brem_sl.wav", "brem_tp.wav"]) {
+    assert.equal(fs.existsSync(path.join(process.cwd(), "ios/App/App", sound)), true, `Missing ${sound}`);
+  }
+  for (const widgetFile of [
+    "ios/App/BremLogicWidgetExtension/BremLogicWidget.swift",
+    "ios/App/BremLogicWatchWidgetExtension/BremLogicWatchWidget.swift",
+    "ios/App/BremLogicMacWidgetExtension/BremLogicMacWidget.swift",
+  ]) {
+    assert.equal(fs.existsSync(path.join(process.cwd(), widgetFile)), true, `Missing ${widgetFile}`);
+  }
+
+  assert.match(projectSource, /PRODUCT_BUNDLE_IDENTIFIER = com\.bremlogic\.signalsbot\.macos\.widget;/);
+  assert.doesNotMatch(projectSource, /com\.bremlogic\.signalsbot\.macos\.widget\.hourly/);
 });
 
 test("WebView startup cannot double-play the native opening sound", () => {
