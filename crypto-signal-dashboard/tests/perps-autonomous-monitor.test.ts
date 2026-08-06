@@ -452,6 +452,112 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   assert.ok(Math.abs(stopLossRoe - SCALP_STOP_LOSS_ROE_PERCENT) < 0.01);
 });
 
+test("three-trade scalp experiment executes the exact opposite direction and counts only submissions", async () => {
+  const points = exceptionalBullishSweepPoints();
+  let routedSignal: PerpsAgentSignal | null = null;
+  let recordedTrades = 0;
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+    getDirectionExperiment: async () => ({
+      experimentId: "inverse-test",
+      baselineProfileId: "baseline-test",
+      enabled: true,
+      maxTrades: 3,
+      tradesCompleted: 0,
+      tradesRemaining: 3,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    }),
+    recordDirectionExperimentTrade: async () => {
+      recordedTrades += 1;
+      return {
+        experimentId: "inverse-test",
+        baselineProfileId: "baseline-test",
+        enabled: true,
+        maxTrades: 3,
+        tradesCompleted: 1,
+        tradesRemaining: 2,
+        startedAt: new Date().toISOString(),
+        completedAt: null,
+      };
+    },
+  });
+
+  const routed = routedSignal as PerpsAgentSignal | null;
+  const entry = routed?.marketContext?.spotPrice ?? 0;
+  assert.equal(routed?.strategyClass, "scalp");
+  assert.equal(routed?.strategyContext?.detectedDirection, "bullish");
+  assert.equal(routed?.direction, "bearish");
+  assert.equal(routed?.strategyContext?.directionInverted, true);
+  assert.equal(routed?.strategyContext?.directionExperimentId, "inverse-test");
+  assert.equal(routed?.strategyContext?.directionExperimentTradeNumber, 1);
+  assert.ok((routed?.takeProfitPrice ?? Number.POSITIVE_INFINITY) < entry);
+  assert.ok((routed?.stopLossPrice ?? 0) > entry);
+  assert.equal(recordedTrades, 1);
+  assert.match(result.results[0]?.message ?? "", /1\/3 submitted, 2 remaining/);
+});
+
+test("opposite-direction experiment does not consume a trade when routing is rejected", async () => {
+  const points = exceptionalBullishSweepPoints();
+  let recordedTrades = 0;
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => ({ ok: false, code: "NOT_EXECUTED", message: "rejected" })) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+    getDirectionExperiment: async () => ({
+      experimentId: "inverse-test",
+      baselineProfileId: "baseline-test",
+      enabled: true,
+      maxTrades: 3,
+      tradesCompleted: 0,
+      tradesRemaining: 3,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    }),
+    recordDirectionExperimentTrade: async () => {
+      recordedTrades += 1;
+      return null;
+    },
+  });
+
+  assert.equal(recordedTrades, 0);
+});
+
 test("monitor pauses scalp entries while the winner-derived profile fails validation", async () => {
   const points = exceptionalBullishSweepPoints();
   const base = createConfig();
@@ -536,6 +642,56 @@ test("a successfully taken smart trade turns Scalp Mode off after routing", asyn
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(disabledWallet, walletAddress);
   assert.equal(routedStrategy, "smart");
+});
+
+test("an active opposite-direction experiment waits for scalp and suppresses Smart entries", async () => {
+  let routeCalls = 0;
+  let disableCalls = 0;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    disableScalpMode: async () => {
+      disableCalls += 1;
+      return null;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+    getDirectionExperiment: async () => ({
+      experimentId: "inverse-test",
+      baselineProfileId: "baseline-test",
+      enabled: true,
+      maxTrades: 3,
+      tradesCompleted: 0,
+      tradesRemaining: 3,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+    }),
+  });
+
+  assert.equal(result.results[0]?.code, "NO_SIGNAL");
+  assert.match(result.results[0]?.message ?? "", /waiting for a qualifying scalp setup/i);
+  assert.match(result.results[0]?.message ?? "", /0\/3 submitted, 3 remaining/);
+  assert.equal(routeCalls, 0);
+  assert.equal(disableCalls, 0);
 });
 
 test("a generated smart signal that is skipped leaves Scalp Mode enabled", async () => {

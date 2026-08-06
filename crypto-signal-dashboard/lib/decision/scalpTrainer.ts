@@ -121,7 +121,7 @@ export function createProfitableScalpBaseline(
   allScalpOutcomes: TradeLearningOutcome[]
 ): ScalpLearningProfile {
   const ordered = allScalpOutcomes
-    .filter((outcome) => outcome.signalType === "scalp")
+    .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
   const compatibleOffset = Math.min(current?.policyOutcomeOffset ?? ordered.length, ordered.length);
   const compatibleOutcomes = ordered.slice(compatibleOffset);
@@ -242,7 +242,7 @@ export function updateScalpLearningProfile(
   allScalpOutcomes: TradeLearningOutcome[]
 ): ScalpLearningProfile {
   const ordered = allScalpOutcomes
-    .filter((outcome) => outcome.signalType === "scalp")
+    .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
   if (!current || current.policyVersion !== SCALP_POLICY_VERSION) {
     return createProfitableScalpBaseline(current, ordered);

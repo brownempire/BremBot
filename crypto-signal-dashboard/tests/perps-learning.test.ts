@@ -295,6 +295,72 @@ test("operator activation re-enables a conservative winner-derived scalp baselin
   assert.match(profile.validation.reasons[0] ?? "", /operator activated/i);
 });
 
+test("opposite-direction experiment outcomes stay auditable without corrupting normal scalp learning", async () => {
+  const scalpTrainer = await import("../lib/decision/scalpTrainer");
+  const scalpEngine = await import("../lib/perps/scalpEngine");
+  const baseline = structuredClone(scalpEngine.DEFAULT_SCALP_LEARNING_PROFILE);
+  baseline.learnedFromClosedTrades = 0;
+  baseline.policyOutcomeOffset = 0;
+  const inverted = learningTypes.tradeLearningOutcomeSchema.parse({
+    outcomeId: "inverse-outcome",
+    reconciliationVersion: 2,
+    trainingEligible: true,
+    walletAddress: "inverse-wallet",
+    executionId: "inverse-execution",
+    decisionId: "inverse-decision",
+    signalId: "inverse-signal",
+    asset: "SOL",
+    side: "short",
+    openedAt: "2026-08-06T00:00:00.000Z",
+    closedAt: "2026-08-06T00:30:00.000Z",
+    positionPubkey: "inverse-position",
+    entryPrice: 100,
+    exitPrice: 99,
+    collateralUsd: 10,
+    sizeUsd: 500,
+    leverage: 50,
+    takeProfitPrice: 99,
+    stopLossPrice: 101,
+    grossPnlUsd: 1.2,
+    feesUsd: 0.2,
+    netPnlUsd: 1,
+    returnOnCollateralPercent: 10,
+    durationMinutes: 30,
+    exitReason: "take-profit",
+    signalConfidence: 0.86,
+    signalType: "scalp",
+    trendWindow: 25,
+    trendThreshold: 1.65,
+    breakoutPercent: 0.35,
+    cooldownSeconds: 1_500,
+    trendStrengthPercent: 0.1,
+    breakoutStrengthPercent: 0.1,
+    volatilityPercent: 1,
+    atrPercent: 0.1,
+    indicatorScore: 4.3,
+    rsi: 35,
+    adx: 16,
+    volumeRatio: 1.5,
+    bollingerPosition: 0,
+    scalpSetupType: "range-reversal",
+    priceActionScore: 0.86,
+    priceActionTags: ["SCALP_RANGE_LOW", "OPPOSITE_DIRECTION_EXPERIMENT"],
+    detectedDirection: "bullish",
+    directionInverted: true,
+    directionExperimentId: "inverse-test",
+    directionExperimentTradeNumber: 1,
+    trendBias: "sideways",
+    createdAt: "2026-08-06T00:30:01.000Z",
+  });
+
+  const updated = scalpTrainer.updateScalpLearningProfile(baseline, [inverted]);
+
+  assert.equal(updated.learnedFromClosedTrades, 0);
+  assert.equal(updated.minimumConfidence, baseline.minimumConfidence);
+  assert.equal(updated.preferredDirection, baseline.preferredDirection);
+  assert.equal(inverted.directionExperimentTradeNumber, 1);
+});
+
 test("automatic training migrates a legacy active profile before applying new outcomes", async () => {
   const walletAddress = "learning-wallet-legacy-migration";
   const seeded = await trainer.trainWalletDecisionProfile({

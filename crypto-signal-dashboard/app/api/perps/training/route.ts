@@ -1,12 +1,17 @@
 import { getActiveDecisionLearningProfile, listDecisionLearningProfileHistory, listTradeLearningOutcomes } from "@/lib/decision/learningStore";
 import { listTradeDecisionRecords } from "@/lib/decision/logStore";
 import { reconcileTradeLearningOutcomes } from "@/lib/decision/outcomeReconciler";
-import { resetWalletScalpToProfitableProfile, trainWalletDecisionProfile } from "@/lib/decision/trainer";
+import {
+  resetWalletScalpToLastOperatorBaseline,
+  resetWalletScalpToProfitableProfile,
+  trainWalletDecisionProfile,
+} from "@/lib/decision/trainer";
 import { fetchJupiterPerpsAccountSnapshot, fetchJupiterPerpsTradeHistory } from "@/lib/jupiterPerps";
 import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
+import { startScalpDirectionExperiment } from "@/lib/perps/scalpDirectionExperiment";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 55;
@@ -30,6 +35,25 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json().catch(() => null) as { action?: string } | null;
+    if (body?.action === "start-opposite-scalp-experiment") {
+      const config = await getPerpsAutomationConfig(walletAddress);
+      if (!config?.settings.scalpModeEnabled) {
+        throw new Error("Enable Scalp Mode before starting the opposite-direction experiment.");
+      }
+      if (config.settings.disableTpLock) {
+        throw new Error("Enable the staircase profit lock before starting the opposite-direction experiment.");
+      }
+      const reset = await resetWalletScalpToLastOperatorBaseline({
+        walletAddress,
+        source: "manual-training",
+      });
+      const experiment = await startScalpDirectionExperiment({
+        walletAddress,
+        baselineProfileId: reset.profile.profileId,
+        maxTrades: 3,
+      });
+      return Response.json({ reset, experiment }, { headers: { "Cache-Control": "no-store" } });
+    }
     if (body?.action === "reset-profitable-scalp") {
       const result = await resetWalletScalpToProfitableProfile({
         walletAddress,

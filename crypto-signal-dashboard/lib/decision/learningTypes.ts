@@ -64,6 +64,10 @@ export const tradeLearningOutcomeSchema = z.object({
   scalpSetupType: scalpSetupTypeSchema.nullable().optional(),
   priceActionScore: z.number().finite().min(0).max(1).nullable().optional(),
   priceActionTags: z.array(z.string().trim().min(1)).optional(),
+  detectedDirection: z.enum(["bullish", "bearish"]).optional(),
+  directionInverted: z.boolean().optional(),
+  directionExperimentId: z.string().trim().min(1).optional(),
+  directionExperimentTradeNumber: z.number().int().min(1).max(10).optional(),
   trendBias: z.enum(["bullish", "bearish", "sideways"]).nullable(),
   createdAt: z.string().datetime(),
 });

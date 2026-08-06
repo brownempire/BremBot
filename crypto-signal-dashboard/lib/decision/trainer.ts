@@ -68,6 +68,51 @@ export async function resetWalletScalpToProfitableProfile(input: {
   };
 }
 
+export async function resetWalletScalpToLastOperatorBaseline(input: {
+  walletAddress: string;
+  source: "manual-training";
+}) {
+  const [active, history] = await Promise.all([
+    getActiveDecisionLearningProfile(input.walletAddress),
+    listDecisionLearningProfileHistory(input.walletAddress),
+  ]);
+  if (!active) throw new Error("No active learning profile is available to preserve Smart Trade settings.");
+  const baseline = history
+    .filter((profile) => {
+      const scalp = profile.scalpProfile;
+      return Boolean(
+        scalp?.operatorActivation
+        && scalp.learnedFromClosedTrades === scalp.operatorActivation.baselineOutcomeCount
+      );
+    })
+    .sort((left, right) => right.version - left.version)[0] ?? null;
+  if (!baseline?.scalpProfile) {
+    throw new Error("No previous operator-activated profitable scalp baseline is available.");
+  }
+  const version = Math.max(active.version, ...history.map((profile) => profile.version)) + 1;
+  const scalpProfile = structuredClone(baseline.scalpProfile);
+  scalpProfile.consecutiveLosses = 0;
+  const next = {
+    ...active,
+    profileId: `learn_${crypto.randomUUID()}`,
+    version,
+    status: "candidate" as const,
+    source: input.source,
+    createdAt: new Date().toISOString(),
+    promotedAt: null,
+    scalpProfile,
+    summary: `${active.summary} Scalp learning was restored to operator baseline ${baseline.profileId}; Smart settings were preserved.`,
+  } satisfies DecisionLearningProfile;
+  const profile = await saveDecisionLearningProfile(next, true);
+  return {
+    profile,
+    activated: true,
+    restoredFromProfileId: baseline.profileId,
+    baselineOutcomeCount: scalpProfile.operatorActivation?.baselineOutcomeCount
+      ?? scalpProfile.policyOutcomeOffset,
+  };
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }

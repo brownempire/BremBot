@@ -220,6 +220,10 @@ export async function reconcileTradeLearningOutcomes(input: {
       scalpSetupType: strategy?.scalpSetupType ?? null,
       priceActionScore: strategy?.priceActionScore ?? null,
       priceActionTags: strategy?.priceActionTags ?? [],
+      detectedDirection: strategy?.detectedDirection,
+      directionInverted: strategy?.directionInverted,
+      directionExperimentId: strategy?.directionExperimentId,
+      directionExperimentTradeNumber: strategy?.directionExperimentTradeNumber,
       trendBias: decision?.payload.marketContext.trendBias ?? null,
       createdAt: new Date().toISOString(),
     });

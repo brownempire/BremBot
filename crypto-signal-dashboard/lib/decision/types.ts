@@ -66,6 +66,10 @@ export const tradeDecisionPayloadSchema = z.object({
     priceActionScore: z.number().finite().min(0).max(1).optional(),
     priceActionTags: z.array(z.string().trim().min(1)).optional(),
     indicatorBypass: z.boolean().optional(),
+    detectedDirection: z.enum(["bullish", "bearish"]).optional(),
+    directionInverted: z.boolean().optional(),
+    directionExperimentId: z.string().trim().min(1).optional(),
+    directionExperimentTradeNumber: z.number().int().min(1).max(10).optional(),
     indicators: z.object({
       emaSpreadPercent: z.number().finite().nullable(),
       emaSlopePercent: z.number().finite().nullable(),

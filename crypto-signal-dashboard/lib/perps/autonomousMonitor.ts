@@ -21,6 +21,10 @@ import { routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
 import { listUserPerpsExecutions, reconcileUserExecutionsWithoutOpenPosition } from "@/lib/perps/userExecutionAudit";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
 import {
+  getScalpDirectionExperiment,
+  recordScalpDirectionExperimentTrade,
+} from "@/lib/perps/scalpDirectionExperiment";
+import {
   fetchJupiterPerpsAccountSnapshot,
   fetchJupiterPerpsTradeHistory,
   type JupiterPerpsPosition,
@@ -125,6 +129,8 @@ type MonitorDependencies = {
   clearProfitLockState: (walletAddress: string) => Promise<void>;
   readLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass) => Promise<number | null>;
   writeLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass, timestamp: number) => Promise<void>;
+  getDirectionExperiment: typeof getScalpDirectionExperiment;
+  recordDirectionExperimentTrade: typeof recordScalpDirectionExperimentTrade;
 };
 
 const defaultDependencies: MonitorDependencies = {
@@ -234,6 +240,8 @@ const defaultDependencies: MonitorDependencies = {
       : `${walletAddress}:${asset}`;
     await redis.hSet(LAST_SIGNAL_KEY, cursorKey, String(timestamp));
   },
+  getDirectionExperiment: getScalpDirectionExperiment,
+  recordDirectionExperimentTrade: recordScalpDirectionExperimentTrade,
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -607,9 +615,27 @@ export async function runAutonomousPerpsMonitor(
               : null,
           })
         : null;
-      const signal = smartEligible ? smartSignal! : scalpSignal;
-      const strategyClass = smartEligible ? "smart" as const : "scalp" as const;
+      const directionExperiment = await deps.getDirectionExperiment(config.walletAddress);
+      const directionExperimentActive = Boolean(
+        directionExperiment?.enabled
+        && directionExperiment.tradesRemaining > 0
+      );
+      const signal = directionExperimentActive
+        ? scalpSignal
+        : smartEligible ? smartSignal! : scalpSignal;
+      const strategyClass = directionExperimentActive
+        ? "scalp" as const
+        : smartEligible ? "smart" as const : "scalp" as const;
       if (!signal) {
+        if (directionExperimentActive && directionExperiment) {
+          results.push(skip(
+            config,
+            asset,
+            "NO_SIGNAL",
+            `Opposite-direction scalp experiment is waiting for a qualifying scalp setup; ${directionExperiment.tradesCompleted}/${directionExperiment.maxTrades} submitted, ${directionExperiment.tradesRemaining} remaining.`
+          ));
+          continue;
+        }
         if (smartSignal && !smartEligible) {
           await deps.writeLastSignal(config.walletAddress, asset, "smart", smartSignal.timestamp);
         }
@@ -702,7 +728,18 @@ export async function runAutonomousPerpsMonitor(
         ));
         continue;
       }
-      const side = signal.direction === "bullish" ? "long" : "short";
+      const invertDirection = Boolean(
+        strategyClass === "scalp"
+        && directionExperimentActive
+      );
+      const detectedDirection = signal.direction;
+      const executionDirection = invertDirection
+        ? detectedDirection === "bullish" ? "bearish" as const : "bullish" as const
+        : detectedDirection;
+      const experimentTradeNumber = invertDirection && directionExperiment
+        ? directionExperiment.tradesCompleted + 1
+        : null;
+      const side = executionDirection === "bullish" ? "long" : "short";
       const entryPrice = windowPoints[windowPoints.length - 1]?.v ?? 0;
       const scalpExitPlan = strategyClass === "scalp"
         ? computePercentageScalpExitPlan({
@@ -727,8 +764,10 @@ export async function runAutonomousPerpsMonitor(
       const routed = await deps.routeSignal(config.walletAddress, {
         signalId: signal.id,
         symbol: signal.symbol,
-        summary: `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
-        direction: signal.direction,
+        summary: invertDirection
+          ? `Opposite-direction scalp experiment ${experimentTradeNumber}/${directionExperiment?.maxTrades}: detector selected ${detectedDirection === "bullish" ? "long" : "short"}; executing ${side}. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+          : `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
+        direction: executionDirection,
         signalConfidence: signal.confidence,
         asset,
         collateralUsd,
@@ -755,8 +794,14 @@ export async function runAutonomousPerpsMonitor(
           indicatorTags: indicatorsReady ? indicatorScore.tags : ["INDICATOR_HISTORY_INCOMPLETE"],
           scalpSetupType: scalpMetadata?.setupType,
           priceActionScore: scalpMetadata?.priceActionScore,
-          priceActionTags: scalpMetadata?.priceActionTags,
+          priceActionTags: invertDirection
+            ? [...(scalpMetadata?.priceActionTags ?? []), "OPPOSITE_DIRECTION_EXPERIMENT"]
+            : scalpMetadata?.priceActionTags,
           indicatorBypass: scalpMetadata?.indicatorBypass,
+          detectedDirection: invertDirection ? detectedDirection : undefined,
+          directionInverted: invertDirection || undefined,
+          directionExperimentId: invertDirection ? directionExperiment?.experimentId : undefined,
+          directionExperimentTradeNumber: experimentTradeNumber ?? undefined,
           indicators: {
             emaSpreadPercent: indicators.emaSpreadPercent,
             emaSlopePercent: indicators.emaSlopePercent,
@@ -784,6 +829,9 @@ export async function runAutonomousPerpsMonitor(
         },
       });
       await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+      const updatedExperiment = routed.ok && invertDirection
+        ? await deps.recordDirectionExperimentTrade(config.walletAddress)
+        : null;
       if (routed.ok && strategyClass === "smart" && config.settings.scalpModeEnabled) {
         await deps.disableScalpMode(config.walletAddress);
       }
@@ -792,7 +840,9 @@ export async function runAutonomousPerpsMonitor(
         asset,
         status: routed.ok ? "executed" : "skipped",
         code: "code" in routed && typeof routed.code === "string" ? routed.code : routed.ok ? "EXECUTED" : "NOT_EXECUTED",
-        message: routed.message,
+        message: updatedExperiment
+          ? `${routed.message} Opposite-direction scalp experiment: ${updatedExperiment.tradesCompleted}/${updatedExperiment.maxTrades} submitted, ${updatedExperiment.tradesRemaining} remaining.`
+          : routed.message,
         signalId: signal.id,
       });
     } catch (error) {
