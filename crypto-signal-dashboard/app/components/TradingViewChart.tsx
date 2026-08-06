@@ -31,9 +31,21 @@ type DrawingShapeApi = {
   setUserEditEnabled?: (enabled: boolean) => void;
 };
 
+type ChartPaneApi = {
+  collapse?: () => void;
+  restore?: () => void;
+  isCollapsed?: () => boolean;
+  hasMainSeries?: () => boolean;
+  setHeight?: (height: number) => void;
+  moveTo?: (paneIndex: number) => void;
+  paneIndex?: () => number;
+};
+
 type WidgetChart = {
   onIntervalChanged?: () => IntervalSubscription;
   resolution?: () => string;
+  setResolution?: (resolution: string, callback?: () => void) => void;
+  getPanes?: () => ChartPaneApi[];
   createShape?: (
     point: ShapePoint,
     options: Record<string, unknown>
@@ -91,6 +103,22 @@ const DEFAULT_INTERVAL = "15";
 const DEFAULT_FAVORITE_INTERVALS = ["1", "5", "15", "60", "360", "1D"];
 let scriptLoadingPromise: Promise<void> | null = null;
 
+function safelyRemoveEntity(chart: WidgetChart | null | undefined, id: string) {
+  try {
+    chart?.removeEntity?.(id);
+  } catch {
+    // TradingView can invalidate its chart API before React finishes effect cleanup.
+  }
+}
+
+function safelyRemoveWidget(widget: WidgetApi | null | undefined) {
+  try {
+    widget?.remove?.();
+  } catch {
+    // A detached iOS WebView iframe is already removed for our purposes.
+  }
+}
+
 function loadTradingViewScript() {
   if (window.TradingView?.widget) return Promise.resolve();
   if (scriptLoadingPromise) return scriptLoadingPromise;
@@ -147,6 +175,7 @@ export function TradingViewChart({
   const widgetRef = useRef<WidgetApi | null>(null);
   const shapeIdsRef = useRef<string[]>([]);
   const scalpMarkerIdsRef = useRef<string[]>([]);
+  const scalpStudyIdsRef = useRef<string[]>([]);
   const scalpOverlayEnabledRef = useRef(scalpOverlayEnabled);
   const shapeGuideByIdRef = useRef(new Map<string, PositionOverlayGuide>());
   const shapeIdByGuideIdRef = useRef(new Map<string, string>());
@@ -155,6 +184,7 @@ export function TradingViewChart({
   const drawingEventHandlerRef = useRef<(id: string, type: string) => void>(() => undefined);
   const guidesRef = useRef(guides);
   const [chartReadyVersion, setChartReadyVersion] = useState(0);
+  const [isChartLoading, setIsChartLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isAppFullscreen, setIsAppFullscreen] = useState(false);
   const [guideEditor, setGuideEditor] = useState<GuideEditorState | null>(null);
@@ -162,12 +192,28 @@ export function TradingViewChart({
   const [chartResolution, setChartResolution] = useState(DEFAULT_INTERVAL);
   const [scalpSnapshot, setScalpSnapshot] = useState<ScalpAgentOverlaySnapshot | null>(null);
   const [scalpOverlayError, setScalpOverlayError] = useState<string | null>(null);
+  const [indicatorPanesCollapsed, setIndicatorPanesCollapsed] = useState(false);
   scalpOverlayEnabledRef.current = scalpOverlayEnabled;
   guidesRef.current = guides;
 
   const guideSignature = validOverlayGuides(guides)
     .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}:${guide.editable ? 1 : 0}:${guide.estimatedNetPnlUsd ?? ""}:${guide.pnlPerPriceUnit ?? ""}`)
     .join("|");
+
+  function setIndicatorPanesCollapsedState(collapsed: boolean) {
+    const chart = widgetRef.current?.activeChart?.();
+    const indicatorPanes = chart?.getPanes?.().filter((pane) => !pane.hasMainSeries?.()) ?? [];
+    indicatorPanes.forEach((pane) => {
+      try {
+        if (collapsed) pane.collapse?.();
+        else pane.restore?.();
+      } catch {
+        // A pane may disappear while the overlay is being removed.
+      }
+    });
+    setIndicatorPanesCollapsed(collapsed);
+    window.requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  }
 
   function shapeForGuide(guideId: string) {
     const shapeId = shapeIdByGuideIdRef.current.get(guideId);
@@ -228,7 +274,8 @@ export function TradingViewChart({
       const container = document.getElementById(containerId);
       if (!container) return;
 
-      widgetRef.current?.remove?.();
+      setIsChartLoading(true);
+      safelyRemoveWidget(widgetRef.current);
       widgetRef.current = null;
       container.replaceChildren();
       setLoadError(null);
@@ -245,7 +292,7 @@ export function TradingViewChart({
           datafeed: createBremLogicDatafeed(),
           library_path: LIBRARY_PATH,
           symbol,
-          interval: scalpOverlayEnabled ? "1" : storedInterval,
+          interval: storedInterval,
           favorites: {
             intervals: DEFAULT_FAVORITE_INTERVALS,
           },
@@ -258,11 +305,16 @@ export function TradingViewChart({
             "header_saveload",
             "header_symbol_search",
             "symbol_search_hot_key",
-            ...(scalpOverlayEnabled ? ["use_localstorage_for_settings", "save_chart_properties_to_local_storage"] : []),
           ],
-          enabled_features: scalpOverlayEnabled
-            ? []
-            : ["use_localstorage_for_settings", "save_chart_properties_to_local_storage"],
+          enabled_features: [
+            "use_localstorage_for_settings",
+            "save_chart_properties_to_local_storage",
+            "display_legend_on_all_charts",
+            "edit_buttons_in_legend",
+            "show_hide_button_in_legend",
+            "pane_context_menu",
+            "legend_context_menu",
+          ],
           time_frames: [
             { text: "1d", resolution: "5", description: "1 Day" },
             { text: "5d", resolution: "15", description: "5 Days" },
@@ -291,6 +343,7 @@ export function TradingViewChart({
         widgetRef.current = widget;
         const handleChartReady = () => {
           if (cancelled) return;
+          setIsChartLoading(false);
           setChartReadyVersion((version) => version + 1);
           const chart = widget.activeChart?.();
           const currentResolution = chart?.resolution?.();
@@ -305,44 +358,12 @@ export function TradingViewChart({
               if (!scalpOverlayEnabledRef.current) window.localStorage.setItem(INTERVAL_STORAGE_KEY, interval);
             }
           });
-          if (scalpOverlayEnabled && chart?.createStudy) {
-            const createStudy = async (
-              names: string[],
-              forceOverlay: boolean,
-              inputs: Record<string, unknown>,
-              overrides: Record<string, unknown> = {}
-            ) => {
-              for (const name of names) {
-                try {
-                  const id = await chart.createStudy?.(name, forceOverlay, false, inputs, overrides, {
-                    disableSave: true,
-                    disableUndo: true,
-                  });
-                  if (id) return;
-                } catch {
-                  // Licensed Advanced Charts releases can expose a fallback study name.
-                }
-              }
-            };
-            void (async () => {
-              await createStudy(["Moving Average Exponential", "EMA"], true, { length: 9 }, { "plot.color": "#39dca0", "plot.linewidth": 2 });
-              await createStudy(["Moving Average Exponential", "EMA"], true, { length: 21 }, { "plot.color": "#4c8dff", "plot.linewidth": 2 });
-              await createStudy(["Bollinger Bands", "BB"], true, { length: 20, mult: 2 }, {
-                "upper.color": "rgba(185, 122, 255, 0.78)",
-                "lower.color": "rgba(185, 122, 255, 0.78)",
-                "basis.color": "rgba(185, 122, 255, 0.38)",
-              });
-              await createStudy(["Relative Strength Index", "RSI"], false, { length: 14 }, { "plot.color": "#e1b855" });
-              await createStudy(["Directional Movement", "Average Directional Index", "ADX"], false, { length: 14 }, {
-                "ADX.color": "#ff9d5c",
-                "+DI.color": "#39dca0",
-                "-DI.color": "#ff647c",
-              });
-              await createStudy(["Volume"], false, { length: 20 });
-            })();
-          }
           if (drawingEventCallbackRef.current) {
-            widget.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+            try {
+              widget.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+            } catch {
+              // Ignore a stale TradingView event bridge during native navigation.
+            }
           }
           const drawingEventCallback = (id: string, type: string) => {
             drawingEventHandlerRef.current(String(id), String(type));
@@ -359,6 +380,7 @@ export function TradingViewChart({
         }
       } catch (error) {
         if (cancelled) return;
+        setIsChartLoading(false);
         const message =
           error instanceof Error ? error.message : "TradingView Advanced Charts failed to load";
         setLoadError(message);
@@ -370,16 +392,120 @@ export function TradingViewChart({
     return () => {
       cancelled = true;
       shapeIdsRef.current = [];
+      scalpMarkerIdsRef.current = [];
+      scalpStudyIdsRef.current = [];
       shapeGuideById.clear();
       shapeIdByGuideId.clear();
       if (drawingEventCallbackRef.current) {
-        widgetRef.current?.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+        try {
+          widgetRef.current?.unsubscribe?.("drawing_event", drawingEventCallbackRef.current);
+        } catch {
+          // Ignore teardown after the native WebView detached the chart frame.
+        }
         drawingEventCallbackRef.current = null;
       }
-      widgetRef.current?.remove?.();
+      safelyRemoveWidget(widgetRef.current);
       widgetRef.current = null;
     };
-  }, [containerId, scalpOverlayEnabled, symbol]);
+  }, [containerId, symbol]);
+
+  useEffect(() => {
+    const chart = widgetRef.current?.activeChart?.();
+    if (!chart || chartReadyVersion === 0) return;
+    let cancelled = false;
+
+    const removeStudies = () => {
+      scalpStudyIdsRef.current.forEach((id) => safelyRemoveEntity(chart, id));
+      scalpStudyIdsRef.current = [];
+      window.requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+    };
+
+    removeStudies();
+    const currentResolution = chart.resolution?.();
+    if (!scalpOverlayEnabled) {
+      setIndicatorPanesCollapsed(false);
+      const storedInterval = window.localStorage.getItem(INTERVAL_STORAGE_KEY) ?? DEFAULT_INTERVAL;
+      if (currentResolution === "1" && storedInterval !== "1") {
+        try {
+          chart.setResolution?.(storedInterval);
+        } catch {
+          // Keep the current candle view if this licensed chart build cannot restore it.
+        }
+      }
+      return removeStudies;
+    }
+
+    if (currentResolution && currentResolution !== "1") {
+      window.localStorage.setItem(INTERVAL_STORAGE_KEY, currentResolution);
+    }
+    if (currentResolution !== "1") {
+      try {
+        chart.setResolution?.("1");
+      } catch {
+        // The status strip still identifies the exact timeframe if switching is unavailable.
+      }
+    }
+
+    const createStudy = async (
+      names: string[],
+      forceOverlay: boolean,
+      inputs: Record<string, unknown>,
+      overrides: Record<string, unknown> = {}
+    ) => {
+      for (const name of names) {
+        try {
+          const id = await chart.createStudy?.(name, forceOverlay, false, inputs, overrides, {
+            disableSave: true,
+            disableUndo: true,
+          });
+          if (!id) continue;
+          if (cancelled || !scalpOverlayEnabledRef.current) {
+            safelyRemoveEntity(chart, String(id));
+          } else {
+            scalpStudyIdsRef.current.push(String(id));
+          }
+          return;
+        } catch {
+          // Licensed Advanced Charts releases can expose a fallback study name.
+        }
+      }
+    };
+
+    void (async () => {
+      await createStudy(["Moving Average Exponential", "EMA"], true, { length: 9 }, { "plot.color": "#39dca0", "plot.linewidth": 2 });
+      await createStudy(["Moving Average Exponential", "EMA"], true, { length: 21 }, { "plot.color": "#4c8dff", "plot.linewidth": 2 });
+      await createStudy(["Bollinger Bands", "BB"], true, { length: 20, mult: 2 }, {
+        "upper.color": "rgba(185, 122, 255, 0.78)",
+        "lower.color": "rgba(185, 122, 255, 0.78)",
+        "basis.color": "rgba(185, 122, 255, 0.38)",
+      });
+      await createStudy(["Relative Strength Index", "RSI"], false, { length: 14 }, { "plot.color": "#e1b855" });
+      await createStudy(["Directional Movement", "Average Directional Index", "ADX"], false, { length: 14 }, {
+        "ADX.color": "#ff9d5c",
+        "+DI.color": "#39dca0",
+        "-DI.color": "#ff647c",
+      });
+      await createStudy(["Volume"], false, { length: 20 });
+      if (!cancelled) {
+        const indicatorPanes = chart.getPanes?.().filter((pane) => !pane.hasMainSeries?.()) ?? [];
+        indicatorPanes.forEach((pane) => {
+          try {
+            pane.restore?.();
+            pane.setHeight?.(92);
+          } catch {
+            // The user can still resize the pane manually if this build rejects a default height.
+          }
+        });
+        setIndicatorPanesCollapsed(false);
+        window.requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      removeStudies();
+    };
+  }, [chartReadyVersion, scalpOverlayEnabled]);
 
   useEffect(() => {
     if (!scalpOverlayEnabled || !scalpOverlayAuthToken) {
@@ -418,7 +544,7 @@ export function TradingViewChart({
   useEffect(() => {
     const chart = widgetRef.current?.activeChart?.();
     const removeMarkers = () => {
-      scalpMarkerIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
+      scalpMarkerIdsRef.current.forEach((id) => safelyRemoveEntity(chart, id));
       scalpMarkerIdsRef.current = [];
     };
     removeMarkers();
@@ -449,7 +575,7 @@ export function TradingViewChart({
             }
           );
           if (!id) continue;
-          if (cancelled) chart.removeEntity?.(id);
+          if (cancelled) safelyRemoveEntity(chart, String(id));
           else created.push(String(id));
         } catch {
           // Keep native studies/status available if one historical marker cannot be drawn.
@@ -460,7 +586,7 @@ export function TradingViewChart({
     void addMarkers();
     return () => {
       cancelled = true;
-      created.forEach((id) => chart.removeEntity?.(id));
+      created.forEach((id) => safelyRemoveEntity(chart, id));
       removeMarkers();
     };
   }, [chartReadyVersion, scalpOverlayEnabled, scalpSnapshot]);
@@ -470,7 +596,7 @@ export function TradingViewChart({
     const chart = widgetRef.current?.activeChart?.();
 
     const removeShapes = () => {
-      shapeIdsRef.current.forEach((id) => chart?.removeEntity?.(id));
+      shapeIdsRef.current.forEach((id) => safelyRemoveEntity(chart, id));
       shapeIdsRef.current = [];
       shapeGuideByIdRef.current.clear();
       shapeIdByGuideIdRef.current.clear();
@@ -527,7 +653,7 @@ export function TradingViewChart({
             shape?.setUserEditEnabled?.(false);
           }
           if (cancelled) {
-            chart.removeEntity(id);
+            safelyRemoveEntity(chart, String(id));
           } else {
             created.push(id);
           }
@@ -536,7 +662,7 @@ export function TradingViewChart({
           shapeIdsRef.current = created;
         }
       } catch {
-        created.forEach((id) => chart.removeEntity?.(id));
+        created.forEach((id) => safelyRemoveEntity(chart, String(id)));
       }
     };
 
@@ -632,6 +758,12 @@ export function TradingViewChart({
       data-app-fullscreen={isAppFullscreen ? "true" : "false"}
     >
       <div id={containerId} className="tradingview-container" />
+      {isChartLoading && !loadError ? (
+        <div className="tradingview-loading" role="status" aria-label="Loading TradingView chart">
+          <span className="tradingview-loading-spinner" aria-hidden="true" />
+          <span>Loading chart…</span>
+        </div>
+      ) : null}
       <button
         type="button"
         className={`tradingview-fullscreen-button${isAppFullscreen ? " is-close" : ""}`}
@@ -655,6 +787,16 @@ export function TradingViewChart({
             <span className="scalp-chart-status-dot" aria-hidden="true" />
             <strong>{scalpOverlayError ? "Scalp profile unavailable" : scalpSnapshot?.headline ?? "Loading Scalp Agent…"}</strong>
             <span>1m agent view</span>
+          </div>
+          <div className="scalp-chart-pane-controls">
+            <button
+              type="button"
+              onClick={() => setIndicatorPanesCollapsedState(!indicatorPanesCollapsed)}
+              aria-pressed={indicatorPanesCollapsed}
+            >
+              {indicatorPanesCollapsed ? "Expand indicators" : "Collapse indicators"}
+            </button>
+            <span>Drag pane dividers or use each pane menu to resize and move.</span>
           </div>
           <div className="scalp-chart-status-detail">
             {scalpOverlayError ?? scalpSnapshot?.detail ?? "Loading the learned profile and Coinbase indicator window."}

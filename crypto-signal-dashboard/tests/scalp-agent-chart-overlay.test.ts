@@ -70,13 +70,23 @@ test("a stale scalp policy remains visibly blocked until winner-baseline migrati
   assert.equal(scalpProfileAllowsLiveEntries(resolved), false);
 });
 
-test("TradingView overlay installs the real studies, forces 1m, and draws candidate markers", () => {
+test("TradingView overlay installs and removes studies in place without rebuilding the chart", () => {
   const chart = readFileSync(path.join(projectRoot, "app/components/TradingViewChart.tsx"), "utf8");
   const page = readFileSync(path.join(projectRoot, "app/signals-bot/page.tsx"), "utf8");
   const route = readFileSync(path.join(projectRoot, "app/api/perps/scalp-overlay/route.ts"), "utf8");
 
   assert.match(page, /Scalp Agent <strong>\{scalpOverlayEnabled \? "On" : "Off"\}/);
-  assert.match(chart, /interval: scalpOverlayEnabled \? "1" : storedInterval/);
+  assert.match(chart, /scalpStudyIdsRef/);
+  assert.match(chart, /chart\.setResolution\?\.\("1"\)/);
+  assert.match(chart, /safelyRemoveEntity/);
+  assert.match(chart, /chart\.getPanes\?\.\(\)/);
+  assert.match(chart, /pane\.setHeight\?\.\(92\)/);
+  assert.match(chart, /pane\.collapse\?\.\(\)/);
+  assert.match(chart, /pane\.restore\?\.\(\)/);
+  assert.match(chart, /"pane_context_menu"/);
+  assert.match(chart, /Collapse indicators/);
+  assert.match(chart, /\}, \[containerId, symbol\]\);/);
+  assert.doesNotMatch(chart, /\[containerId, scalpOverlayEnabled, symbol\]/);
   assert.match(chart, /Moving Average Exponential/);
   assert.match(chart, /Bollinger Bands/);
   assert.match(chart, /Relative Strength Index/);
@@ -87,4 +97,20 @@ test("TradingView overlay installs the real studies, forces 1m, and draws candid
   assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 180\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
   assert.match(route, /LAST_SIGNAL_KEY/);
+});
+
+test("native widget navigation keeps the mounted chart and provides a contained loading recovery", () => {
+  const nativeShell = readFileSync(path.join(projectRoot, "app/components/NativeShellConfigurator.tsx"), "utf8");
+  const chart = readFileSync(path.join(projectRoot, "app/components/TradingViewChart.tsx"), "utf8");
+  const boundary = readFileSync(path.join(projectRoot, "app/components/ChartErrorBoundary.tsx"), "utf8");
+  const page = readFileSync(path.join(projectRoot, "app/signals-bot/page.tsx"), "utf8");
+
+  assert.match(nativeShell, /targetUrl\.pathname === window\.location\.pathname/);
+  assert.match(nativeShell, /window\.history\.replaceState/);
+  assert.match(nativeShell, /window\.dispatchEvent\(new Event\("popstate"\)\)/);
+  assert.match(chart, /isChartLoading/);
+  assert.match(chart, /aria-label="Loading TradingView chart"/);
+  assert.match(chart, /safelyRemoveWidget/);
+  assert.match(boundary, /Reconnecting chart/);
+  assert.match(page, /<ChartErrorBoundary>/);
 });

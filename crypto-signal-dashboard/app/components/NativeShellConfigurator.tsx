@@ -79,6 +79,12 @@ export function NativeShellConfigurator() {
       if (!target) return;
       const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       if (current === target) return;
+      const targetUrl = new URL(target, window.location.origin);
+      if (targetUrl.pathname === window.location.pathname) {
+        window.history.replaceState({}, "", target);
+        window.dispatchEvent(new Event("popstate"));
+        return;
+      }
       router.replace(target);
     };
 

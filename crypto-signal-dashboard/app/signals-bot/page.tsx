@@ -33,6 +33,7 @@ import type {
   JupiterPerpsWidgetSnapshot,
 } from "@/app/components/JupiterPerpsPositionWidget";
 import { TradingViewChart } from "@/app/components/TradingViewChart";
+import { ChartErrorBoundary } from "@/app/components/ChartErrorBoundary";
 import {
   buildPositionOverlayGuides,
   summarizePositionOverlayPnl,
@@ -5463,13 +5464,15 @@ function DashboardPage() {
       return (
         <>
           <div className="tradingview-wrap">
-            <TradingViewChart
-              symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
-              guides={positionOverlayEnabled ? selectedChartGuides : []}
-              onModifyGuide={handleChartGuideModify}
-              scalpOverlayEnabled={scalpOverlayEnabled}
-              scalpOverlayAuthToken={remoteAuthToken}
-            />
+            <ChartErrorBoundary>
+              <TradingViewChart
+                symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
+                guides={positionOverlayEnabled ? selectedChartGuides : []}
+                onModifyGuide={handleChartGuideModify}
+                scalpOverlayEnabled={scalpOverlayEnabled}
+                scalpOverlayAuthToken={remoteAuthToken}
+              />
+            </ChartErrorBoundary>
           </div>
         </>
       );
