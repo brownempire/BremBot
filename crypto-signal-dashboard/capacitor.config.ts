@@ -18,7 +18,7 @@ const config: CapacitorConfig = {
     },
   },
   server: {
-    url: "https://app.bremlogic.com/signals-bot?nativeShell=ios",
+    url: "https://app.bremlogic.com/signals-bot?nativeShell=ios&tab=signals",
     cleartext: false,
     allowNavigation: [
       "app.bremlogic.com",

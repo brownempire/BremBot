@@ -6,7 +6,7 @@ import WebKit
 
 @MainActor
 final class BremLogicMacBrowser: NSObject, ObservableObject {
-    private static let homeURL = URL(string: "https://app.bremlogic.com/signals-bot")!
+    private static let homeURL = URL(string: "https://app.bremlogic.com/signals-bot?tab=signals")!
     private static let webViewSchemes: Set<String> = ["about", "blob", "data", "file", "http", "https"]
 
     @Published private(set) var isLoading = true

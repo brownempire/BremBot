@@ -11,7 +11,7 @@ private func bremLogicWidgetTargetURL(_ target: String) -> URL? {
     // scheme. Use the equivalent HTTPS destination there to avoid the system
     // "no application can open this URL" alert.
     if ProcessInfo.processInfo.isiOSAppOnMac {
-        return URL(string: "https://app.bremlogic.com/signals-bot?tab=perps")
+        return URL(string: "https://app.bremlogic.com/signals-bot?tab=signals")
     }
     return URL(string: target)
 }

@@ -135,6 +135,7 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.perpsMode, "Live mode");
   assert.equal(snapshot.perpsExecutionModel, "delegated-ready");
   assert.equal(snapshot.updatedAt, 1_784_205_296);
+  assert.equal(snapshot.targetURL, "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals");
 
   const encoded = JSON.stringify(snapshot);
   assert.doesNotMatch(encoded, /private-owner-address/);

@@ -622,7 +622,7 @@ struct BremLogicMacWidgetEntryView: View {
         .padding(family == .systemSmall ? 5 : family == .systemMedium ? 7 : 9)
         .containerBackground(background, for: .widget)
         .contentShape(Rectangle())
-        .widgetURL(URL(string: "https://app.bremlogic.com/signals-bot?tab=perps"))
+        .widgetURL(URL(string: "https://app.bremlogic.com/signals-bot?tab=signals"))
     }
 }
 

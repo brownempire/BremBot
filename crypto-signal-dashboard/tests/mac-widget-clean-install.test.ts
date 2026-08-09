@@ -34,7 +34,7 @@ test("Mac-compatible widgets refresh all timelines and avoid unsupported custom 
     assert.match(source, /WidgetCenter\.shared\.reloadAllTimelines\(\)/);
   }
   assert.match(iosWidget, /ProcessInfo\.processInfo\.isiOSAppOnMac/);
-  assert.match(iosWidget, /https:\/\/app\.bremlogic\.com\/signals-bot\?tab=perps/);
+  assert.match(iosWidget, /https:\/\/app\.bremlogic\.com\/signals-bot\?tab=signals/);
   assert.match(iosWidget, /\.widgetURL\(bremLogicWidgetTargetURL\(entry\.snapshot\.targetURL\)\)/);
 });
 

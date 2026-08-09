@@ -242,7 +242,7 @@ export function buildWidgetServerSnapshot({
     perpsMode: session?.mode === "live" ? "Live mode" : "Paper mode",
     perpsExecutionModel: session?.executionModel ?? "approval-assisted",
     updatedAt: now.getTime() / 1_000,
-    targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dperps",
+    targetURL: "bremlogic://open?target=%2Fsignals-bot%3Ftab%3Dsignals",
   };
 }
 
