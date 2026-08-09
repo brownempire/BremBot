@@ -6,39 +6,41 @@ import type {
 import type { PricePoint } from "@/lib/price/simulated";
 import type { IndicatorSnapshot } from "@/lib/signal/indicators";
 
-export const SCALP_STANDARD_COOLDOWN_SECONDS = 25 * 60;
+// Operator-selected midpoint between the original scalp profile and the
+// August 5 winner-derived reset profile.
+export const SCALP_STANDARD_COOLDOWN_SECONDS = 42.5 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
 export const SCALP_REVERSAL_MAX_ADX = 40;
 export const SCALP_TRADE_LEVERAGE = 50;
-export const SCALP_POLICY_VERSION = 3;
+export const SCALP_POLICY_VERSION = 4;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   policyVersion: SCALP_POLICY_VERSION,
   policyOutcomeOffset: 0,
   learnedFromClosedTrades: 0,
-  minimumConfidence: 0.62,
+  minimumConfidence: 0.718,
   cooldownSeconds: SCALP_STANDARD_COOLDOWN_SECONDS,
-  longRsiMaximum: 46,
-  shortRsiMinimum: 54,
-  longBollingerMaximum: 0.22,
-  shortBollingerMinimum: 0.78,
-  maximumAdx: 22,
+  longRsiMaximum: 42,
+  shortRsiMinimum: 58,
+  longBollingerMaximum: 0.172,
+  shortBollingerMinimum: 0.8595,
+  maximumAdx: 19.595,
   maximumEmaSpreadPercent: 0.45,
   minimumAtrPercent: 0.02,
   minimumBandwidthPercent: 0.1,
-  minimumVolumeRatio: 0.75,
-  minimumPriceActionScore: 0.56,
-  strongReversalScore: 0.74,
+  minimumVolumeRatio: 1,
+  minimumPriceActionScore: 0.655,
+  strongReversalScore: 0.82,
   minimumSweepPercent: 0.04,
   minimumReclaimPercent: 0.08,
   setupConfidenceAdjustments: {
-    rangeReversal: 0,
-    liquiditySweep: 0,
-    vReversal: 0,
-    doubleReversal: 0,
+    rangeReversal: -0.01,
+    liquiditySweep: 0.0055,
+    vReversal: 0.075,
+    doubleReversal: 0.0095,
   },
-  riskMultiplier: 1,
+  riskMultiplier: 0.75,
   preferredDirection: "balanced",
   consecutiveLosses: 0,
   operatorActivation: null,
@@ -51,7 +53,7 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
     profitFactor: 0,
     maxDrawdownUsd: 0,
     passed: true,
-    reasons: ["Scalp baseline is active while closed scalp outcomes are collected."],
+    reasons: ["The operator-selected median scalp baseline is active while new closed outcomes are collected."],
   },
 };
 

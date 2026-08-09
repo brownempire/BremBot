@@ -128,14 +128,26 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.equal(refreshed.profile.minimumConfidence, 0.71);
   assert.equal(refreshed.profile.preferredDirection, "bearish");
   assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
-  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 3);
-  assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.62);
-  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 3_600);
-  assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.56);
-  assert.equal(refreshed.profile.scalpProfile?.maximumAdx, 22);
-  assert.equal(refreshed.profile.scalpProfile?.riskMultiplier, 0.5);
-  assert.equal(refreshed.profile.scalpProfile?.validation.passed, false);
-  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /winner-derived baseline/i);
+  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 4);
+  assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.718);
+  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 2_550);
+  assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.655);
+  assert.equal(refreshed.profile.scalpProfile?.strongReversalScore, 0.82);
+  assert.equal(refreshed.profile.scalpProfile?.longRsiMaximum, 42);
+  assert.equal(refreshed.profile.scalpProfile?.shortRsiMinimum, 58);
+  assert.equal(refreshed.profile.scalpProfile?.longBollingerMaximum, 0.172);
+  assert.equal(refreshed.profile.scalpProfile?.shortBollingerMinimum, 0.8595);
+  assert.equal(refreshed.profile.scalpProfile?.maximumAdx, 19.595);
+  assert.equal(refreshed.profile.scalpProfile?.minimumVolumeRatio, 1);
+  assert.equal(refreshed.profile.scalpProfile?.riskMultiplier, 0.75);
+  assert.deepEqual(refreshed.profile.scalpProfile?.setupConfidenceAdjustments, {
+    rangeReversal: -0.01,
+    liquiditySweep: 0.0055,
+    vReversal: 0.075,
+    doubleReversal: 0.0095,
+  });
+  assert.equal(refreshed.profile.scalpProfile?.validation.passed, true);
+  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /median scalp baseline/i);
 });
 
 test("winner-derived scalp reset learns only from compatible post-fee winners and preserves a failed gate", async () => {
@@ -208,7 +220,7 @@ test("winner-derived scalp reset learns only from compatible post-fee winners an
 
   const baseline = scalpTrainer.createProfitableScalpBaseline(prior, outcomes);
 
-  assert.equal(baseline.policyVersion, 3);
+  assert.equal(baseline.policyVersion, 4);
   assert.equal(baseline.learnedFromClosedTrades, outcomes.length);
   assert.equal(baseline.policyOutcomeOffset, outcomes.length);
   assert.equal(baseline.validation.trainingSize, 5);

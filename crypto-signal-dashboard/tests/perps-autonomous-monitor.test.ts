@@ -97,7 +97,7 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
       atrPercent: 0.08,
       volumeRatio: 1,
       bollingerBandwidthPercent: 0.6,
-      bollingerPosition: 0.12,
+      bollingerPosition: -0.1,
     },
   });
 
@@ -105,7 +105,7 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
   assert.equal(signal?.direction, "bullish");
 });
 
-test("scalp detection uses an independent 25-minute cooldown", () => {
+test("scalp detection uses an independent 42.5-minute cooldown", () => {
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.1, 100.05, 99.95, 99.9].map((value, index) => ({
     t: baseTime + index * 60_000,
@@ -127,11 +127,11 @@ test("scalp detection uses an independent 25-minute cooldown", () => {
     atrPercent: 0.08,
     volumeRatio: 1,
     bollingerBandwidthPercent: 0.6,
-    bollingerPosition: 0.12,
+    bollingerPosition: -0.1,
   };
   const latestTimestamp = points[points.length - 1]!.t;
 
-  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 1_500);
+  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 2_550);
   assert.equal(detectScalpSignal({
     symbol: "SOL/USD",
     points,
@@ -437,7 +437,7 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(routed?.strategyClass, "scalp");
   assert.equal(routed?.leverage, SCALP_TRADE_LEVERAGE);
-  assert.equal(routed?.collateralUsd, 50);
+  assert.equal(routed?.collateralUsd, 37.5);
   assert.ok((routed?.takeProfitPrice ?? 0) > (routed?.marketContext?.spotPrice ?? Number.POSITIVE_INFINITY));
   assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < (routed?.marketContext?.spotPrice ?? 0));
   const entryPrice = routed?.marketContext?.spotPrice ?? 0;

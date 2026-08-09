@@ -8,7 +8,18 @@ import {
   SCALP_ATR_PROFIT_TARGET_MULTIPLIER,
   SCALP_MINIMUM_NET_PROFIT_USD,
   SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
+  SCALP_STOP_LOSS_ROE_PERCENT,
 } from "../lib/perps/scalpExit";
+import {
+  SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
+  SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
+} from "../lib/perps/profitLock";
+
+test("scalp protection uses a 23% hard SL without changing the staircase", () => {
+  assert.equal(SCALP_STOP_LOSS_ROE_PERCENT, 23);
+  assert.equal(SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT, 10);
+  assert.equal(SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT, 7);
+});
 
 test("scalp hard TP stays above the full ladder while clearing fees by $1", () => {
   const plan = computePercentageScalpExitPlan({
