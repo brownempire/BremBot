@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createBremLogicDatafeed } from "@/lib/chart/tradingViewDatafeed";
+import { clampFloatingPanelPosition, type FloatingPanelPosition } from "@/lib/chart/floatingPanel";
 import type { ScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
 import {
   projectOverlayGuideNetPnl,
@@ -176,6 +177,14 @@ export function TradingViewChart({
   const shapeIdsRef = useRef<string[]>([]);
   const scalpMarkerIdsRef = useRef<string[]>([]);
   const scalpStudyIdsRef = useRef<string[]>([]);
+  const scalpPanelRef = useRef<HTMLDivElement | null>(null);
+  const scalpPanelDragRef = useRef<{
+    pointerId: number;
+    pointerX: number;
+    pointerY: number;
+    startLeft: number;
+    startTop: number;
+  } | null>(null);
   const scalpOverlayEnabledRef = useRef(scalpOverlayEnabled);
   const shapeGuideByIdRef = useRef(new Map<string, PositionOverlayGuide>());
   const shapeIdByGuideIdRef = useRef(new Map<string, string>());
@@ -193,6 +202,8 @@ export function TradingViewChart({
   const [scalpSnapshot, setScalpSnapshot] = useState<ScalpAgentOverlaySnapshot | null>(null);
   const [scalpOverlayError, setScalpOverlayError] = useState<string | null>(null);
   const [indicatorPanesCollapsed, setIndicatorPanesCollapsed] = useState(false);
+  const [scalpPanelMinimized, setScalpPanelMinimized] = useState(false);
+  const [scalpPanelPosition, setScalpPanelPosition] = useState<FloatingPanelPosition | null>(null);
   scalpOverlayEnabledRef.current = scalpOverlayEnabled;
   guidesRef.current = guides;
 
@@ -213,6 +224,61 @@ export function TradingViewChart({
     });
     setIndicatorPanesCollapsed(collapsed);
     window.requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  }
+
+  function constrainedScalpPanelPosition(left: number, top: number) {
+    const frame = frameRef.current;
+    const panel = scalpPanelRef.current;
+    if (!frame || !panel) return { left, top };
+
+    return clampFloatingPanelPosition({
+      left,
+      top,
+      panelWidth: panel.offsetWidth,
+      panelHeight: panel.offsetHeight,
+      containerWidth: frame.clientWidth,
+      containerHeight: frame.clientHeight,
+    });
+  }
+
+  function beginScalpPanelDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    const frame = frameRef.current;
+    const panel = scalpPanelRef.current;
+    if (!frame || !panel) return;
+
+    const frameBounds = frame.getBoundingClientRect();
+    const panelBounds = panel.getBoundingClientRect();
+    scalpPanelDragRef.current = {
+      pointerId: event.pointerId,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      startLeft: panelBounds.left - frameBounds.left,
+      startTop: panelBounds.top - frameBounds.top,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  }
+
+  function moveScalpPanel(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = scalpPanelDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setScalpPanelPosition(constrainedScalpPanelPosition(
+      drag.startLeft + event.clientX - drag.pointerX,
+      drag.startTop + event.clientY - drag.pointerY
+    ));
+  }
+
+  function endScalpPanelDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (scalpPanelDragRef.current?.pointerId !== event.pointerId) return;
+    scalpPanelDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function toggleScalpPanelSize() {
+    setScalpPanelMinimized((current) => !current);
   }
 
   function shapeForGuide(guideId: string) {
@@ -750,6 +816,33 @@ export function TradingViewChart({
     };
   }, [isAppFullscreen]);
 
+  useEffect(() => {
+    const keepScalpPanelInsideChart = () => {
+      setScalpPanelPosition((current) => {
+        if (!current) return current;
+        const frame = frameRef.current;
+        const panel = scalpPanelRef.current;
+        if (!frame || !panel) return current;
+        const next = clampFloatingPanelPosition({
+          left: current.left,
+          top: current.top,
+          panelWidth: panel.offsetWidth,
+          panelHeight: panel.offsetHeight,
+          containerWidth: frame.clientWidth,
+          containerHeight: frame.clientHeight,
+        });
+        return next.left === current.left && next.top === current.top ? current : next;
+      });
+    };
+
+    const frame = window.requestAnimationFrame(keepScalpPanelInsideChart);
+    window.addEventListener("resize", keepScalpPanelInsideChart);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", keepScalpPanelInsideChart);
+    };
+  }, [isAppFullscreen, scalpPanelMinimized]);
+
   return (
     <div
       ref={frameRef}
@@ -782,13 +875,34 @@ export function TradingViewChart({
         )}
       </button>
       {scalpOverlayEnabled ? (
-        <div className={`scalp-chart-status scalp-chart-status--${scalpSnapshot?.state ?? "watching"}`} data-testid="scalp-chart-status">
-          <div className="scalp-chart-status-heading">
+        <div
+          ref={scalpPanelRef}
+          className={`scalp-chart-status scalp-chart-status--${scalpSnapshot?.state ?? "watching"}${scalpPanelMinimized ? " scalp-chart-status--minimized" : ""}`}
+          data-testid="scalp-chart-status"
+          data-minimized={scalpPanelMinimized ? "true" : "false"}
+          style={scalpPanelPosition ? { left: scalpPanelPosition.left, top: scalpPanelPosition.top, bottom: "auto" } : undefined}
+        >
+          <div
+            className="scalp-chart-status-heading"
+            onPointerDown={beginScalpPanelDrag}
+            onPointerMove={moveScalpPanel}
+            onPointerUp={endScalpPanelDrag}
+            onPointerCancel={endScalpPanelDrag}
+          >
             <span className="scalp-chart-status-dot" aria-hidden="true" />
-            <strong>{scalpOverlayError ? "Scalp profile unavailable" : scalpSnapshot?.headline ?? "Loading Scalp Agent…"}</strong>
-            <span>1m agent view</span>
+            <strong>{scalpPanelMinimized ? "Waiting" : scalpOverlayError ? "Scalp profile unavailable" : scalpSnapshot?.headline ?? "Loading Scalp Agent…"}</strong>
+            {!scalpPanelMinimized ? <span className="scalp-chart-status-view">1m agent view</span> : null}
+            <button
+              type="button"
+              className="scalp-chart-status-size-button"
+              aria-label={scalpPanelMinimized ? "Maximize scalp setup window" : "Minimize scalp setup window"}
+              aria-expanded={!scalpPanelMinimized}
+              onClick={toggleScalpPanelSize}
+            >
+              {scalpPanelMinimized ? "+" : "−"}
+            </button>
           </div>
-          <div className="scalp-chart-pane-controls">
+          {!scalpPanelMinimized ? <><div className="scalp-chart-pane-controls">
             <button
               type="button"
               onClick={() => setIndicatorPanesCollapsedState(!indicatorPanesCollapsed)}
@@ -817,6 +931,7 @@ export function TradingViewChart({
             </div>
           ) : null}
           {scalpSnapshot?.reasons[0] ? <div className="scalp-chart-reason">{scalpSnapshot.reasons[0]}</div> : null}
+          </> : null}
         </div>
       ) : null}
       {guideEditor ? (

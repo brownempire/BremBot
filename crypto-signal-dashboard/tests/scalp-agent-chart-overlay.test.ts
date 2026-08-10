@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { buildScalpAgentOverlaySnapshot } from "../lib/chart/scalpAgentOverlay";
+import { clampFloatingPanelPosition } from "../lib/chart/floatingPanel";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   getScalpLearningProfile,
@@ -70,6 +71,26 @@ test("a stale scalp policy remains visibly blocked until winner-baseline migrati
   assert.equal(scalpProfileAllowsLiveEntries(resolved), false);
 });
 
+test("floating scalp setup panel remains inside the chart after dragging or resizing", () => {
+  assert.deepEqual(clampFloatingPanelPosition({
+    left: -30,
+    top: 900,
+    panelWidth: 220,
+    panelHeight: 80,
+    containerWidth: 390,
+    containerHeight: 600,
+  }), { left: 4, top: 516 });
+
+  assert.deepEqual(clampFloatingPanelPosition({
+    left: 120,
+    top: 75,
+    panelWidth: 220,
+    panelHeight: 80,
+    containerWidth: 390,
+    containerHeight: 600,
+  }), { left: 120, top: 75 });
+});
+
 test("TradingView overlay installs and removes studies in place without rebuilding the chart", () => {
   const chart = readFileSync(path.join(projectRoot, "app/components/TradingViewChart.tsx"), "utf8");
   const page = readFileSync(path.join(projectRoot, "app/signals-bot/page.tsx"), "utf8");
@@ -94,6 +115,10 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(chart, /\["Volume"\]/);
   assert.match(chart, /shape: bullish \? "arrow_up" : "arrow_down"/);
   assert.match(chart, /data-testid="scalp-chart-status"/);
+  assert.match(chart, /data-minimized=\{scalpPanelMinimized \? "true" : "false"\}/);
+  assert.match(chart, /onPointerDown=\{beginScalpPanelDrag\}/);
+  assert.match(chart, /aria-label=\{scalpPanelMinimized \? "Maximize scalp setup window" : "Minimize scalp setup window"\}/);
+  assert.match(chart, /scalpPanelMinimized \? "Waiting"/);
   assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 180\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
   assert.match(route, /LAST_SIGNAL_KEY/);
