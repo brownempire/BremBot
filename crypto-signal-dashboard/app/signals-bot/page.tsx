@@ -37,6 +37,7 @@ import { ChartErrorBoundary } from "@/app/components/ChartErrorBoundary";
 import {
   buildPositionOverlayGuides,
   summarizePositionOverlayPnl,
+  summarizePositionOverlayPnlPercent,
   type PositionOverlayGuide,
 } from "@/lib/chart/positionOverlay";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
@@ -4628,6 +4629,10 @@ function DashboardPage() {
     () => summarizePositionOverlayPnl(selectedChartPerpsPositions),
     [selectedChartPerpsPositions]
   );
+  const selectedChartUnrealizedPnlPercent = useMemo(
+    () => summarizePositionOverlayPnlPercent(selectedChartPerpsPositions),
+    [selectedChartPerpsPositions]
+  );
 
   const cards = trackedMarkets.map((market) => {
     const points = priceHistory[market.id] ?? [];
@@ -6089,6 +6094,11 @@ function DashboardPage() {
                   Unrealized PnL {selectedChartUnrealizedPnl === null
                     ? "--"
                     : `${selectedChartUnrealizedPnl >= 0 ? "+" : ""}${formatUsd(selectedChartUnrealizedPnl)}`}
+                  {selectedChartUnrealizedPnl !== null && selectedChartUnrealizedPnlPercent !== null ? (
+                    <small className="chart-unrealized-pnl-percent">
+                      ({selectedChartUnrealizedPnlPercent >= 0 ? "+" : ""}{selectedChartUnrealizedPnlPercent.toFixed(2)}%)
+                    </small>
+                  ) : null}
                 </span>
               </span>
             ) : null}

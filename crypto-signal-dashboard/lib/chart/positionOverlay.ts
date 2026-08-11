@@ -12,6 +12,7 @@ export type PositionOverlayGuide = {
 
 export type PositionGuideSource = {
   id: string;
+  collateralValue?: number | null;
   entryPrice: number | null;
   markPrice?: number | null;
   positionSize?: number | null;
@@ -49,6 +50,24 @@ export function summarizePositionOverlayPnl(
 
   if (pnlValues.length === 0) return null;
   return Number(pnlValues.reduce((sum, value) => sum + value, 0).toFixed(2));
+}
+
+export function summarizePositionOverlayPnlPercent(
+  positions: readonly PositionGuideSource[]
+) {
+  const positionsWithPnl = positions.filter(
+    (position) => typeof position.unrealizedPnl === "number" && Number.isFinite(position.unrealizedPnl)
+  );
+  if (positionsWithPnl.length === 0) return null;
+  if (positionsWithPnl.some(
+    (position) => typeof position.collateralValue !== "number"
+      || !Number.isFinite(position.collateralValue)
+      || position.collateralValue <= 0
+  )) return null;
+
+  const totalPnl = positionsWithPnl.reduce((sum, position) => sum + (position.unrealizedPnl ?? 0), 0);
+  const totalCollateral = positionsWithPnl.reduce((sum, position) => sum + (position.collateralValue ?? 0), 0);
+  return Number(((totalPnl / totalCollateral) * 100).toFixed(2));
 }
 
 export function buildPositionOverlayGuides(

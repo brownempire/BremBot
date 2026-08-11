@@ -25,6 +25,8 @@ test("the hidden Perps panel keeps the shared chart position snapshot current", 
   assert.match(widget, /pollingEnabled: true/);
   assert.doesNotMatch(widget, /IntersectionObserver/);
   assert.match(page, /summarizePositionOverlayPnl\(selectedChartPerpsPositions\)/);
+  assert.match(page, /summarizePositionOverlayPnlPercent\(selectedChartPerpsPositions\)/);
   assert.match(page, /Unrealized PnL/);
   assert.match(page, /selectedChartUnrealizedPnl >= 0[\s\S]*pnl-positive[\s\S]*pnl-negative/);
+  assert.match(page, /chart-unrealized-pnl-percent[\s\S]*selectedChartUnrealizedPnlPercent >= 0/);
 });

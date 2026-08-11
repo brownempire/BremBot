@@ -5,6 +5,7 @@ import {
   buildPositionOverlayGuides,
   projectOverlayGuideNetPnl,
   summarizePositionOverlayPnl,
+  summarizePositionOverlayPnlPercent,
   validOverlayGuides,
   type PositionOverlayGuide,
 } from "../lib/chart/positionOverlay";
@@ -17,6 +18,17 @@ test("chart overlay PnL summarizes the same visible positions", () => {
   ]), 0.76);
   assert.equal(summarizePositionOverlayPnl([
     { id: "pending", entryPrice: 1, takeProfit: null, stopLoss: null, liquidationPrice: null, unrealizedPnl: null },
+  ]), null);
+});
+
+test("chart overlay PnL percent uses combined collateral and requires complete live values", () => {
+  assert.equal(summarizePositionOverlayPnlPercent([]), null);
+  assert.equal(summarizePositionOverlayPnlPercent([
+    { id: "one", collateralValue: 20, entryPrice: 1, takeProfit: 2, stopLoss: null, liquidationPrice: null, unrealizedPnl: 2 },
+    { id: "two", collateralValue: 30, entryPrice: 1, takeProfit: 2, stopLoss: null, liquidationPrice: null, unrealizedPnl: -0.5 },
+  ]), 3);
+  assert.equal(summarizePositionOverlayPnlPercent([
+    { id: "missing", collateralValue: null, entryPrice: 1, takeProfit: null, stopLoss: null, liquidationPrice: null, unrealizedPnl: 1 },
   ]), null);
 });
 

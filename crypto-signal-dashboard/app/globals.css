@@ -1563,6 +1563,12 @@ button:disabled {
   white-space: nowrap;
 }
 
+.chart-unrealized-pnl-percent {
+  margin-left: 3px;
+  color: inherit;
+  font-size: 0.86em;
+}
+
 .position-overlay-toggle {
   display: inline-flex;
   align-items: center;
