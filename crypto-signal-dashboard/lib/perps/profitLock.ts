@@ -6,10 +6,19 @@ export const PROFIT_LOCK_ARM_ROE_PERCENT = 20;
 export const PROFIT_LOCK_EXIT_ROE_PERCENT = 15;
 export const SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 10;
 export const SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 7;
+export const SCALP_PROFIT_LOCK_RUNNER_ARM_ROE_PERCENT = 30;
+export const SCALP_PROFIT_LOCK_RUNNER_EXIT_ROE_PERCENT = 23;
+export const SCALP_PROFIT_LOCK_FINAL_ARM_ROE_PERCENT = 40;
+export const SCALP_PROFIT_LOCK_FINAL_EXIT_ROE_PERCENT = 32;
 export const PROFIT_LOCK_CLOSE_RETRY_MS = 2 * 60_000;
 const PROFIT_LOCK_ROE_EPSILON = 1e-9;
 
-export type PerpsProfitLockTier = "ten-to-seven" | "fifteen-to-ten" | "twenty-to-fifteen";
+export type PerpsProfitLockTier =
+  | "ten-to-seven"
+  | "fifteen-to-ten"
+  | "twenty-to-fifteen"
+  | "thirty-to-twenty-three"
+  | "forty-to-thirty-two";
 export type PerpsProfitLockStrategyClass = "smart" | "scalp";
 
 export type PerpsProfitLockState = {
@@ -62,21 +71,34 @@ export function evaluatePerpsProfitLock(options: {
     : null;
   const strategyClass = options.strategyClass ?? previous?.strategyClass ?? "smart";
   const peakRoePercent = Math.max(previous?.peakRoePercent ?? options.currentRoePercent, options.currentRoePercent);
-  const activeTier: PerpsProfitLockTier | null = peakRoePercent >= PROFIT_LOCK_ARM_ROE_PERCENT
+  const activeTier: PerpsProfitLockTier | null = strategyClass === "scalp"
+    && peakRoePercent >= SCALP_PROFIT_LOCK_FINAL_ARM_ROE_PERCENT
+    ? "forty-to-thirty-two"
+    : strategyClass === "scalp" && peakRoePercent >= SCALP_PROFIT_LOCK_RUNNER_ARM_ROE_PERCENT
+      ? "thirty-to-twenty-three"
+    : peakRoePercent >= PROFIT_LOCK_ARM_ROE_PERCENT
     ? "twenty-to-fifteen"
     : peakRoePercent >= PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
       ? "fifteen-to-ten"
       : strategyClass === "scalp" && peakRoePercent >= SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
         ? "ten-to-seven"
       : null;
-  const armRoePercent = activeTier === "twenty-to-fifteen"
+  const armRoePercent = activeTier === "forty-to-thirty-two"
+    ? SCALP_PROFIT_LOCK_FINAL_ARM_ROE_PERCENT
+    : activeTier === "thirty-to-twenty-three"
+      ? SCALP_PROFIT_LOCK_RUNNER_ARM_ROE_PERCENT
+    : activeTier === "twenty-to-fifteen"
     ? PROFIT_LOCK_ARM_ROE_PERCENT
     : activeTier === "fifteen-to-ten"
       ? PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
       : strategyClass === "scalp"
         ? SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
         : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
-  const exitRoePercent = activeTier === "twenty-to-fifteen"
+  const exitRoePercent = activeTier === "forty-to-thirty-two"
+    ? SCALP_PROFIT_LOCK_FINAL_EXIT_ROE_PERCENT
+    : activeTier === "thirty-to-twenty-three"
+      ? SCALP_PROFIT_LOCK_RUNNER_EXIT_ROE_PERCENT
+    : activeTier === "twenty-to-fifteen"
     ? PROFIT_LOCK_EXIT_ROE_PERCENT
     : activeTier === "fifteen-to-ten"
       ? PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT

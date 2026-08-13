@@ -70,7 +70,7 @@ function stats(outcomes: TradeLearningOutcome[]) {
   };
 }
 
-export function createMedianScalpBaseline(allScalpOutcomes: TradeLearningOutcome[]) {
+export function createAuditedScalpBaseline(allScalpOutcomes: TradeLearningOutcome[]) {
   const ordered = allScalpOutcomes
     .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
@@ -86,7 +86,7 @@ export function createMedianScalpBaseline(allScalpOutcomes: TradeLearningOutcome
     profitFactor: 0,
     maxDrawdownUsd: 0,
     passed: true,
-    reasons: ["Operator-selected median scalp baseline activated; prior outcomes were retained for audit and new learning starts after migration."],
+    reasons: ["Audited recent-performance scalp baseline activated; prior outcomes were retained for audit and new post-upgrade learning starts after migration."],
   };
   return baseline;
 }
@@ -266,7 +266,7 @@ export function updateScalpLearningProfile(
     .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
     .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
   if (!current || current.policyVersion !== SCALP_POLICY_VERSION) {
-    return createMedianScalpBaseline(ordered);
+    return createAuditedScalpBaseline(ordered);
   }
   const profile = structuredClone(current);
   const newOutcomes = ordered.slice(profile.learnedFromClosedTrades);

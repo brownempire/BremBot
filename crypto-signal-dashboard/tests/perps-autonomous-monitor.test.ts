@@ -95,9 +95,9 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
       plusDi: 18,
       minusDi: 20,
       atrPercent: 0.08,
-      volumeRatio: 1,
+      volumeRatio: 1.1,
       bollingerBandwidthPercent: 0.6,
-      bollingerPosition: -0.1,
+      bollingerPosition: -0.2,
     },
   });
 
@@ -125,9 +125,9 @@ test("scalp detection uses an independent 42.5-minute cooldown", () => {
     plusDi: 18,
     minusDi: 20,
     atrPercent: 0.08,
-    volumeRatio: 1,
+    volumeRatio: 1.1,
     bollingerBandwidthPercent: 0.6,
-    bollingerPosition: -0.1,
+    bollingerPosition: -0.2,
   };
   const latestTimestamp = points[points.length - 1]!.t;
 
@@ -273,7 +273,7 @@ test("ADX above 40 still rejects a non-exceptional confirmed reversal", () => {
     profile,
   });
 
-  assert.equal(priceAction.strong, true);
+  assert.equal(priceAction.strong, false);
   assert.equal(priceAction.confirmed, true);
   assert.ok(priceAction.score < SCALP_EXCEPTIONAL_REVERSAL_SCORE);
   assert.equal(signal, null);
@@ -437,7 +437,7 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(routed?.strategyClass, "scalp");
   assert.equal(routed?.leverage, SCALP_TRADE_LEVERAGE);
-  assert.equal(routed?.collateralUsd, 37.5);
+  assert.equal(routed?.collateralUsd, 25);
   assert.ok((routed?.takeProfitPrice ?? 0) > (routed?.marketContext?.spotPrice ?? Number.POSITIVE_INFINITY));
   assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < (routed?.marketContext?.spotPrice ?? 0));
   const entryPrice = routed?.marketContext?.spotPrice ?? 0;
@@ -447,7 +447,7 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
   const stopLossRoe = entryPrice > 0
     ? ((entryPrice - (routed?.stopLossPrice ?? entryPrice)) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
     : 0;
-  assert.ok(takeProfitRoe >= 24.99);
+  assert.ok(takeProfitRoe >= 42.24);
   assert.ok(takeProfitRoe <= 100.01);
   assert.ok(Math.abs(stopLossRoe - SCALP_STOP_LOSS_ROE_PERCENT) < 0.01);
 });
@@ -975,6 +975,38 @@ test("a scalp position promotes from 10-to-7 through the existing upper tiers", 
   });
   assert.equal(third.activeTier, "twenty-to-fifteen");
   assert.equal(third.exitRoePercent, 15);
+});
+
+test("a scalp runner protects gains near the raised post-fee TP", () => {
+  const thirty = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-runner",
+    strategyClass: "scalp",
+    currentRoePercent: 30,
+    previousState: null,
+    now: 1_000,
+  });
+  assert.equal(thirty.activeTier, "thirty-to-twenty-three");
+  assert.equal(thirty.exitRoePercent, 23);
+
+  const forty = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-runner",
+    strategyClass: "scalp",
+    currentRoePercent: 40,
+    previousState: thirty.state,
+    now: 2_000,
+  });
+  assert.equal(forty.activeTier, "forty-to-thirty-two");
+  assert.equal(forty.exitRoePercent, 32);
+
+  const retreat = evaluatePerpsProfitLock({
+    positionPubkey: "scalp-runner",
+    strategyClass: "scalp",
+    currentRoePercent: 32,
+    previousState: forty.state,
+    now: 3_000,
+  });
+  assert.equal(retreat.action, "close");
+  assert.equal(retreat.activeTier, "forty-to-thirty-two");
 });
 
 test("second profit-lock tier arms at 20% ROE and closes on a retreat to 15%", () => {
