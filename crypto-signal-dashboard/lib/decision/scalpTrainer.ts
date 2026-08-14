@@ -11,6 +11,7 @@ function clamp(value: number, min: number, max: number) {
 
 const MIN_PROFITABLE_BASELINE_TRADES = 5;
 const MIN_BASELINE_VALIDATION_TRADES = 4;
+export const SCALP_INCREMENTAL_LEARNING_BATCH_SIZE = 5;
 
 function quantile(values: Array<number | null | undefined>, percentile: number) {
   const sorted = values
@@ -275,6 +276,12 @@ export function updateScalpLearningProfile(
   if (newOutcomes.length === 0) {
     profile.learnedFromClosedTrades = ordered.length;
     profile.validation.reasons = ["No new closed scalp outcomes were available; the existing validation gate was preserved."];
+    return profile;
+  }
+  if (newOutcomes.length < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE) {
+    profile.validation.reasons = [
+      `Scalp learning is holding ${newOutcomes.length}/${SCALP_INCREMENTAL_LEARNING_BATCH_SIZE} newly closed trades; parameters remain unchanged until the batch is complete.`,
+    ];
     return profile;
   }
   for (const outcome of newOutcomes) {

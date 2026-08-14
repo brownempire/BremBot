@@ -794,7 +794,10 @@ function createSession(): PerpsAutomationSession {
   };
 }
 
-function createOpenPosition(roePercent: number): JupiterPerpsPosition {
+function createOpenPosition(
+  roePercent: number,
+  overrides: Partial<JupiterPerpsPosition> = {}
+): JupiterPerpsPosition {
   return {
     id: "live-position-sol",
     source: "live-api",
@@ -824,6 +827,7 @@ function createOpenPosition(roePercent: number): JupiterPerpsPosition {
     liquidationPriceIsEstimated: false,
     accountRef: "position-pubkey",
     lastUpdated: Date.now(),
+    ...overrides,
   };
 }
 
@@ -1660,4 +1664,196 @@ test("parameter candidates are skipped when the RSI indicator reaches the config
   assert.equal(routeCalls, 0);
   assert.equal(result.results[0]?.code, "INDICATOR_RSI_VETO");
   assert.equal(savedCursor, points[points.length - 1]?.t);
+});
+
+test("scalp monitor can route an opposite-side entry while independently managing the current position", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routedSignal: PerpsAgentSignal | null = null;
+  let closeCalls = 0;
+  let prunedPositionPubkeys: string[] = [];
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(1, {
+        id: "existing-short",
+        accountRef: "existing-short",
+        side: "short",
+        unrealizedPnl: 1,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "unexpected-close" };
+    },
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => null,
+    writeProfitLockState: async () => undefined,
+    pruneProfitLockStates: async (_wallet, activePositionPubkeys) => {
+      prunedPositionPubkeys = activePositionPubkeys;
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const routed = routedSignal as PerpsAgentSignal | null;
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routed?.strategyClass, "scalp");
+  assert.equal(routed?.direction, "bullish");
+  assert.equal(routed?.marketContext?.hasOpenPosition, true);
+  assert.equal(routed?.marketContext?.allowConcurrentPosition, true);
+  assert.equal(closeCalls, 0);
+  assert.deepEqual(prunedPositionPubkeys, ["existing-short"]);
+});
+
+test("scalp monitor refuses a second same-side entry instead of merging Jupiter positions", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routeCalls = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [createOpenPosition(1)], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => null,
+    writeProfitLockState: async () => undefined,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.code, "SAME_SIDE_POSITION_OPEN");
+  assert.equal(routeCalls, 0);
+});
+
+test("exceptional scalp reversal closes first and records a replacement intent without racing the new order", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routeCalls = 0;
+  let closeCalls = 0;
+  const savedIntents: Array<{ direction: "bullish" | "bearish"; positionPubkey: string; expiresAt: number }> = [];
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(-1, {
+        id: "losing-short",
+        accountRef: "losing-short",
+        side: "short",
+        unrealizedPnl: -1,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    closePosition: async (_wallet, position) => {
+      closeCalls += 1;
+      assert.equal(position.accountRef, "losing-short");
+      return { txid: "reversal-close" };
+    },
+    writePendingScalpReversal: async (_wallet, intent) => {
+      savedIntents.push(intent);
+    },
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => null,
+    writeProfitLockState: async () => undefined,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.code, "SCALP_REVERSAL_CLOSE_SUBMITTED");
+  assert.equal(closeCalls, 1);
+  assert.equal(routeCalls, 0);
+  const savedIntent = savedIntents[0];
+  assert.equal(savedIntent?.direction, "bullish");
+  assert.equal(savedIntent?.positionPubkey, "losing-short");
+  assert.ok((savedIntent?.expiresAt ?? 0) > Date.now());
+});
+
+test("scalp reversal replacement opens only after the original position is gone and the signal requalifies", async () => {
+  const points = exceptionalBullishSweepPoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routedSignal: PerpsAgentSignal | null = null;
+  let clearCalls = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    readPendingScalpReversal: async () => ({
+      positionPubkey: "closed-short",
+      direction: "bullish",
+      createdAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+      projectedSurplusUsd: 2,
+    }),
+    clearPendingScalpReversal: async () => {
+      clearCalls += 1;
+    },
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const routed = routedSignal as PerpsAgentSignal | null;
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routed?.direction, "bullish");
+  assert.match(routed?.summary ?? "", /reversal replacement/i);
+  assert.equal(clearCalls, 1);
 });

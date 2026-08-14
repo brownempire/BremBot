@@ -9,6 +9,7 @@ export const tradeDecisionMarketContextSchema = z.object({
   trendBias: tradeDecisionTrendBiasSchema.nullable(),
   availableUsdc: z.number().finite().min(0).nullable(),
   hasOpenPosition: z.boolean(),
+  allowConcurrentPosition: z.boolean().optional(),
   recentPriceChangePercent: z.number().finite().nullable(),
 });
 

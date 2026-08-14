@@ -472,7 +472,7 @@ test("each newly closed trade incrementally updates the active wallet profile", 
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
 });
 
-test("Smart and scalp losses update only their respective learning algorithms", async () => {
+test("scalp learning waits for five closed trades while Smart learning remains isolated", async () => {
   const walletAddress = "learning-wallet-strategy-isolation";
   const baseline = await trainer.trainWalletDecisionProfile({
     walletAddress,
@@ -543,19 +543,36 @@ test("Smart and scalp losses update only their respective learning algorithms", 
   });
   assert.equal(afterScalp.profile.minimumConfidence, baseline.profile.minimumConfidence);
   assert.deepEqual(afterScalp.profile.assetAdjustments, baseline.profile.assetAdjustments);
-  assert.ok((afterScalp.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
-  assert.ok((afterScalp.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
-  assert.ok((afterScalp.profile.scalpProfile?.cooldownSeconds ?? 0) >= 1_500);
+  assert.equal(afterScalp.skipped, true);
+  assert.equal(afterScalp.profile.scalpProfile?.minimumConfidence, baseline.profile.scalpProfile?.minimumConfidence);
+  assert.equal(afterScalp.profile.scalpProfile?.learnedFromClosedTrades, baseline.profile.scalpProfile?.learnedFromClosedTrades);
 
-  const scalpSnapshot = structuredClone(afterScalp.profile.scalpProfile);
-  await learningStore.saveTradeLearningOutcomes([makeOutcome(2, "trend")]);
+  await learningStore.saveTradeLearningOutcomes([
+    makeOutcome(2, "scalp"),
+    makeOutcome(3, "scalp"),
+    makeOutcome(4, "scalp"),
+    makeOutcome(5, "scalp"),
+  ]);
+  const afterScalpBatch = await trainer.trainWalletDecisionProfile({
+    walletAddress,
+    config: null,
+    source: "automatic",
+  });
+  assert.equal(afterScalpBatch.incremental, true);
+  assert.ok((afterScalpBatch.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
+  assert.ok((afterScalpBatch.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
+  assert.ok((afterScalpBatch.profile.scalpProfile?.cooldownSeconds ?? 0) >= 1_500);
+  assert.equal(afterScalpBatch.profile.scalpProfile?.learnedFromClosedTrades, 5);
+
+  const scalpSnapshot = structuredClone(afterScalpBatch.profile.scalpProfile);
+  await learningStore.saveTradeLearningOutcomes([makeOutcome(6, "trend")]);
   const afterSmart = await trainer.trainWalletDecisionProfile({
     walletAddress,
     config: null,
     source: "automatic",
   });
-  assert.ok(afterSmart.profile.minimumConfidence > afterScalp.profile.minimumConfidence);
-  assert.ok(afterSmart.profile.assetAdjustments.SOL.leverageMultiplier < afterScalp.profile.assetAdjustments.SOL.leverageMultiplier);
+  assert.ok(afterSmart.profile.minimumConfidence > afterScalpBatch.profile.minimumConfidence);
+  assert.ok(afterSmart.profile.assetAdjustments.SOL.leverageMultiplier < afterScalpBatch.profile.assetAdjustments.SOL.leverageMultiplier);
   const scalpAfterSmart = structuredClone(afterSmart.profile.scalpProfile);
   if (scalpSnapshot) scalpSnapshot.validation.reasons = [];
   if (scalpAfterSmart) scalpAfterSmart.validation.reasons = [];

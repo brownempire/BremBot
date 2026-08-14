@@ -18,6 +18,7 @@ import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBasel
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 import {
   createOperatorActivatedProfitableScalpBaseline,
+  SCALP_INCREMENTAL_LEARNING_BATCH_SIZE,
   updateScalpLearningProfile,
 } from "@/lib/decision/scalpTrainer";
 import { DEFAULT_SCALP_LEARNING_PROFILE, SCALP_POLICY_VERSION } from "@/lib/perps/scalpEngine";
@@ -535,6 +536,22 @@ export async function trainWalletDecisionProfile(input: {
     };
   }
   if (!input.force && active && outcomes.length > active.learnedFromClosedTrades) {
+    const newOutcomes = outcomes.slice(active.learnedFromClosedTrades);
+    const pendingScalpOutcomes = outcomes
+      .filter((outcome) => outcome.signalType === "scalp")
+      .slice(active.scalpProfile?.learnedFromClosedTrades ?? 0);
+    const hasNewSmartOutcome = newOutcomes.some((outcome) => outcome.signalType !== "scalp");
+    if (!hasNewSmartOutcome && pendingScalpOutcomes.length < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE) {
+      return {
+        profile: active,
+        activated: false,
+        outcomeCount: outcomes.length,
+        excludedOutcomeCount,
+        skipped: true,
+        pendingScalpOutcomes: pendingScalpOutcomes.length,
+        scalpBatchSize: SCALP_INCREMENTAL_LEARNING_BATCH_SIZE,
+      };
+    }
     const incremental = createIncrementalProfile(active, version, input.source, outcomes);
     const profile = await saveDecisionLearningProfile(incremental, true);
     return {

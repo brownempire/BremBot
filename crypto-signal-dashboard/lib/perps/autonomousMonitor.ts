@@ -68,12 +68,15 @@ import {
   MIN_TPSL_EXPECTED_PNL_USD,
   SCALP_STOP_LOSS_ROE_PERCENT,
 } from "@/lib/perps/scalpExit";
+import { evaluateScalpPositionPolicy } from "@/lib/perps/scalpPositionPolicy";
 
 const MONITOR_LOCK_KEY = "brembot:perps:automation:monitor-lock";
 const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const LAST_RUN_KEY = "brembot:perps:automation:last-run";
 const PROFIT_LOCK_STATE_KEY = "brembot:perps:automation:profit-lock";
+const PENDING_SCALP_REVERSAL_KEY = "brembot:perps:automation:pending-scalp-reversal:v1";
 const MONITOR_LOCK_TTL_MS = 55_000;
+const PENDING_SCALP_REVERSAL_TTL_MS = 3 * 60_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
 const LOW_BALANCE_TRADE_USD = 12;
 const LOW_BALANCE_TRADE_MAX_USDC = 50;
@@ -87,6 +90,14 @@ type AutonomousSignal = Omit<Signal, "type"> & {
   indicatorBypass?: boolean;
 };
 type StrategyClass = "smart" | "scalp";
+
+type PendingScalpReversal = {
+  positionPubkey: string;
+  direction: "bullish" | "bearish";
+  createdAt: number;
+  expiresAt: number;
+  projectedSurplusUsd: number;
+};
 
 type MonitorExecutionResult = {
   walletAddress: string;
@@ -124,9 +135,13 @@ type MonitorDependencies = {
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
   closePosition: (walletAddress: string, position: JupiterPerpsPosition) => Promise<{ txid: string }>;
-  readProfitLockState: (walletAddress: string) => Promise<PerpsProfitLockState | null>;
+  readProfitLockState: (walletAddress: string, positionPubkey: string) => Promise<PerpsProfitLockState | null>;
   writeProfitLockState: (walletAddress: string, state: PerpsProfitLockState) => Promise<void>;
-  clearProfitLockState: (walletAddress: string) => Promise<void>;
+  clearProfitLockState: (walletAddress: string, positionPubkey?: string) => Promise<void>;
+  pruneProfitLockStates: (walletAddress: string, activePositionPubkeys: string[]) => Promise<void>;
+  readPendingScalpReversal: (walletAddress: string) => Promise<PendingScalpReversal | null>;
+  writePendingScalpReversal: (walletAddress: string, intent: PendingScalpReversal) => Promise<void>;
+  clearPendingScalpReversal: (walletAddress: string) => Promise<void>;
   readLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass) => Promise<number | null>;
   writeLastSignal: (walletAddress: string, asset: string, strategyClass: StrategyClass, timestamp: number) => Promise<void>;
   getDirectionExperiment: typeof getScalpDirectionExperiment;
@@ -201,13 +216,18 @@ const defaultDependencies: MonitorDependencies = {
     if (!txid) throw new Error("Jupiter did not return a profit-lock close transaction signature.");
     return { txid };
   },
-  readProfitLockState: async (walletAddress) => {
+  readProfitLockState: async (walletAddress, positionPubkey) => {
     const redis = await getRedisClient();
     if (!redis) return null;
-    const raw = await redis.hGet(PROFIT_LOCK_STATE_KEY, walletAddress);
-    if (!raw) return null;
+    const [raw, legacyRaw] = await Promise.all([
+      redis.hGet(PROFIT_LOCK_STATE_KEY, `${walletAddress}:${positionPubkey}`),
+      redis.hGet(PROFIT_LOCK_STATE_KEY, walletAddress),
+    ]);
+    const serialized = raw ?? legacyRaw;
+    if (!serialized) return null;
     try {
-      return JSON.parse(raw) as PerpsProfitLockState;
+      const state = JSON.parse(serialized) as PerpsProfitLockState;
+      return state.positionPubkey === positionPubkey ? state : null;
     } catch {
       return null;
     }
@@ -215,12 +235,59 @@ const defaultDependencies: MonitorDependencies = {
   writeProfitLockState: async (walletAddress, state) => {
     const redis = await getRedisClient();
     if (!redis) throw new Error("Redis is unavailable while saving the Perps profit lock.");
-    await redis.hSet(PROFIT_LOCK_STATE_KEY, walletAddress, JSON.stringify(state));
+    await redis.hSet(PROFIT_LOCK_STATE_KEY, `${walletAddress}:${state.positionPubkey}`, JSON.stringify(state));
   },
-  clearProfitLockState: async (walletAddress) => {
+  clearProfitLockState: async (walletAddress, positionPubkey) => {
     const redis = await getRedisClient();
     if (!redis) return;
-    await redis.hDel(PROFIT_LOCK_STATE_KEY, walletAddress);
+    if (positionPubkey) {
+      await redis.hDel(PROFIT_LOCK_STATE_KEY, `${walletAddress}:${positionPubkey}`);
+      return;
+    }
+    const fields = await redis.hKeys(PROFIT_LOCK_STATE_KEY);
+    const walletFields = fields.filter((field) => field === walletAddress || field.startsWith(`${walletAddress}:`));
+    if (walletFields.length > 0) await redis.hDel(PROFIT_LOCK_STATE_KEY, walletFields);
+  },
+  pruneProfitLockStates: async (walletAddress, activePositionPubkeys) => {
+    const redis = await getRedisClient();
+    if (!redis) return;
+    const activeFields = new Set(activePositionPubkeys.map((positionPubkey) => `${walletAddress}:${positionPubkey}`));
+    const fields = await redis.hKeys(PROFIT_LOCK_STATE_KEY);
+    // Preserve the legacy wallet-only field while a position is open so the next
+    // read can migrate its peak into the new position-scoped field.
+    const staleFields = fields.filter((field) => (
+      field.startsWith(`${walletAddress}:`) && !activeFields.has(field)
+    ));
+    if (staleFields.length > 0) await redis.hDel(PROFIT_LOCK_STATE_KEY, staleFields);
+  },
+  readPendingScalpReversal: async (walletAddress) => {
+    const redis = await getRedisClient();
+    if (!redis) return null;
+    const raw = await redis.hGet(PENDING_SCALP_REVERSAL_KEY, walletAddress);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<PendingScalpReversal>;
+      if (
+        typeof parsed.positionPubkey !== "string"
+        || (parsed.direction !== "bullish" && parsed.direction !== "bearish")
+        || typeof parsed.createdAt !== "number"
+        || typeof parsed.expiresAt !== "number"
+        || typeof parsed.projectedSurplusUsd !== "number"
+      ) return null;
+      return parsed as PendingScalpReversal;
+    } catch {
+      return null;
+    }
+  },
+  writePendingScalpReversal: async (walletAddress, intent) => {
+    const redis = await getRedisClient();
+    if (!redis) throw new Error("Redis is unavailable while saving a pending scalp reversal.");
+    await redis.hSet(PENDING_SCALP_REVERSAL_KEY, walletAddress, JSON.stringify(intent));
+  },
+  clearPendingScalpReversal: async (walletAddress) => {
+    const redis = await getRedisClient();
+    if (!redis) return;
+    await redis.hDel(PENDING_SCALP_REVERSAL_KEY, walletAddress);
   },
   readLastSignal: async (walletAddress, asset, strategyClass) => {
     const redis = await getRedisClient();
@@ -450,8 +517,33 @@ export async function runAutonomousPerpsMonitor(
         deps.getUsdcBalance(agentWallet),
       ]);
       const openPositions = snapshot.positions.filter((position) => position.source !== "mock");
+      const activePositionPubkeys = openPositions
+        .map((position) => position.accountRef)
+        .filter((positionPubkey): positionPubkey is string => Boolean(positionPubkey));
       if (openPositions.length > 0) {
-        const position = openPositions[0]!;
+        await deps.pruneProfitLockStates(config.walletAddress, activePositionPubkeys);
+      }
+      let pendingScalpReversal = await deps.readPendingScalpReversal(config.walletAddress);
+      if (pendingScalpReversal && pendingScalpReversal.expiresAt <= Date.now()) {
+        await deps.clearPendingScalpReversal(config.walletAddress);
+        pendingScalpReversal = null;
+      }
+      if (
+        pendingScalpReversal
+        && openPositions.some((position) => position.accountRef === pendingScalpReversal?.positionPubkey)
+      ) {
+        results.push(skip(
+          config,
+          asset,
+          "SCALP_REVERSAL_CLOSE_PENDING",
+          "The exceptional opposite-side scalp signal submitted a close; the replacement entry will be reconsidered after Jupiter confirms that the original position is gone."
+        ));
+        continue;
+      }
+
+      let positionLifecycleBusy = false;
+      const monitoredPositionMessages: Array<{ armed: boolean; message: string }> = [];
+      for (const position of openPositions) {
         const positionPubkey = position.accountRef;
         const currentRoePercent = calculatePerpsPositionRoePercent(position);
         if (!positionPubkey || currentRoePercent === null) {
@@ -461,10 +553,11 @@ export async function runAutonomousPerpsMonitor(
             "POSITION_PROFIT_LOCK_UNAVAILABLE",
             "An agent-owned position is open, but Jupiter has not returned the live position reference and collateral ROE needed for its profit lock."
           ));
-          continue;
+          positionLifecycleBusy = true;
+          break;
         }
 
-        const previousState = await deps.readProfitLockState(config.walletAddress);
+        const previousState = await deps.readProfitLockState(config.walletAddress, positionPubkey);
         const positionStrategyClass = previousState?.positionPubkey === positionPubkey
           && previousState.strategyClass
           ? previousState.strategyClass
@@ -494,6 +587,7 @@ export async function runAutonomousPerpsMonitor(
             code: "PROFIT_LOCK_CLOSE_SUBMITTED",
             message: `Profit lock closed the position after ROE retreated to ${currentRoePercent.toFixed(2)}% from a ${profitLock.state.peakRoePercent.toFixed(2)}% peak. Close transaction: ${closed.txid}.`,
           });
+          positionLifecycleBusy = true;
           continue;
         }
 
@@ -504,20 +598,18 @@ export async function runAutonomousPerpsMonitor(
             "PROFIT_LOCK_CLOSE_PENDING",
             `A profit-lock close is already pending for this position after its ${profitLock.state.peakRoePercent.toFixed(2)}% peak.`
           ));
+          positionLifecycleBusy = true;
           continue;
         }
-
-        results.push(skip(
-          config,
-          asset,
-          profitLock.action === "armed" ? "POSITION_PROFIT_LOCK_ARMED" : "POSITION_ALREADY_OPEN",
-          profitLock.action === "armed"
-            ? `Profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches ${profitLock.exitRoePercent}% or lower.`
-            : `An agent-owned ${profitLock.strategyClass === "scalp" ? "Scalp" : "Smart Trade"} Perps position is already open at ${currentRoePercent.toFixed(2)}% ROE. The first profit lock arms at ${profitLock.armRoePercent}%.`
-        ));
-        continue;
+        monitoredPositionMessages.push({
+          armed: profitLock.action === "armed",
+          message: profitLock.action === "armed"
+            ? `${position.side} profit lock is armed at a ${profitLock.state.peakRoePercent.toFixed(2)}% peak and will close if live ROE reaches ${profitLock.exitRoePercent}% or lower.`
+            : `${position.side} ${profitLock.strategyClass === "scalp" ? "Scalp" : "Smart Trade"} remains independently managed at ${currentRoePercent.toFixed(2)}% ROE.`,
+        });
       }
-      await deps.clearProfitLockState(config.walletAddress);
+      if (positionLifecycleBusy) continue;
+      if (openPositions.length === 0) await deps.clearProfitLockState(config.walletAddress);
       await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       if (config.settings.perpsExecutionMode === "smart-trades" && config.settings.decisionMode === "active") {
         // This initializes/migrates the researched baseline, immediately consumes newly closed
@@ -531,7 +623,7 @@ export async function runAutonomousPerpsMonitor(
         : null;
       const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
       const points = await deps.fetchCandles(`${asset}-USD`, Math.max(60, effectiveParams.trendWindow + 35));
-      await deps.reconcileNoOpenPosition(config.walletAddress);
+      if (openPositions.length === 0) await deps.reconcileNoOpenPosition(config.walletAddress);
       if (availableUsdc === null || availableUsdc <= 0) {
         results.push(skip(config, asset, "NO_COLLATERAL", "The autonomous wallet has no available USDC collateral."));
         continue;
@@ -541,6 +633,17 @@ export async function runAutonomousPerpsMonitor(
       const windowStart = latestTimestamp - effectiveParams.trendWindow * 60_000;
       const windowPoints = points.filter((point) => point.t >= windowStart);
       if (windowPoints.length < 3) {
+        if (monitoredPositionMessages.length > 0) {
+          results.push(skip(
+            config,
+            asset,
+            monitoredPositionMessages.some((item) => item.armed)
+              ? "POSITION_PROFIT_LOCK_ARMED"
+              : "POSITION_ALREADY_OPEN",
+            `${monitoredPositionMessages.map((item) => item.message).join(" ")} Additional entry scanning is waiting for sufficient completed market candles.`
+          ));
+          continue;
+        }
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
         continue;
       }
@@ -622,11 +725,35 @@ export async function runAutonomousPerpsMonitor(
       );
       const signal = directionExperimentActive
         ? scalpSignal
-        : smartEligible ? smartSignal! : scalpSignal;
+        : openPositions.length > 0
+          ? scalpSignal
+          : smartEligible ? smartSignal! : scalpSignal;
       const strategyClass = directionExperimentActive
         ? "scalp" as const
-        : smartEligible ? "smart" as const : "scalp" as const;
+        : openPositions.length > 0
+          ? "scalp" as const
+          : smartEligible ? "smart" as const : "scalp" as const;
       if (!signal) {
+        if (pendingScalpReversal) {
+          results.push(skip(
+            config,
+            asset,
+            "SCALP_REVERSAL_RECHECK_PENDING",
+            "The original position has closed. The scalp agent is waiting for the exceptional opposite-side setup to remain qualified before opening its replacement."
+          ));
+          continue;
+        }
+        if (monitoredPositionMessages.length > 0) {
+          results.push(skip(
+            config,
+            asset,
+            monitoredPositionMessages.some((item) => item.armed)
+              ? "POSITION_PROFIT_LOCK_ARMED"
+              : "POSITION_ALREADY_OPEN",
+            `${monitoredPositionMessages.map((item) => item.message).join(" ")} No additional qualifying scalp signal was detected.`
+          ));
+          continue;
+        }
         if (directionExperimentActive && directionExperiment) {
           results.push(skip(
             config,
@@ -671,6 +798,18 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       const scalpMetadata = strategyClass === "scalp" ? signal as ScalpSignal : null;
+      if (
+        pendingScalpReversal
+        && (strategyClass !== "scalp" || signal.direction !== pendingScalpReversal.direction)
+      ) {
+        results.push(skip(
+          config,
+          asset,
+          "SCALP_REVERSAL_RECHECK_PENDING",
+          "The original position has closed, but the exceptional opposite-side setup must still qualify in the same direction before the replacement trade can open."
+        ));
+        continue;
+      }
       if (strategyClass === "smart" && executionProfile && volatilityPercent > executionProfile.volatilityCeilingPercent) {
         results.push(skip(config, asset, "LEARNED_VOLATILITY_SKIP", `Current ${volatilityPercent.toFixed(2)}% volatility exceeds the trained ${executionProfile.volatilityCeilingPercent.toFixed(2)}% ceiling.`));
         continue;
@@ -749,6 +888,53 @@ export async function runAutonomousPerpsMonitor(
             configuredTakeProfitRoePercent: config.settings.scalpTakeProfitRoePercent,
           })
         : null;
+      const scalpPositionPolicy = strategyClass === "scalp" && scalpMetadata && scalpExitPlan
+        ? evaluateScalpPositionPolicy({
+            openPositions,
+            candidateSide: side,
+            setupType: scalpMetadata.setupType,
+            confidence: signal.confidence,
+            priceActionScore: scalpMetadata.priceActionScore,
+            indicatorBypass: !invertDirection && scalpMetadata.indicatorBypass === true,
+            projectedNetProfitUsd: scalpExitPlan.netProfitTargetUsd,
+          })
+        : { action: "open" as const };
+      if (scalpPositionPolicy.action === "block") {
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+        results.push(skip(config, asset, scalpPositionPolicy.code, scalpPositionPolicy.message));
+        continue;
+      }
+      if (scalpPositionPolicy.action === "reverse") {
+        const positionPubkey = scalpPositionPolicy.existingPosition.accountRef;
+        if (!positionPubkey) {
+          results.push(skip(
+            config,
+            asset,
+            "SCALP_REVERSAL_POSITION_UNAVAILABLE",
+            "The exceptional reversal qualified, but Jupiter did not return the current position reference required for a safe close."
+          ));
+          continue;
+        }
+        const closed = await deps.closePosition(config.walletAddress, scalpPositionPolicy.existingPosition);
+        const now = Date.now();
+        await deps.writePendingScalpReversal(config.walletAddress, {
+          positionPubkey,
+          direction: executionDirection,
+          createdAt: now,
+          expiresAt: now + PENDING_SCALP_REVERSAL_TTL_MS,
+          projectedSurplusUsd: scalpPositionPolicy.projectedSurplusUsd,
+        });
+        results.push({
+          walletAddress: config.walletAddress,
+          asset,
+          status: "executed",
+          code: "SCALP_REVERSAL_CLOSE_SUBMITTED",
+          message: `Exceptional ${side} scalp reversal submitted the existing ${scalpPositionPolicy.existingPosition.side} close (${closed.txid}). The replacement must still qualify after Jupiter confirms the close; projected post-fee surplus was $${scalpPositionPolicy.projectedSurplusUsd.toFixed(2)}.`,
+          signalId: signal.id,
+        });
+        continue;
+      }
+      const allowConcurrentPosition = scalpPositionPolicy.action === "hold-concurrent";
       const triggers = computeTriggerPrices({
         config,
         entryPrice,
@@ -764,7 +950,11 @@ export async function runAutonomousPerpsMonitor(
       const routed = await deps.routeSignal(config.walletAddress, {
         signalId: signal.id,
         symbol: signal.symbol,
-        summary: invertDirection
+        summary: pendingScalpReversal
+          ? `Confirmed scalp reversal replacement after the original position closed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+          : allowConcurrentPosition
+            ? `Protected opposite-side scalp entry while the existing position remains independently managed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+          : invertDirection
           ? `Opposite-direction scalp experiment ${experimentTradeNumber}/${directionExperiment?.maxTrades}: detector selected ${detectedDirection === "bullish" ? "long" : "short"}; executing ${side}. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
           : `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
         direction: executionDirection,
@@ -824,11 +1014,15 @@ export async function runAutonomousPerpsMonitor(
           volatilityPercent: plan.volatilityPercent,
           trendBias: computeTrendBias(windowPoints),
           availableUsdc,
-          hasOpenPosition: false,
+          hasOpenPosition: openPositions.length > 0,
+          allowConcurrentPosition,
           recentPriceChangePercent,
         },
       });
       await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+      if (routed.ok && pendingScalpReversal) {
+        await deps.clearPendingScalpReversal(config.walletAddress);
+      }
       const updatedExperiment = routed.ok && invertDirection
         ? await deps.recordDirectionExperimentTrade(config.walletAddress)
         : null;

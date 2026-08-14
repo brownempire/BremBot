@@ -109,6 +109,7 @@ export function buildTradeDecisionPayload(input: {
       trendBias: signal.marketContext?.trendBias ?? null,
       availableUsdc: signal.marketContext?.availableUsdc ?? null,
       hasOpenPosition: signal.marketContext?.hasOpenPosition ?? false,
+      allowConcurrentPosition: signal.marketContext?.allowConcurrentPosition ?? false,
       recentPriceChangePercent: signal.marketContext?.recentPriceChangePercent ?? null,
     },
     strategyContext: signal.strategyContext
@@ -152,7 +153,10 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       0,
       1
     );
-    const shouldTrade = detectorQualified && !payload.marketContext.hasOpenPosition;
+    const concurrentPositionAllowed = payload.marketContext.hasOpenPosition
+      && payload.marketContext.allowConcurrentPosition === true;
+    const shouldTrade = detectorQualified
+      && (!payload.marketContext.hasOpenPosition || concurrentPositionAllowed);
     const tags = new Set<string>([
       "scalp-detector-authoritative",
       payload.shadowMode ? "shadow-mode" : "active-mode",
@@ -165,6 +169,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     }
     if (!detectorQualified) tags.add("scalp-detector-context-required");
     if (payload.marketContext.hasOpenPosition) tags.add("existing-position-open");
+    if (concurrentPositionAllowed) tags.add("opposite-side-scalp-position-allowed");
     if (shouldTrade) tags.add("scalp-detector-qualified");
 
     return {
@@ -179,7 +184,9 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       recommendedStopLossPrice: payload.requestedTrade.stopLossPrice,
       explanationTags: [...tags],
       explanationSummary: shouldTrade
-        ? `The independent scalp detector qualified a ${context?.scalpSetupType ?? "reversal"} setup; Smart Trade scoring is not applied.`
+        ? concurrentPositionAllowed
+          ? `The independent scalp detector qualified a protected opposite-side ${context?.scalpSetupType ?? "reversal"} while the existing position remains independently managed.`
+          : `The independent scalp detector qualified a ${context?.scalpSetupType ?? "reversal"} setup; Smart Trade scoring is not applied.`
         : detectorQualified
           ? "The scalp detector qualified the setup, but an existing position prevents another entry."
           : "Scalp execution requires a signal produced by the independent scalp reversal detector.",

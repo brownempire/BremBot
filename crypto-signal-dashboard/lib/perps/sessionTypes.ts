@@ -92,6 +92,7 @@ export const perpsAgentSignalSchema = z.object({
     trendBias: z.enum(["bullish", "bearish", "sideways"]).nullable().optional(),
     availableUsdc: z.number().finite().min(0).nullable().optional(),
     hasOpenPosition: z.boolean().optional(),
+    allowConcurrentPosition: z.boolean().optional(),
     recentPriceChangePercent: z.number().finite().nullable().optional(),
   }).optional(),
 });
