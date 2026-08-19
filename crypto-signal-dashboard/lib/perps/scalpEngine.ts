@@ -12,8 +12,18 @@ export const SCALP_STANDARD_COOLDOWN_SECONDS = 42.5 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
 export const SCALP_REVERSAL_MAX_ADX = 40;
+export const SCALP_CONTINUATION_MIN_ADX = 20;
+export const SCALP_CONTINUATION_MAX_ADX = 45;
+export const SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT = 0.45;
+export const SCALP_CONTINUATION_MIN_ATR_PERCENT = 0.1;
+export const SCALP_CONTINUATION_MIN_VOLUME_RATIO = 1.15;
+export const SCALP_CONTINUATION_LONG_RSI_MIN = 55;
+export const SCALP_CONTINUATION_LONG_RSI_MAX = 82;
+export const SCALP_CONTINUATION_SHORT_RSI_MIN = 18;
+export const SCALP_CONTINUATION_SHORT_RSI_MAX = 45;
+export const SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT = 10;
 export const SCALP_TRADE_LEVERAGE = 50;
-export const SCALP_POLICY_VERSION = 5;
+export const SCALP_POLICY_VERSION = 6;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   policyVersion: SCALP_POLICY_VERSION,
@@ -30,7 +40,7 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   minimumAtrPercent: 0.02,
   minimumBandwidthPercent: 0.1,
   minimumVolumeRatio: 1.037,
-  minimumPriceActionScore: 0.725,
+  minimumPriceActionScore: 0.58,
   strongReversalScore: 0.856,
   minimumSweepPercent: 0.04,
   minimumReclaimPercent: 0.08,
@@ -185,6 +195,67 @@ export function scalpProfileAllowsLiveEntries(profile: ScalpLearningProfile) {
     && (profile.validation.passed || profile.operatorActivation !== null);
 }
 
+export type ScalpTrendContinuationEvaluation = {
+  qualified: boolean;
+  reasons: string[];
+};
+
+export function evaluateScalpTrendContinuation(options: {
+  priceAction: ScalpPriceAction;
+  trendBias: "bullish" | "bearish" | "sideways";
+  indicators: IndicatorSnapshot;
+  profile: ScalpLearningProfile;
+}): ScalpTrendContinuationEvaluation {
+  const { priceAction, trendBias, indicators, profile } = options;
+  const direction = priceAction.direction;
+  const bullish = direction === "bullish";
+  const reasons: string[] = [];
+  if (priceAction.score < profile.minimumPriceActionScore) {
+    reasons.push(`Price-action score ${priceAction.score.toFixed(2)} is below ${profile.minimumPriceActionScore.toFixed(2)}.`);
+  }
+  if (!direction || !priceAction.confirmed) reasons.push("Momentum and reclaim have not confirmed a direction.");
+  if (direction && trendBias !== direction) reasons.push(`The ${trendBias} trend does not align with the ${direction} setup.`);
+  if (indicators.adx === null
+    || indicators.adx < SCALP_CONTINUATION_MIN_ADX
+    || indicators.adx > SCALP_CONTINUATION_MAX_ADX) {
+    reasons.push(`ADX must remain between ${SCALP_CONTINUATION_MIN_ADX} and ${SCALP_CONTINUATION_MAX_ADX}.`);
+  }
+  const emaAligned = direction !== null
+    && indicators.emaFast !== null
+    && indicators.emaSlow !== null
+    && (bullish ? indicators.emaFast > indicators.emaSlow : indicators.emaFast < indicators.emaSlow)
+    && indicators.emaSlopePercent !== null
+    && (bullish ? indicators.emaSlopePercent > 0 : indicators.emaSlopePercent < 0);
+  if (!emaAligned) reasons.push("EMA 9/21 alignment and slope do not confirm the setup direction.");
+  if (indicators.emaSpreadPercent === null
+    || Math.abs(indicators.emaSpreadPercent) > SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT) {
+    reasons.push(`EMA spread exceeds ${SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT.toFixed(2)}%.`);
+  }
+  const rsiReady = direction !== null
+    && indicators.rsi !== null
+    && (bullish
+      ? indicators.rsi >= SCALP_CONTINUATION_LONG_RSI_MIN && indicators.rsi <= SCALP_CONTINUATION_LONG_RSI_MAX
+      : indicators.rsi >= SCALP_CONTINUATION_SHORT_RSI_MIN && indicators.rsi <= SCALP_CONTINUATION_SHORT_RSI_MAX);
+  if (!rsiReady) reasons.push("RSI is outside the continuation entry zone.");
+  const directionalMovementReady = direction !== null
+    && indicators.plusDi !== null
+    && indicators.minusDi !== null
+    && (bullish ? indicators.plusDi > indicators.minusDi : indicators.minusDi > indicators.plusDi);
+  if (!directionalMovementReady) reasons.push("Directional movement does not confirm the setup direction.");
+  if (indicators.volumeRatio === null || indicators.volumeRatio < SCALP_CONTINUATION_MIN_VOLUME_RATIO) {
+    reasons.push(`Volume must reach ${SCALP_CONTINUATION_MIN_VOLUME_RATIO.toFixed(2)}× its recent average.`);
+  }
+  const projectedRoePercent = indicators.atrPercent === null
+    ? 0
+    : indicators.atrPercent * 2 * SCALP_TRADE_LEVERAGE;
+  if (indicators.atrPercent === null
+    || indicators.atrPercent < SCALP_CONTINUATION_MIN_ATR_PERCENT
+    || projectedRoePercent < SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT) {
+    reasons.push(`Two ATRs must project at least ${SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT}% ROE at ${SCALP_TRADE_LEVERAGE}×.`);
+  }
+  return { qualified: reasons.length === 0, reasons };
+}
+
 export function analyzeScalpPriceAction(
   points: PricePoint[],
   profile: ScalpLearningProfile = DEFAULT_SCALP_LEARNING_PROFILE
@@ -294,12 +365,13 @@ export function detectAdaptiveScalpSignal(options: {
   if (!latest || points.length < 3) return null;
 
   const priceAction = analyzeScalpPriceAction(points, profile);
-  const rangeLong = computeTrendBias(points) === "sideways"
+  const trendBias = computeTrendBias(points);
+  const rangeLong = trendBias === "sideways"
     && indicators.bollingerPosition !== null
     && indicators.bollingerPosition <= profile.longBollingerMaximum
     && indicators.rsi !== null
     && indicators.rsi <= profile.longRsiMaximum;
-  const rangeShort = computeTrendBias(points) === "sideways"
+  const rangeShort = trendBias === "sideways"
     && indicators.bollingerPosition !== null
     && indicators.bollingerPosition >= profile.shortBollingerMinimum
     && indicators.rsi !== null
@@ -318,6 +390,12 @@ export function detectAdaptiveScalpSignal(options: {
   const exceptionalReversal = priceAction.direction !== null
     && priceAction.confirmed
     && priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE;
+  const trendContinuation = !exceptionalReversal && evaluateScalpTrendContinuation({
+    priceAction,
+    trendBias,
+    indicators,
+    profile,
+  }).qualified;
   const reversalIndicatorsReady = priceAction.direction !== null
     && priceAction.confirmed
     && indicators.adx !== null
@@ -326,9 +404,9 @@ export function detectAdaptiveScalpSignal(options: {
     && Math.abs(indicators.emaSpreadPercent) <= Math.min(1.5, profile.maximumEmaSpreadPercent + 0.55)
     && indicators.rsi !== null
     && (priceAction.direction === "bullish" ? indicators.rsi <= 62 : indicators.rsi >= 38);
-  const strongReversal = !exceptionalReversal && priceAction.strong && reversalIndicatorsReady;
-  const moderateReversal = !priceAction.strong && reversalIndicatorsReady;
-  const direction = exceptionalReversal || strongReversal || moderateReversal
+  const strongReversal = !exceptionalReversal && !trendContinuation && priceAction.strong && reversalIndicatorsReady;
+  const moderateReversal = !trendContinuation && !priceAction.strong && reversalIndicatorsReady;
+  const direction = exceptionalReversal || trendContinuation || strongReversal || moderateReversal
     ? priceAction.direction
     : rangeIndicatorsReady ? rangeDirection : null;
   if (!direction) return null;
@@ -354,7 +432,8 @@ export function detectAdaptiveScalpSignal(options: {
     if (!profitableOppositeReversalReady) return null;
   }
 
-  const setupType = exceptionalReversal || strongReversal || moderateReversal
+  const structuredPriceAction = exceptionalReversal || trendContinuation || strongReversal || moderateReversal;
+  const setupType = structuredPriceAction
     ? priceAction.setupType!
     : "range-reversal";
   const setupAdjustment = setupType === "range-reversal"
@@ -368,19 +447,23 @@ export function detectAdaptiveScalpSignal(options: {
   const rangeExtremity = direction === "bullish"
     ? clamp((profile.longBollingerMaximum - (indicators.bollingerPosition ?? profile.longBollingerMaximum)) / 0.3, 0, 1)
     : clamp(((indicators.bollingerPosition ?? profile.shortBollingerMinimum) - profile.shortBollingerMinimum) / 0.3, 0, 1);
-  const rawConfidence = exceptionalReversal || strongReversal || moderateReversal
-    ? 0.55 + priceAction.score * 0.35
-    : 0.6 + rangeExtremity * 0.22;
+  const rawConfidence = trendContinuation
+    ? 0.7 + priceAction.score * 0.25
+    : exceptionalReversal || strongReversal || moderateReversal
+      ? 0.55 + priceAction.score * 0.35
+      : 0.6 + rangeExtremity * 0.22;
   if (rawConfidence < requiredConfidence) return null;
-  const confidence = clamp(rawConfidence, 0, exceptionalReversal || strongReversal || moderateReversal ? 0.9 : 0.82);
-  const tags = exceptionalReversal || strongReversal || moderateReversal
+  const confidence = clamp(rawConfidence, 0, structuredPriceAction ? 0.9 : 0.82);
+  const tags = structuredPriceAction
     ? [
         ...priceAction.tags,
         exceptionalReversal
           ? "EXCEPTIONAL_CONFIRMED_PRICE_ACTION"
-          : strongReversal
-            ? "INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"
-            : "INDICATORS_CONFIRMED_PRICE_ACTION",
+          : trendContinuation
+            ? "INDICATORS_CONFIRMED_TREND_CONTINUATION"
+            : strongReversal
+              ? "INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"
+              : "INDICATORS_CONFIRMED_PRICE_ACTION",
       ]
     : ["SCALP_RANGE", direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"];
 
@@ -392,6 +475,8 @@ export function detectAdaptiveScalpSignal(options: {
     confidence: Number(confidence.toFixed(3)),
     summary: setupType === "range-reversal"
       ? `${direction === "bullish" ? "Range-low" : "Range-high"} scalp setup with adaptive indicator confirmation.`
+      : trendContinuation
+        ? `${direction === "bullish" ? "Bullish" : "Bearish"} momentum continuation confirmed by price action, trend, and volume.`
       : `${direction === "bullish" ? "Bullish" : "Bearish"} ${setupType.replace(/-/g, " ")} detected from real-time candle structure.`,
     timestamp: latest.t,
     setupType,

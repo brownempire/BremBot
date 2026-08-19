@@ -178,7 +178,7 @@ export function createProfitableScalpBaseline(
   const longRangeWinners = rangeWinners.filter((outcome) => outcome.side === "long");
   const shortRangeWinners = rangeWinners.filter((outcome) => outcome.side === "short");
   baseline.minimumConfidence = Number(clamp(quantile(winners.map((outcome) => outcome.signalConfidence), 0.25) ?? 0.82, 0.68, 0.82).toFixed(4));
-  baseline.minimumPriceActionScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.25) ?? 0.75, 0.65, 0.82).toFixed(3));
+  baseline.minimumPriceActionScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.25) ?? 0.58, 0.58, 0.82).toFixed(3));
   baseline.strongReversalScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.75) ?? 0.9, 0.78, 0.9).toFixed(3));
   baseline.preferredDirection = winnerDirectionPreference(winners);
   baseline.longRsiMaximum = Number(clamp(quantile(longRangeWinners.map((outcome) => outcome.rsi), 0.75) ?? 46, 38, 58).toFixed(2));

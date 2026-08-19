@@ -2,7 +2,13 @@ import type { ScalpLearningProfile, ScalpSetupType } from "@/lib/decision/learni
 import {
   analyzeScalpPriceAction,
   detectAdaptiveScalpSignal,
+  evaluateScalpTrendContinuation,
   getScalpTrendBias,
+  SCALP_CONTINUATION_MAX_ADX,
+  SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT,
+  SCALP_CONTINUATION_MIN_ADX,
+  SCALP_CONTINUATION_MIN_ATR_PERCENT,
+  SCALP_CONTINUATION_MIN_VOLUME_RATIO,
   SCALP_REVERSAL_MAX_ADX,
   scalpProfileAllowsLiveEntries,
   type RecentClosedScalpTrade,
@@ -46,6 +52,11 @@ export type ScalpAgentOverlaySnapshot = {
     minimumPriceActionScore: number;
     maximumAdx: number;
     maximumReversalAdx: number;
+    minimumContinuationAdx: number;
+    maximumContinuationAdx: number;
+    maximumContinuationEmaSpreadPercent: number;
+    minimumContinuationAtrPercent: number;
+    minimumContinuationVolumeRatio: number;
     maximumEmaSpreadPercent: number;
     minimumAtrPercent: number;
     minimumBandwidthPercent: number;
@@ -79,6 +90,14 @@ function currentRejectionReasons(
     reasons.push(`Price-action score ${priceAction.score.toFixed(2)} is below ${profile.minimumPriceActionScore.toFixed(2)}.`);
   } else if (!priceAction.confirmed) {
     reasons.push("The candle-structure reversal has not confirmed its momentum/reclaim yet.");
+  } else if (priceAction.direction !== null) {
+    const continuation = evaluateScalpTrendContinuation({
+      priceAction,
+      trendBias,
+      indicators,
+      profile,
+    });
+    if (!continuation.qualified) reasons.push(...continuation.reasons.slice(0, 2));
   }
 
   const rangeRsiReady = indicators.rsi != null
@@ -257,6 +276,11 @@ export function buildScalpAgentOverlaySnapshot(input: {
       minimumPriceActionScore: input.profile.minimumPriceActionScore,
       maximumAdx: input.profile.maximumAdx,
       maximumReversalAdx: SCALP_REVERSAL_MAX_ADX,
+      minimumContinuationAdx: SCALP_CONTINUATION_MIN_ADX,
+      maximumContinuationAdx: SCALP_CONTINUATION_MAX_ADX,
+      maximumContinuationEmaSpreadPercent: SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT,
+      minimumContinuationAtrPercent: SCALP_CONTINUATION_MIN_ATR_PERCENT,
+      minimumContinuationVolumeRatio: SCALP_CONTINUATION_MIN_VOLUME_RATIO,
       maximumEmaSpreadPercent: input.profile.maximumEmaSpreadPercent,
       minimumAtrPercent: input.profile.minimumAtrPercent,
       minimumBandwidthPercent: input.profile.minimumBandwidthPercent,

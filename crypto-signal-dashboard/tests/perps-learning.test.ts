@@ -128,10 +128,10 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.equal(refreshed.profile.minimumConfidence, 0.71);
   assert.equal(refreshed.profile.preferredDirection, "bearish");
   assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
-  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 5);
+  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 6);
   assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.77);
   assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 2_550);
-  assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.725);
+  assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.58);
   assert.equal(refreshed.profile.scalpProfile?.strongReversalScore, 0.856);
   assert.equal(refreshed.profile.scalpProfile?.longRsiMaximum, 40.62);
   assert.equal(refreshed.profile.scalpProfile?.shortRsiMinimum, 58.85);
@@ -220,7 +220,7 @@ test("winner-derived scalp reset learns only from compatible post-fee winners an
 
   const baseline = scalpTrainer.createProfitableScalpBaseline(prior, outcomes);
 
-  assert.equal(baseline.policyVersion, 5);
+  assert.equal(baseline.policyVersion, 6);
   assert.equal(baseline.learnedFromClosedTrades, outcomes.length);
   assert.equal(baseline.policyOutcomeOffset, outcomes.length);
   assert.equal(baseline.validation.trainingSize, 5);
