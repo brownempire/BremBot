@@ -7,6 +7,7 @@ import type {
   TradeDecisionRecord,
 } from "@/lib/decision/types";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
+import { SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED } from "@/lib/perps/scalpEngine";
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 
 const DECISION_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1_000;
@@ -155,7 +156,10 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     );
     const concurrentPositionAllowed = payload.marketContext.hasOpenPosition
       && payload.marketContext.allowConcurrentPosition === true;
+    const pausedExceptionalBypass = context?.indicatorBypass === true
+      && !SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED;
     const shouldTrade = detectorQualified
+      && !pausedExceptionalBypass
       && (!payload.marketContext.hasOpenPosition || concurrentPositionAllowed);
     const tags = new Set<string>([
       "scalp-detector-authoritative",
@@ -163,7 +167,11 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     ]);
     if (context?.scalpSetupType) tags.add(`scalp-${context.scalpSetupType}`);
     context?.priceActionTags?.forEach((tag) => tags.add(tag));
-    if (context?.indicatorBypass) tags.add("scalp-reversal-indicator-bypass");
+    if (context?.indicatorBypass) {
+      tags.add(pausedExceptionalBypass
+        ? "scalp-reversal-indicator-bypass-paused"
+        : "scalp-reversal-indicator-bypass");
+    }
     if (payload.requestedTrade.takeProfitPrice && payload.requestedTrade.stopLossPrice) {
       tags.add("structured-exits");
     }

@@ -6,12 +6,14 @@ import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, r
 import { SCALP_STOP_LOSS_ROE_PERCENT } from "../lib/perps/scalpExit";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
   SCALP_PROFIT_COOLDOWN_SECONDS,
   SCALP_REVERSAL_MAX_ADX,
   SCALP_TRADE_LEVERAGE,
   analyzeScalpPriceAction,
   detectAdaptiveScalpSignal,
+  evaluateScalpReversalSafety,
 } from "../lib/perps/scalpEngine";
 import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
 import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
@@ -197,7 +199,31 @@ function exceptionalBullishSweepPoints() {
     : point);
 }
 
-test("exceptional confirmed liquidity-sweep reversal can bypass the trend-strength ceiling", () => {
+function qualifyingRangePoints() {
+  const baseTime = 1_784_174_800_000;
+  return Array.from({ length: 80 }, (_, index) => {
+    const close = index >= 72
+      ? 100.02 - (index - 72) * 0.04
+      : 100 + (index % 2 === 0 ? 0.05 : -0.05);
+    return {
+      t: baseTime + index * 60_000,
+      o: 100,
+      h: 100.08,
+      l: 99.4,
+      v: close,
+      volume: index === 79 ? 130 : 100,
+    };
+  });
+}
+
+function qualifyingRangeLearningProfile() {
+  const profile = createLearningProfile();
+  profile.scalpProfile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  profile.scalpProfile.minimumConfidence = 0.7;
+  return profile;
+}
+
+test("exceptional confirmed liquidity-sweep reversal remains diagnostic while live bypass is paused", () => {
   const points = exceptionalBullishSweepPoints();
   const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
@@ -212,13 +238,11 @@ test("exceptional confirmed liquidity-sweep reversal can bypass the trend-streng
   assert.equal(priceAction.strong, true);
   assert.equal(priceAction.confirmed, true);
   assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
-  assert.equal(signal?.direction, "bullish");
-  assert.equal(signal?.indicatorBypass, true);
-  assert.ok(signal?.priceActionTags.includes("PRICE_LIQUIDITY_SWEEP_RECLAIM"));
-  assert.ok(signal?.priceActionTags.includes("EXCEPTIONAL_CONFIRMED_PRICE_ACTION"));
+  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, false);
+  assert.equal(signal, null);
 });
 
-test("the candle-structure reversal detector handles bearish liquidity sweeps symmetrically", () => {
+test("the paused bypass also blocks the symmetric bearish liquidity sweep", () => {
   const points = exceptionalBullishSweepPoints().map((point) => ({
     ...point,
     v: 200 - point.v,
@@ -226,6 +250,7 @@ test("the candle-structure reversal detector handles bearish liquidity sweeps sy
     h: 200 - point.l,
     l: 200 - point.h,
   }));
+  const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points,
@@ -241,9 +266,10 @@ test("the candle-structure reversal detector handles bearish liquidity sweeps sy
     profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
   });
 
-  assert.equal(signal?.direction, "bearish");
-  assert.equal(signal?.setupType, "liquidity-sweep");
-  assert.equal(signal?.indicatorBypass, true);
+  assert.equal(priceAction.direction, "bearish");
+  assert.equal(priceAction.setupType, "liquidity-sweep");
+  assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
+  assert.equal(signal, null);
 });
 
 test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
@@ -279,20 +305,24 @@ test("ADX above 40 still rejects a non-exceptional confirmed reversal", () => {
   assert.equal(signal, null);
 });
 
-test("a confirmed reversal at the ADX 40 ceiling remains eligible", () => {
-  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
-  const signal = detectAdaptiveScalpSignal({
-    symbol: "SOL/USD",
-    points: bullishSweepPoints(),
-    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX }),
-    profile,
+test("a persisted reversal at the ADX 40 ceiling passes the new safety layer", () => {
+  const priceAction = analyzeScalpPriceAction(exceptionalBullishSweepPoints(), DEFAULT_SCALP_LEARNING_PROFILE);
+  const safety = evaluateScalpReversalSafety({
+    priceAction,
+    previousPriceAction: priceAction,
+    indicators: reversalIndicators({
+      adx: SCALP_REVERSAL_MAX_ADX,
+      plusDi: 24,
+      minusDi: 18,
+    }),
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
   });
 
-  assert.equal(signal?.setupType, "liquidity-sweep");
-  assert.equal(signal?.indicatorBypass, false);
+  assert.equal(safety.qualified, true);
+  assert.deepEqual(safety.reasons, []);
 });
 
-test("a profitable scalp permits an exceptional opposite reversal five minutes after closing", () => {
+test("a profitable scalp cannot reactivate the paused exceptional bypass", () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const lastSignalAt = latestTimestamp - 12 * 60_000;
@@ -311,8 +341,7 @@ test("a profitable scalp permits an exceptional opposite reversal five minutes a
   });
 
   assert.equal(SCALP_PROFIT_COOLDOWN_SECONDS, 300);
-  assert.equal(signal?.direction, "bullish");
-  assert.equal(signal?.indicatorBypass, true);
+  assert.equal(signal, null);
 });
 
 test("the shortened cooldown does not apply to losses, same-direction entries, or early reversals", () => {
@@ -390,7 +419,7 @@ test("low-balance collateral uses exactly $12 from $12 up to but not including $
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
 });
 
-test("monitor combines the profitable cooldown exception with 50x protected scalp execution", async () => {
+test("monitor does not revive the paused exceptional bypass after a profitable cooldown", async () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const lastSignalAt = latestTimestamp - 12 * 60_000;
@@ -433,27 +462,13 @@ test("monitor combines the profitable cooldown exception with 50x protected scal
     writeLastSignal: async () => undefined,
   });
 
-  const routed = routedSignal as PerpsAgentSignal | null;
-  assert.equal(result.results[0]?.status, "executed");
-  assert.equal(routed?.strategyClass, "scalp");
-  assert.equal(routed?.leverage, SCALP_TRADE_LEVERAGE);
-  assert.equal(routed?.collateralUsd, 25);
-  assert.ok((routed?.takeProfitPrice ?? 0) > (routed?.marketContext?.spotPrice ?? Number.POSITIVE_INFINITY));
-  assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < (routed?.marketContext?.spotPrice ?? 0));
-  const entryPrice = routed?.marketContext?.spotPrice ?? 0;
-  const takeProfitRoe = entryPrice > 0
-    ? (((routed?.takeProfitPrice ?? 0) - entryPrice) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
-    : 0;
-  const stopLossRoe = entryPrice > 0
-    ? ((entryPrice - (routed?.stopLossPrice ?? entryPrice)) / entryPrice) * SCALP_TRADE_LEVERAGE * 100
-    : 0;
-  assert.ok(takeProfitRoe >= 42.24);
-  assert.ok(takeProfitRoe <= 100.01);
-  assert.ok(Math.abs(stopLossRoe - SCALP_STOP_LOSS_ROE_PERCENT) < 0.01);
+  assert.equal(result.results[0]?.status, "skipped");
+  assert.equal(result.results[0]?.code, "NO_SIGNAL");
+  assert.equal(routedSignal, null);
 });
 
 test("three-trade scalp experiment executes the exact opposite direction and counts only submissions", async () => {
-  const points = exceptionalBullishSweepPoints();
+  const points = qualifyingRangePoints();
   let routedSignal: PerpsAgentSignal | null = null;
   let recordedTrades = 0;
   const base = createConfig();
@@ -476,6 +491,7 @@ test("three-trade scalp experiment executes the exact opposite direction and cou
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
     readLastSignal: async () => null,
     writeLastSignal: async () => undefined,
     getDirectionExperiment: async () => ({
@@ -518,7 +534,7 @@ test("three-trade scalp experiment executes the exact opposite direction and cou
 });
 
 test("opposite-direction experiment does not consume a trade when routing is rejected", async () => {
-  const points = exceptionalBullishSweepPoints();
+  const points = qualifyingRangePoints();
   let recordedTrades = 0;
   const base = createConfig();
   const config = createConfig({
@@ -537,6 +553,7 @@ test("opposite-direction experiment does not consume a trade when routing is rej
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
     readLastSignal: async () => null,
     writeLastSignal: async () => undefined,
     getDirectionExperiment: async () => ({
@@ -1667,7 +1684,7 @@ test("parameter candidates are skipped when the RSI indicator reaches the config
 });
 
 test("scalp monitor can route an opposite-side entry while independently managing the current position", async () => {
-  const points = exceptionalBullishSweepPoints();
+  const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
     settings: { ...base.settings, scalpModeEnabled: true },
@@ -1704,6 +1721,7 @@ test("scalp monitor can route an opposite-side entry while independently managin
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
     readProfitLockState: async () => null,
     writeProfitLockState: async () => undefined,
     pruneProfitLockStates: async (_wallet, activePositionPubkeys) => {
@@ -1724,7 +1742,7 @@ test("scalp monitor can route an opposite-side entry while independently managin
 });
 
 test("scalp monitor refuses a second same-side entry instead of merging Jupiter positions", async () => {
-  const points = exceptionalBullishSweepPoints();
+  const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
     settings: { ...base.settings, scalpModeEnabled: true },
@@ -1746,6 +1764,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
     readProfitLockState: async () => null,
     writeProfitLockState: async () => undefined,
     readLastSignal: async () => null,
@@ -1756,7 +1775,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
   assert.equal(routeCalls, 0);
 });
 
-test("exceptional scalp reversal closes first and records a replacement intent without racing the new order", async () => {
+test("paused exceptional reversal cannot close an existing position or create replacement intent", async () => {
   const points = exceptionalBullishSweepPoints();
   const base = createConfig();
   const config = createConfig({
@@ -1804,16 +1823,13 @@ test("exceptional scalp reversal closes first and records a replacement intent w
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.code, "SCALP_REVERSAL_CLOSE_SUBMITTED");
-  assert.equal(closeCalls, 1);
+  assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
+  assert.equal(closeCalls, 0);
   assert.equal(routeCalls, 0);
-  const savedIntent = savedIntents[0];
-  assert.equal(savedIntent?.direction, "bullish");
-  assert.equal(savedIntent?.positionPubkey, "losing-short");
-  assert.ok((savedIntent?.expiresAt ?? 0) > Date.now());
+  assert.deepEqual(savedIntents, []);
 });
 
-test("scalp reversal replacement opens only after the original position is gone and the signal requalifies", async () => {
+test("stale reversal replacement remains paused when the exceptional setup cannot execute", async () => {
   const points = exceptionalBullishSweepPoints();
   const base = createConfig();
   const config = createConfig({
@@ -1851,9 +1867,8 @@ test("scalp reversal replacement opens only after the original position is gone 
     writeLastSignal: async () => undefined,
   });
 
-  const routed = routedSignal as PerpsAgentSignal | null;
-  assert.equal(result.results[0]?.status, "executed");
-  assert.equal(routed?.direction, "bullish");
-  assert.match(routed?.summary ?? "", /reversal replacement/i);
-  assert.equal(clearCalls, 1);
+  assert.equal(result.results[0]?.status, "skipped");
+  assert.equal(result.results[0]?.code, "SCALP_REVERSAL_RECHECK_PENDING");
+  assert.equal(routedSignal, null);
+  assert.equal(clearCalls, 0);
 });

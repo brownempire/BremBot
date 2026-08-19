@@ -11,6 +11,9 @@ import type { IndicatorSnapshot } from "@/lib/signal/indicators";
 export const SCALP_STANDARD_COOLDOWN_SECONDS = 42.5 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
+export const SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED: boolean = false;
+export const SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX = 45;
+export const SCALP_REVERSAL_MIN_VOLUME_RATIO = 0.75;
 export const SCALP_REVERSAL_MAX_ADX = 40;
 export const SCALP_CONTINUATION_MIN_ADX = 20;
 export const SCALP_CONTINUATION_MAX_ADX = 45;
@@ -23,7 +26,7 @@ export const SCALP_CONTINUATION_SHORT_RSI_MIN = 18;
 export const SCALP_CONTINUATION_SHORT_RSI_MAX = 45;
 export const SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT = 10;
 export const SCALP_TRADE_LEVERAGE = 50;
-export const SCALP_POLICY_VERSION = 6;
+export const SCALP_POLICY_VERSION = 7;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   policyVersion: SCALP_POLICY_VERSION,
@@ -200,6 +203,50 @@ export type ScalpTrendContinuationEvaluation = {
   reasons: string[];
 };
 
+export type ScalpReversalSafetyEvaluation = {
+  qualified: boolean;
+  reasons: string[];
+};
+
+export function evaluateScalpReversalSafety(options: {
+  priceAction: ScalpPriceAction;
+  previousPriceAction: ScalpPriceAction;
+  indicators: IndicatorSnapshot;
+  profile: ScalpLearningProfile;
+}): ScalpReversalSafetyEvaluation {
+  const { priceAction, previousPriceAction, indicators, profile } = options;
+  const direction = priceAction.direction;
+  const reasons: string[] = [];
+  const persisted = direction !== null
+    && priceAction.confirmed
+    && previousPriceAction.direction === direction
+    && previousPriceAction.confirmed
+    && previousPriceAction.score >= profile.minimumPriceActionScore;
+  if (!persisted) reasons.push("The reversal has not remained confirmed across two completed candles.");
+
+  if (indicators.volumeRatio === null || indicators.volumeRatio < SCALP_REVERSAL_MIN_VOLUME_RATIO) {
+    reasons.push(`Closed-candle volume must reach ${SCALP_REVERSAL_MIN_VOLUME_RATIO.toFixed(2)}× its recent average.`);
+  }
+  if (indicators.adx === null || indicators.adx > SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX) {
+    reasons.push(`Reversal ADX must not exceed ${SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX}.`);
+  }
+
+  const bullish = direction === "bullish";
+  const emaOpposes = direction !== null
+    && indicators.emaFast !== null
+    && indicators.emaSlow !== null
+    && (bullish ? indicators.emaFast < indicators.emaSlow : indicators.emaFast > indicators.emaSlow);
+  const directionalMovementOpposes = direction !== null
+    && indicators.plusDi !== null
+    && indicators.minusDi !== null
+    && (bullish ? indicators.minusDi > indicators.plusDi : indicators.plusDi > indicators.minusDi);
+  if (emaOpposes && directionalMovementOpposes) {
+    reasons.push("EMA 9/21 and directional movement both oppose the reversal direction.");
+  }
+
+  return { qualified: reasons.length === 0, reasons };
+}
+
 export function evaluateScalpTrendContinuation(options: {
   priceAction: ScalpPriceAction;
   trendBias: "bullish" | "bearish" | "sideways";
@@ -365,6 +412,7 @@ export function detectAdaptiveScalpSignal(options: {
   if (!latest || points.length < 3) return null;
 
   const priceAction = analyzeScalpPriceAction(points, profile);
+  const previousPriceAction = analyzeScalpPriceAction(points.slice(0, -1), profile);
   const trendBias = computeTrendBias(points);
   const rangeLong = trendBias === "sideways"
     && indicators.bollingerPosition !== null
@@ -387,24 +435,34 @@ export function detectAdaptiveScalpSignal(options: {
     && indicators.bollingerBandwidthPercent >= profile.minimumBandwidthPercent
     && (indicators.volumeRatio === null || indicators.volumeRatio >= profile.minimumVolumeRatio);
 
-  const exceptionalReversal = priceAction.direction !== null
+  const exceptionalReversalCandidate = priceAction.direction !== null
     && priceAction.confirmed
     && priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE;
-  const trendContinuation = !exceptionalReversal && evaluateScalpTrendContinuation({
+  const trendContinuation = evaluateScalpTrendContinuation({
     priceAction,
     trendBias,
     indicators,
     profile,
   }).qualified;
+  const reversalSafety = evaluateScalpReversalSafety({
+    priceAction,
+    previousPriceAction,
+    indicators,
+    profile,
+  });
+  const exceptionalReversal = SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED
+    && exceptionalReversalCandidate
+    && reversalSafety.qualified;
   const reversalIndicatorsReady = priceAction.direction !== null
     && priceAction.confirmed
+    && reversalSafety.qualified
     && indicators.adx !== null
     && indicators.adx <= SCALP_REVERSAL_MAX_ADX
     && indicators.emaSpreadPercent !== null
     && Math.abs(indicators.emaSpreadPercent) <= Math.min(1.5, profile.maximumEmaSpreadPercent + 0.55)
     && indicators.rsi !== null
     && (priceAction.direction === "bullish" ? indicators.rsi <= 62 : indicators.rsi >= 38);
-  const strongReversal = !exceptionalReversal && !trendContinuation && priceAction.strong && reversalIndicatorsReady;
+  const strongReversal = !trendContinuation && priceAction.strong && reversalIndicatorsReady;
   const moderateReversal = !trendContinuation && !priceAction.strong && reversalIndicatorsReady;
   const direction = exceptionalReversal || trendContinuation || strongReversal || moderateReversal
     ? priceAction.direction

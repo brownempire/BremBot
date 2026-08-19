@@ -208,7 +208,7 @@ test("set-parameter execution remains authoritative when the decision layer is a
   assert.equal(result.execution.leverage, 8);
 });
 
-test("authoritative scalp reversal is not vetoed by Smart leverage, allocation, trend, or blocked-history scoring", async () => {
+test("authoritative exceptional scalp reversal is blocked while the live bypass is paused", async () => {
   process.env.PERPS_DECISION_SHADOW_MODE = "false";
   process.env.PERPS_MAX_LEVERAGE = "50";
   process.env.PERPS_MAX_TRADE_PCT = "1";
@@ -262,12 +262,13 @@ test("authoritative scalp reversal is not vetoed by Smart leverage, allocation, 
     },
   });
 
-  assert.equal(result.decision?.shouldTrade, true);
-  assert.equal(result.ok, true);
-  assert.equal(result.execution.status, "paper_executed");
-  assert.equal(result.execution.collateralUsd, 50);
-  assert.equal(result.execution.leverage, 50);
+  assert.equal(result.decision?.shouldTrade, false);
+  assert.equal(result.ok, false);
+  assert.equal(result.execution?.status, "blocked");
+  assert.equal(result.execution?.collateralUsd, 50);
+  assert.equal(result.execution?.leverage, 50);
   assert.equal(result.decision?.explanationTags.includes("scalp-detector-authoritative"), true);
+  assert.equal(result.decision?.explanationTags.includes("scalp-reversal-indicator-bypass-paused"), true);
   assert.equal(result.decision?.explanationTags.includes("very-high-leverage"), false);
   assert.equal(result.decision?.explanationTags.includes("heavy-wallet-allocation"), false);
   assert.equal(result.decision?.explanationTags.includes("recent-blocked-drag"), false);

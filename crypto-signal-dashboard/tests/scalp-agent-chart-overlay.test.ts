@@ -55,6 +55,7 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.match(snapshot.reasons[0] ?? "", /loss-history validation/i);
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
+  assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, false);
   assert.ok(snapshot.indicators.emaFast !== null);
   assert.ok(snapshot.indicators.rsi !== null);
   assert.ok(snapshot.indicators.adx !== null);

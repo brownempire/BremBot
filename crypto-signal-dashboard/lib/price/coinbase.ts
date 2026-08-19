@@ -82,6 +82,13 @@ export async function fetchCoinbaseMinuteCandles(product: string, lookbackMinute
     throw new Error("Coinbase returned an invalid candle response.");
   }
 
+  return parseCompletedCoinbaseMinuteCandles(raw, end.getTime());
+}
+
+export function parseCompletedCoinbaseMinuteCandles(raw: unknown, observedAt = Date.now()): PricePoint[] {
+  if (!Array.isArray(raw)) return [];
+  const currentMinuteStartedAt = Math.floor(observedAt / 60_000) * 60_000;
+
   return raw
     .flatMap((entry) => {
       if (!Array.isArray(entry) || entry.length < 5) return [];
@@ -92,7 +99,10 @@ export async function fetchCoinbaseMinuteCandles(product: string, lookbackMinute
       const open = Number(candle[3]);
       const close = Number(candle[4]);
       const volume = Number(candle[5]);
-      return Number.isFinite(timestamp) && Number.isFinite(close) && close > 0
+      return Number.isFinite(timestamp)
+        && timestamp < currentMinuteStartedAt
+        && Number.isFinite(close)
+        && close > 0
         ? [{
             t: timestamp,
             v: close,

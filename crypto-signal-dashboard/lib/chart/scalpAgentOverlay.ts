@@ -2,6 +2,7 @@ import type { ScalpLearningProfile, ScalpSetupType } from "@/lib/decision/learni
 import {
   analyzeScalpPriceAction,
   detectAdaptiveScalpSignal,
+  evaluateScalpReversalSafety,
   evaluateScalpTrendContinuation,
   getScalpTrendBias,
   SCALP_CONTINUATION_MAX_ADX,
@@ -9,6 +10,10 @@ import {
   SCALP_CONTINUATION_MIN_ADX,
   SCALP_CONTINUATION_MIN_ATR_PERCENT,
   SCALP_CONTINUATION_MIN_VOLUME_RATIO,
+  SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
+  SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX,
+  SCALP_EXCEPTIONAL_REVERSAL_SCORE,
+  SCALP_REVERSAL_MIN_VOLUME_RATIO,
   SCALP_REVERSAL_MAX_ADX,
   scalpProfileAllowsLiveEntries,
   type RecentClosedScalpTrade,
@@ -52,6 +57,9 @@ export type ScalpAgentOverlaySnapshot = {
     minimumPriceActionScore: number;
     maximumAdx: number;
     maximumReversalAdx: number;
+    exceptionalReversalBypassEnabled: boolean;
+    maximumExceptionalReversalAdx: number;
+    minimumReversalVolumeRatio: number;
     minimumContinuationAdx: number;
     maximumContinuationAdx: number;
     maximumContinuationEmaSpreadPercent: number;
@@ -83,6 +91,7 @@ function currentRejectionReasons(
   profile: ScalpLearningProfile
 ) {
   const priceAction = analyzeScalpPriceAction(points, profile);
+  const previousPriceAction = analyzeScalpPriceAction(points.slice(0, -1), profile);
   const trendBias = getScalpTrendBias(points);
   const reasons: string[] = [];
 
@@ -97,7 +106,23 @@ function currentRejectionReasons(
       indicators,
       profile,
     });
-    if (!continuation.qualified) reasons.push(...continuation.reasons.slice(0, 2));
+    if (!continuation.qualified) {
+      const exceptionalCandidate = priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE;
+      if (exceptionalCandidate && !SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED) {
+        reasons.push("Exceptional reversal execution is paused; the setup remains visible for diagnostics only.");
+      }
+      if (exceptionalCandidate) {
+        const safety = evaluateScalpReversalSafety({
+          priceAction,
+          previousPriceAction,
+          indicators,
+          profile,
+        });
+        reasons.push(...safety.reasons.slice(0, 2));
+      } else {
+        reasons.push(...continuation.reasons.slice(0, 2));
+      }
+    }
   }
 
   const rangeRsiReady = indicators.rsi != null
@@ -276,6 +301,9 @@ export function buildScalpAgentOverlaySnapshot(input: {
       minimumPriceActionScore: input.profile.minimumPriceActionScore,
       maximumAdx: input.profile.maximumAdx,
       maximumReversalAdx: SCALP_REVERSAL_MAX_ADX,
+      exceptionalReversalBypassEnabled: SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
+      maximumExceptionalReversalAdx: SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX,
+      minimumReversalVolumeRatio: SCALP_REVERSAL_MIN_VOLUME_RATIO,
       minimumContinuationAdx: SCALP_CONTINUATION_MIN_ADX,
       maximumContinuationAdx: SCALP_CONTINUATION_MAX_ADX,
       maximumContinuationEmaSpreadPercent: SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT,

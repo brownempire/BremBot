@@ -1,6 +1,7 @@
 import type { ScalpLearningProfile, TradeLearningOutcome } from "@/lib/decision/learningTypes";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_POLICY_VERSION,
   SCALP_STANDARD_COOLDOWN_SECONDS,
 } from "@/lib/perps/scalpEngine";
@@ -131,7 +132,7 @@ function outcomeMatchesWinnerBaseline(outcome: TradeLearningOutcome, profile: Sc
   }
 
   const exceptional = outcome.priceActionTags?.includes("EXCEPTIONAL_CONFIRMED_PRICE_ACTION") === true;
-  if (exceptional) return true;
+  if (exceptional) return SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED;
   if (outcome.adx == null || outcome.adx > 40) return false;
   if (outcome.emaSpreadPercent != null
     && Math.abs(outcome.emaSpreadPercent) > Math.min(1.5, profile.maximumEmaSpreadPercent + 0.55)) return false;

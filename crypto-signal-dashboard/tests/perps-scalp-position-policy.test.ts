@@ -5,7 +5,6 @@ import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import {
   evaluateScalpPositionPolicy,
   SCALP_MAX_CONCURRENT_POSITIONS,
-  SCALP_REVERSAL_MINIMUM_PROJECTED_SURPLUS_USD,
 } from "../lib/perps/scalpPositionPolicy";
 
 function position(side: "long" | "short", unrealizedPnl: number, accountRef = `position-${side}`): JupiterPerpsPosition {
@@ -71,15 +70,12 @@ test("a qualifying opposite scalp can coexist with one independently managed pos
   assert.equal(SCALP_MAX_CONCURRENT_POSITIONS, 2);
 });
 
-test("exceptional opposite scalp reverses only when projected post-fee profit covers the loss and buffer", () => {
+test("paused exceptional opposite scalp cannot close and replace the existing position", () => {
   const reversal = evaluateScalpPositionPolicy({
     openPositions: [position("short", -1.5)],
     ...exceptionalLong,
   });
-  assert.equal(reversal.action, "reverse");
-  if (reversal.action === "reverse") {
-    assert.ok(reversal.projectedSurplusUsd >= SCALP_REVERSAL_MINIMUM_PROJECTED_SURPLUS_USD);
-  }
+  assert.equal(reversal.action, "hold-concurrent");
 
   const insufficientRecovery = evaluateScalpPositionPolicy({
     openPositions: [position("short", -4)],

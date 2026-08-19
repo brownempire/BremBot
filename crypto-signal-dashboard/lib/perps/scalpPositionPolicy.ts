@@ -1,4 +1,5 @@
 import type { JupiterPerpsPosition } from "@/lib/jupiterPerps";
+import { SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED } from "@/lib/perps/scalpEngine";
 
 export const SCALP_MAX_CONCURRENT_POSITIONS = 2;
 export const SCALP_REVERSAL_MINIMUM_CONFIDENCE = 0.85;
@@ -57,7 +58,8 @@ export function evaluateScalpPositionPolicy(options: {
   const projectedSurplusUsd = currentNetPnlUsd === null
     ? Number.NEGATIVE_INFINITY
     : options.projectedNetProfitUsd + Math.min(0, currentNetPnlUsd) - estimatedCloseFeeUsd;
-  const exceptionalOppositeReversal = options.setupType === "liquidity-sweep"
+  const exceptionalOppositeReversal = SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED
+    && options.setupType === "liquidity-sweep"
     && options.indicatorBypass
     && options.confidence >= SCALP_REVERSAL_MINIMUM_CONFIDENCE
     && options.priceActionScore >= SCALP_REVERSAL_MINIMUM_PRICE_ACTION_SCORE;
