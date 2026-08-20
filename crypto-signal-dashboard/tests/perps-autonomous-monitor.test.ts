@@ -2926,6 +2926,7 @@ test("durable protection recovery runs for a disabled no-asset config", async ()
 test("an unverified empty inventory cannot reconcile the wallet flat or admit a new scalp", async () => {
   const base = createConfig();
   const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let policyMigrationCalls = 0;
   let reconciliationCalls = 0;
   let flatReconciliationCalls = 0;
   let routeCalls = 0;
@@ -2946,6 +2947,10 @@ test("an unverified empty inventory cannot reconcile the wallet flat or admit a 
       },
     }),
     getUsdcBalance: async () => 100,
+    ensureScalpPolicyProfile: async () => {
+      policyMigrationCalls += 1;
+      return qualifyingRangeLearningProfile();
+    },
     reconcileLearningHistory: async () => {
       reconciliationCalls += 1;
       return 0;
@@ -2961,8 +2966,45 @@ test("an unverified empty inventory cannot reconcile the wallet flat or admit a 
   });
 
   assert.equal(result.results[0]?.code, "POSITION_ABSENCE_UNVERIFIED");
+  assert.equal(policyMigrationCalls, 1);
   assert.equal(reconciliationCalls, 0);
   assert.equal(flatReconciliationCalls, 0);
+  assert.equal(routeCalls, 0);
+});
+
+test("an unverified empty inventory fails closed when scalp policy migration cannot be verified", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let routeCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    fetchSnapshot: async () => ({
+      positions: [],
+      pendingTriggers: [],
+      recentTrades: [],
+      readEvidence: {
+        liveApiSucceeded: true,
+        rpcSucceeded: false,
+        authoritativePositionAbsence: false,
+      },
+    }),
+    getUsdcBalance: async () => 100,
+    ensureScalpPolicyProfile: async () => {
+      throw new Error("The authoritative v8 scalp rollout could not be verified after persistence.");
+    },
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.results[0]?.code, "MONITOR_ERROR");
+  assert.match(result.results[0]?.message ?? "", /authoritative v8 scalp rollout/i);
   assert.equal(routeCalls, 0);
 });
 

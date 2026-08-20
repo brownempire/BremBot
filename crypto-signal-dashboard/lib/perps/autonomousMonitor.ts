@@ -1171,6 +1171,13 @@ export async function runAutonomousPerpsMonitor(
         openPositions.length === 0
         && snapshot.readEvidence?.authoritativePositionAbsence !== true
       ) {
+        if (config.settings.scalpModeEnabled) {
+          // Scalp-policy initialization/migration only persists policy metadata;
+          // it neither reconciles inventory nor admits an entry. Keep it ahead of
+          // the unverified-flat guard so an older profile cannot remain stuck,
+          // while the guard below continues to fail closed before any scan/route.
+          await deps.ensureScalpPolicyProfile(config.walletAddress);
+        }
         results.push(skip(
           config,
           asset,
