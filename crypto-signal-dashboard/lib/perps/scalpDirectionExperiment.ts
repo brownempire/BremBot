@@ -83,6 +83,36 @@ redis.call('HSET', KEYS[1], ARGV[1], encoded)
 return encoded
 `;
 
+const CANCEL_EXPERIMENT_SCRIPT = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw then return '' end
+local ok, state = pcall(cjson.decode, raw)
+if not ok then return '' end
+if state.enabled ~= true and (tonumber(state.tradesRemaining) or 0) <= 0 then return raw end
+state.enabled = false
+state.tradesRemaining = 0
+state.completedAt = ARGV[2]
+local encoded = cjson.encode(state)
+redis.call('HSET', KEYS[1], ARGV[1], encoded)
+return encoded
+`;
+
+/**
+ * Atomically retires the legacy opposite-direction experiment. Policy v8 must
+ * never inherit an experiment that can invert an otherwise valid detector
+ * result or leave the wallet stuck behind a rejected experimental cooldown.
+ */
+export async function cancelScalpDirectionExperiment(walletAddress: string) {
+  const redis = await getRedisClient();
+  if (!redis) throw new Error("Redis is required for the scalp direction experiment.");
+  const result = await redis.eval(CANCEL_EXPERIMENT_SCRIPT, {
+    keys: [REDIS_KEY],
+    arguments: [walletAddress, new Date().toISOString()],
+  });
+  const raw = typeof result === "string" ? result : Buffer.isBuffer(result) ? result.toString("utf8") : "";
+  return parseExperiment(raw);
+}
+
 export async function recordScalpDirectionExperimentTrade(walletAddress: string) {
   const redis = await getRedisClient();
   if (!redis) throw new Error("Redis is required for the scalp direction experiment.");

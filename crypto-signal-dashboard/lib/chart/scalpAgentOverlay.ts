@@ -1,18 +1,25 @@
 import type { ScalpLearningProfile, ScalpSetupType } from "@/lib/decision/learningTypes";
 import {
   analyzeScalpPriceAction,
+  classifyScalpMarketRegime,
   detectAdaptiveScalpSignal,
+  evaluateScalpBreakoutRetest,
+  evaluateScalpRangeReversal,
   evaluateScalpReversalSafety,
   evaluateScalpTrendContinuation,
   getScalpTrendBias,
   SCALP_CONTINUATION_MAX_ADX,
   SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT,
+  SCALP_CONTINUATION_LONG_BOLLINGER_MAXIMUM,
   SCALP_CONTINUATION_MIN_ADX,
   SCALP_CONTINUATION_MIN_ATR_PERCENT,
+  SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
   SCALP_CONTINUATION_MIN_VOLUME_RATIO,
+  SCALP_CONTINUATION_SHORT_BOLLINGER_MINIMUM,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
+  SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
   SCALP_REVERSAL_MIN_VOLUME_RATIO,
   SCALP_REVERSAL_MAX_ADX,
   scalpProfileAllowsLiveEntries,
@@ -62,9 +69,13 @@ export type ScalpAgentOverlaySnapshot = {
     minimumReversalVolumeRatio: number;
     minimumContinuationAdx: number;
     maximumContinuationAdx: number;
+    minimumContinuationPriceActionScore: number;
     maximumContinuationEmaSpreadPercent: number;
     minimumContinuationAtrPercent: number;
     minimumContinuationVolumeRatio: number;
+    continuationLongBollingerMaximum: number;
+    continuationShortBollingerMinimum: number;
+    maximum145mNetOrRangePercent: number;
     maximumEmaSpreadPercent: number;
     minimumAtrPercent: number;
     minimumBandwidthPercent: number;
@@ -92,7 +103,8 @@ function currentRejectionReasons(
 ) {
   const priceAction = analyzeScalpPriceAction(points, profile);
   const previousPriceAction = analyzeScalpPriceAction(points.slice(0, -1), profile);
-  const trendBias = getScalpTrendBias(points);
+  const regime = classifyScalpMarketRegime(points);
+  const trendBias = regime.bias;
   const reasons: string[] = [];
 
   if (priceAction.score < profile.minimumPriceActionScore) {
@@ -102,9 +114,12 @@ function currentRejectionReasons(
   } else if (priceAction.direction !== null) {
     const continuation = evaluateScalpTrendContinuation({
       priceAction,
+      previousPriceAction,
+      points,
       trendBias,
       indicators,
       profile,
+      regime,
     });
     if (!continuation.qualified) {
       const exceptionalCandidate = priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE;
@@ -124,38 +139,10 @@ function currentRejectionReasons(
       }
     }
   }
-
-  const rangeRsiReady = indicators.rsi != null
-    && (indicators.rsi <= profile.longRsiMaximum || indicators.rsi >= profile.shortRsiMinimum);
-  const rangeBandReady = indicators.bollingerPosition != null
-    && (indicators.bollingerPosition <= profile.longBollingerMaximum
-      || indicators.bollingerPosition >= profile.shortBollingerMinimum);
-  if (trendBias !== "sideways" && priceAction.direction === null) {
-    reasons.push(`Range entry is waiting for a sideways trend; current bias is ${trendBias}.`);
-  }
-  if (!rangeRsiReady && indicators.rsi != null) {
-    reasons.push(`RSI ${indicators.rsi.toFixed(1)} is outside the learned range-entry zones.`);
-  }
-  if (!rangeBandReady && indicators.bollingerPosition != null) {
-    reasons.push(`Bollinger position ${indicators.bollingerPosition.toFixed(2)} is not at a learned range edge.`);
-  }
-  if (indicators.adx != null && indicators.adx > profile.maximumAdx) {
-    reasons.push(`ADX ${indicators.adx.toFixed(1)} exceeds the range limit ${profile.maximumAdx.toFixed(1)}.`);
-  }
-  if (indicators.emaSpreadPercent != null
-    && Math.abs(indicators.emaSpreadPercent) > profile.maximumEmaSpreadPercent) {
-    reasons.push(`EMA spread ${Math.abs(indicators.emaSpreadPercent).toFixed(2)}% exceeds ${profile.maximumEmaSpreadPercent.toFixed(2)}%.`);
-  }
-  if (indicators.atrPercent != null && indicators.atrPercent < profile.minimumAtrPercent) {
-    reasons.push(`ATR ${indicators.atrPercent.toFixed(2)}% is below ${profile.minimumAtrPercent.toFixed(2)}%.`);
-  }
-  if (indicators.bollingerBandwidthPercent != null
-    && indicators.bollingerBandwidthPercent < profile.minimumBandwidthPercent) {
-    reasons.push(`Band width ${indicators.bollingerBandwidthPercent.toFixed(2)}% is below ${profile.minimumBandwidthPercent.toFixed(2)}%.`);
-  }
-  if (indicators.volumeRatio != null && indicators.volumeRatio < profile.minimumVolumeRatio) {
-    reasons.push(`Volume ratio ${indicators.volumeRatio.toFixed(2)}× is below ${profile.minimumVolumeRatio.toFixed(2)}×.`);
-  }
+  const breakout = evaluateScalpBreakoutRetest({ points, indicators, regime });
+  const range = evaluateScalpRangeReversal({ points, indicators, profile, regime });
+  if (!breakout.qualified) reasons.push(...breakout.reasons.slice(0, 1));
+  if (!range.qualified) reasons.push(...range.reasons.slice(0, 1));
   return reasons.slice(0, 4);
 }
 
@@ -306,9 +293,13 @@ export function buildScalpAgentOverlaySnapshot(input: {
       minimumReversalVolumeRatio: SCALP_REVERSAL_MIN_VOLUME_RATIO,
       minimumContinuationAdx: SCALP_CONTINUATION_MIN_ADX,
       maximumContinuationAdx: SCALP_CONTINUATION_MAX_ADX,
+      minimumContinuationPriceActionScore: SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
       maximumContinuationEmaSpreadPercent: SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT,
       minimumContinuationAtrPercent: SCALP_CONTINUATION_MIN_ATR_PERCENT,
       minimumContinuationVolumeRatio: SCALP_CONTINUATION_MIN_VOLUME_RATIO,
+      continuationLongBollingerMaximum: SCALP_CONTINUATION_LONG_BOLLINGER_MAXIMUM,
+      continuationShortBollingerMinimum: SCALP_CONTINUATION_SHORT_BOLLINGER_MINIMUM,
+      maximum145mNetOrRangePercent: SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
       maximumEmaSpreadPercent: input.profile.maximumEmaSpreadPercent,
       minimumAtrPercent: input.profile.minimumAtrPercent,
       minimumBandwidthPercent: input.profile.minimumBandwidthPercent,

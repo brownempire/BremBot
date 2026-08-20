@@ -16,7 +16,7 @@ function priceAction(direction: "bullish" | "bearish", score: number, confirmed:
     score,
     strong: score >= 0.856,
     confirmed,
-    tags: ["PRICE_LIQUIDITY_SWEEP_RECLAIM", "PRICE_RECLAIM"],
+    tags: ["PRICE_LIQUIDITY_SWEEP_RECLAIM", "PRICE_RECLAIM", "PRICE_MOMENTUM_TURN"],
     sweepPercent: 0.1,
     reclaimPercent: 0.2,
   };
@@ -94,6 +94,30 @@ test("today's losing short is rejected by persistence, ADX, volume, and bullish 
   assert.match(result.reasons.join(" "), /both oppose/i);
 });
 
+test("the third pre-v7 short loss is rejected because bullish EMA/DMI and thin volume oppose it", () => {
+  const result = evaluateScalpReversalSafety({
+    priceAction: priceAction("bearish", 0.94, true),
+    previousPriceAction: priceAction("bearish", 0.7, false),
+    indicators: {
+      ...baseIndicators,
+      emaFast: 82.3,
+      emaSlow: 82.18,
+      emaSpreadPercent: 0.146,
+      emaSlopePercent: 0.08,
+      rsi: 66,
+      plusDi: 31,
+      minusDi: 13,
+      volumeRatio: 0.125,
+    },
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+  });
+
+  assert.equal(result.qualified, false);
+  assert.match(result.reasons.join(" "), /two completed candles/);
+  assert.match(result.reasons.join(" "), /volume/i);
+  assert.match(result.reasons.join(" "), /both oppose/i);
+});
+
 test("a persisted, liquid, directionally confirmed reversal can pass safety diagnostics", () => {
   const current = priceAction("bullish", 0.82, true);
   const result = evaluateScalpReversalSafety({
@@ -104,4 +128,19 @@ test("a persisted, liquid, directionally confirmed reversal can pass safety diag
   });
 
   assert.deepEqual(result, { qualified: true, reasons: [] });
+});
+
+test("v and double pseudo-reversals cannot use the live reversal path without a defined-level sweep", () => {
+  for (const setupType of ["v-reversal", "double-reversal"] as const) {
+    const current = { ...priceAction("bullish", 0.9, true), setupType };
+    const result = evaluateScalpReversalSafety({
+      priceAction: current,
+      previousPriceAction: current,
+      indicators: baseIndicators,
+      profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    });
+
+    assert.equal(result.qualified, false);
+    assert.match(result.reasons.join(" "), /defined-level liquidity sweep/);
+  }
 });

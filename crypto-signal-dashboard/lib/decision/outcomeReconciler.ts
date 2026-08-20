@@ -87,6 +87,18 @@ function sameMarket(execution: PerpsUserExecution, trade: JupiterPerpsTrade) {
     && trade.marketSymbol.toUpperCase() === execution.asset;
 }
 
+function executionPositionRemainsOpen(
+  execution: PerpsUserExecution,
+  snapshot: JupiterPerpsAccountSnapshot
+) {
+  return snapshot.positions.some((position) => (
+    position.source !== "mock"
+    && position.accountRef === execution.positionPubkey
+    && position.side === execution.side
+    && position.marketSymbol.toUpperCase() === execution.asset
+  ));
+}
+
 function findEntryTrade(
   execution: PerpsUserExecution,
   trades: JupiterPerpsTrade[],
@@ -111,6 +123,7 @@ export async function reconcileTradeLearningOutcomes(input: {
   decisions: TradeDecisionRecord[];
   snapshot: JupiterPerpsAccountSnapshot;
   replaceWalletHistory?: boolean;
+  requireAuthoritative?: boolean;
 }) {
   const executions = [...new Map(
     input.executions
@@ -154,6 +167,11 @@ export async function reconcileTradeLearningOutcomes(input: {
     const exitTrades = episodeTrades.filter((trade) => isExitTrade(trade) && tradeTimestamp(trade) >= entryAtMs);
     const finalExit = exitTrades[exitTrades.length - 1];
     if (!finalExit) continue;
+    // A Jupiter decrease is not necessarily a terminal close. Never emit a
+    // training/circuit outcome while the authoritative snapshot still carries
+    // the same live position episode; later reconciliation will include every
+    // partial decrease once the position actually closes.
+    if (!nextExecution && executionPositionRemainsOpen(execution, input.snapshot)) continue;
 
     const feesUsd = episodeTrades.reduce((sum, trade) => sum + Math.max(0, trade.feeUsd ?? 0), 0);
     // Jupiter's mapped trade PnL is net of that trade's fee. Add exit fees back
@@ -164,7 +182,8 @@ export async function reconcileTradeLearningOutcomes(input: {
     const closedAtMs = tradeTimestamp(finalExit);
     const decision = findDecision(execution, input.decisions);
     const strategy = decision?.payload.strategyContext ?? null;
-    const signalType = strategy?.signalType ?? null;
+    const signalType = strategy?.signalType
+      ?? (execution.strategyClass === "scalp" ? "scalp" as const : null);
     const eligibility = resolveTrainingEligibility({ execution, signalType, netPnlUsd });
     const entryReference = entryTrade.txHash?.trim() || entryTrade.id;
 
@@ -217,9 +236,10 @@ export async function reconcileTradeLearningOutcomes(input: {
       volumeRatio: strategy?.indicators?.volumeRatio ?? null,
       bollingerBandwidthPercent: strategy?.indicators?.bollingerBandwidthPercent ?? null,
       bollingerPosition: strategy?.indicators?.bollingerPosition ?? null,
-      scalpSetupType: strategy?.scalpSetupType ?? null,
+      scalpSetupType: strategy?.scalpSetupType ?? execution.scalpSetupType ?? null,
+      scalpEntryPath: strategy?.scalpEntryPath ?? execution.scalpEntryPath ?? undefined,
       priceActionScore: strategy?.priceActionScore ?? null,
-      priceActionTags: strategy?.priceActionTags ?? [],
+      priceActionTags: strategy?.priceActionTags ?? execution.priceActionTags ?? [],
       detectedDirection: strategy?.detectedDirection,
       directionInverted: strategy?.directionInverted,
       directionExperimentId: strategy?.directionExperimentId,
@@ -230,6 +250,10 @@ export async function reconcileTradeLearningOutcomes(input: {
   }
 
   return input.replaceWalletHistory
-    ? replaceTradeLearningOutcomesForWallet(input.walletAddress, outcomes)
-    : saveTradeLearningOutcomes(outcomes);
+    ? replaceTradeLearningOutcomesForWallet(input.walletAddress, outcomes, {
+        requireAuthoritative: input.requireAuthoritative,
+      })
+    : saveTradeLearningOutcomes(outcomes, {
+        requireAuthoritative: input.requireAuthoritative,
+      });
 }

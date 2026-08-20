@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   computePercentageScalpExitPlan,
+  DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE,
   DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
   ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
   SCALP_ATR_PROFIT_TARGET_MULTIPLIER,
@@ -10,6 +11,7 @@ import {
   SCALP_MINIMUM_NET_REWARD_RISK_RATIO,
   SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
   SCALP_STOP_LOSS_ROE_PERCENT,
+  resolveConservativeScalpFeeRate,
 } from "../lib/perps/scalpExit";
 import {
   SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
@@ -38,16 +40,16 @@ test("scalp hard TP stays above the full ladder while clearing fees by $1", () =
     configuredTakeProfitRoePercent: DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
   });
 
-  assert.equal(ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE, 0.0012);
+  assert.equal(ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE, 0.00205);
   assert.equal(SCALP_ATR_PROFIT_TARGET_MULTIPLIER, 2);
   assert.equal(SCALP_MINIMUM_NET_REWARD_RISK_RATIO, 1.25);
-  assert.equal(plan.estimatedFeesUsd, 0.468);
-  assert.equal(plan.estimatedStopLossNetUsd, 2.262);
-  assert.equal(plan.minimumRewardRiskNetProfitUsd, 2.8275);
+  assert.equal(plan.estimatedFeesUsd, 0.7995);
+  assert.equal(plan.estimatedStopLossNetUsd, 2.5935);
+  assert.equal(plan.minimumRewardRiskNetProfitUsd, 3.241875);
   assert.equal(plan.volatilityTargetRoePercent, 15.97);
-  assert.equal(plan.targetRoePercent, 42.25);
-  assert.equal(plan.grossProfitTargetUsd, 3.2955);
-  assert.equal(plan.netProfitTargetUsd, 2.8275);
+  assert.equal(plan.targetRoePercent, 51.8125);
+  assert.equal(plan.grossProfitTargetUsd, 4.041375);
+  assert.equal(plan.netProfitTargetUsd, 3.241875);
 });
 
 test("quiet markets raise TP enough to exceed the post-fee SL by 1.25x", () => {
@@ -59,10 +61,10 @@ test("quiet markets raise TP enough to exceed the post-fee SL by 1.25x", () => {
   });
 
   assert.ok(plan.targetRoePercent > SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT);
-  assert.equal(plan.targetRoePercent, 42.25);
-  assert.equal(plan.grossProfitTargetUsd, 3.2955);
-  assert.equal(plan.netProfitTargetUsd, 2.8275);
-  assert.equal(plan.netProfitTargetUsd / plan.estimatedStopLossNetUsd, 1.25);
+  assert.equal(plan.targetRoePercent, 51.8125);
+  assert.equal(plan.grossProfitTargetUsd, 4.041375);
+  assert.equal(plan.netProfitTargetUsd, 3.241875);
+  assert.equal(Number((plan.netProfitTargetUsd / plan.estimatedStopLossNetUsd).toFixed(6)), 1.25);
   assert.ok(plan.netProfitTargetUsd >= SCALP_MINIMUM_NET_PROFIT_USD);
 });
 
@@ -74,10 +76,10 @@ test("percentage targets scale up with position collateral instead of stopping a
     configuredTakeProfitRoePercent: DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
   });
 
-  assert.equal(plan.estimatedFeesUsd, 2.4);
-  assert.equal(plan.targetRoePercent, 42.25);
-  assert.equal(plan.grossProfitTargetUsd, 16.9);
-  assert.equal(plan.netProfitTargetUsd, 14.5);
+  assert.equal(plan.estimatedFeesUsd, 4.1);
+  assert.equal(plan.targetRoePercent, 51.8125);
+  assert.equal(plan.grossProfitTargetUsd, 20.725);
+  assert.equal(plan.netProfitTargetUsd, 16.625);
 });
 
 test("missing ATR falls back to the configured percentage target", () => {
@@ -89,9 +91,9 @@ test("missing ATR falls back to the configured percentage target", () => {
   });
 
   assert.equal(plan.volatilityTargetRoePercent, null);
-  assert.equal(plan.targetRoePercent, 42.25);
-  assert.equal(plan.grossProfitTargetUsd, 3.2955);
-  assert.equal(plan.netProfitTargetUsd, 2.8275);
+  assert.equal(plan.targetRoePercent, 51.8125);
+  assert.equal(plan.grossProfitTargetUsd, 4.041375);
+  assert.equal(plan.netProfitTargetUsd, 3.241875);
 });
 
 test("the pictured small scalp now targets more net profit than its full SL risk", () => {
@@ -117,6 +119,27 @@ test("large scalp positions are no longer capped at $3.50", () => {
 
   assert.equal(plan.targetRoePercent, 100);
   assert.equal(plan.grossProfitTargetUsd, 200);
-  assert.equal(plan.netProfitTargetUsd, 188);
+  assert.equal(plan.netProfitTargetUsd, 179.5);
   assert.ok(plan.netProfitTargetUsd > 3.5);
+});
+
+test("rolling scalp fees use the recent eligible upper quartile with a conservative floor", () => {
+  const outcomes = [0.00135, 0.0018, 0.00205, 0.0024].map((rate, index) => ({
+    feesUsd: rate * 1_000,
+    sizeUsd: 1_000,
+    signalType: "scalp",
+    scalpSetupType: index % 2 ? "liquidity-sweep" : null,
+    trainingEligible: true,
+  }));
+  outcomes.push({
+    feesUsd: 9,
+    sizeUsd: 1_000,
+    signalType: "scalp",
+    scalpSetupType: null,
+    trainingEligible: false,
+  });
+
+  assert.equal(DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE, 0.00205);
+  assert.equal(resolveConservativeScalpFeeRate(outcomes), 0.0024);
+  assert.equal(resolveConservativeScalpFeeRate([]), 0.00205);
 });

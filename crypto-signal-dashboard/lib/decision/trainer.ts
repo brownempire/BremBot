@@ -3,9 +3,12 @@ import crypto from "node:crypto";
 import { getActivePerpsAsset, type PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import {
   getActiveDecisionLearningProfile,
+  getActiveDecisionLearningProfileAuthoritative,
   listDecisionLearningProfileHistory,
   listTradeLearningOutcomes,
+  listTradeLearningOutcomesAuthoritative,
   saveDecisionLearningProfile,
+  saveDecisionLearningProfileAuthoritative,
 } from "@/lib/decision/learningStore";
 import type {
   DecisionLearningProfile,
@@ -17,6 +20,7 @@ import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrai
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
 import {
+  createAuditedScalpBaseline,
   createOperatorActivatedProfitableScalpBaseline,
   SCALP_INCREMENTAL_LEARNING_BATCH_SIZE,
   updateScalpLearningProfile,
@@ -32,6 +36,65 @@ const BASE_THRESHOLDS: Record<LearningAsset, { trend: number; breakout: number }
   ETH: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
   SOL: { trend: OPERATOR_TRAINING_BASELINE.signalParams.trendThreshold, breakout: OPERATOR_TRAINING_BASELINE.signalParams.breakoutPercent },
 };
+
+export function hasPersistedCurrentScalpPolicy(profile: DecisionLearningProfile | null | undefined) {
+  const rollout = profile?.scalpProfile?.policyRollout;
+  return profile?.scalpProfile?.policyVersion === SCALP_POLICY_VERSION
+    && Boolean(rollout)
+    && Number.isFinite(Date.parse(rollout?.startedAt ?? ""));
+}
+
+/**
+ * Initializes or migrates only the scalp-policy portion of the active profile.
+ * This is deliberately separate from Smart Trade training so set-parameters
+ * wallets receive one durable v8 rollout boundary without changing any Smart
+ * signal, allocation, leverage, or indicator parameters.
+ */
+export async function ensureWalletScalpPolicyProfile(input: {
+  walletAddress: string;
+  source: "automatic" | "manual-training";
+}) {
+  const [active, storedOutcomes] = await Promise.all([
+    getActiveDecisionLearningProfileAuthoritative(input.walletAddress),
+    listTradeLearningOutcomesAuthoritative(input.walletAddress),
+  ]);
+  if (hasPersistedCurrentScalpPolicy(active)) {
+    return { profile: active!, initialized: false, scalpPolicyMigrated: false };
+  }
+
+  const outcomes = storedOutcomes.filter((outcome) => (
+    outcome.trainingEligible !== false
+    && outcome.reconciliationVersion === CURRENT_OUTCOME_RECONCILIATION_VERSION
+  ));
+  const version = (active?.version ?? 0) + 1;
+  const smartProfile = active ?? makeOperatorTrainingBaselineProfile(input.walletAddress, version);
+  const next = {
+    ...smartProfile,
+    profileId: `learn_${crypto.randomUUID()}`,
+    version,
+    status: "candidate" as const,
+    source: input.source,
+    createdAt: new Date().toISOString(),
+    promotedAt: null,
+    scalpProfile: createAuditedScalpBaseline(outcomes),
+    summary: `${smartProfile.summary} Scalp policy v${SCALP_POLICY_VERSION} was initialized with a durable live-rollout boundary; Smart Trade parameters were preserved unchanged.`,
+  } satisfies DecisionLearningProfile;
+  const saved = await saveDecisionLearningProfileAuthoritative(next, true);
+  const profile = await getActiveDecisionLearningProfileAuthoritative(input.walletAddress);
+  if (
+    !profile
+    || profile.profileId !== saved.profileId
+    || profile.scalpProfile?.policyVersion !== SCALP_POLICY_VERSION
+    || profile.scalpProfile?.policyRollout?.startedAt !== saved.scalpProfile?.policyRollout?.startedAt
+  ) {
+    throw new Error("The authoritative v8 scalp rollout could not be verified after persistence.");
+  }
+  return {
+    profile,
+    initialized: true,
+    scalpPolicyMigrated: Boolean(active),
+  };
+}
 
 export async function resetWalletScalpToProfitableProfile(input: {
   walletAddress: string;
@@ -432,7 +495,11 @@ export async function trainWalletDecisionProfile(input: {
   config: PerpsAutomationConfig | null;
   source: "automatic" | "manual-training";
   force?: boolean;
+  requireAuthoritative?: boolean;
 }) {
+  if (input.requireAuthoritative) {
+    return trainWalletScalpProfileAuthoritative(input);
+  }
   const [active, history, storedOutcomes] = await Promise.all([
     getActiveDecisionLearningProfile(input.walletAddress),
     listDecisionLearningProfileHistory(input.walletAddress),
@@ -626,6 +693,100 @@ export async function trainWalletDecisionProfile(input: {
     outcomeCount: outcomes.length,
     excludedOutcomeCount,
     skipped: false,
+    activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
+  };
+}
+
+/**
+ * Redis-authoritative scalp-only updater used by live admission. It deliberately
+ * leaves every Smart Trade field untouched while applying the five-outcome
+ * scalp batch and the ten-trade rollout review. A failed read, write, or
+ * post-write verification throws so the monitor cannot trade on stale policy.
+ */
+export async function trainWalletScalpProfileAuthoritative(input: {
+  walletAddress: string;
+  config: PerpsAutomationConfig | null;
+  source: "automatic" | "manual-training";
+  force?: boolean;
+}) {
+  let active = await getActiveDecisionLearningProfileAuthoritative(input.walletAddress);
+  if (!hasPersistedCurrentScalpPolicy(active)) {
+    active = (await ensureWalletScalpPolicyProfile({
+      walletAddress: input.walletAddress,
+      source: input.source,
+    })).profile;
+  }
+  if (!active?.scalpProfile) {
+    throw new Error("The authoritative active profile is missing its scalp policy.");
+  }
+
+  const storedOutcomes = await listTradeLearningOutcomesAuthoritative(input.walletAddress);
+  const eligibleScalpOutcomes = storedOutcomes
+    .filter((outcome) => (
+      outcome.trainingEligible !== false
+      && outcome.reconciliationVersion === CURRENT_OUTCOME_RECONCILIATION_VERSION
+      && outcome.signalType === "scalp"
+      && outcome.directionInverted !== true
+    ))
+    .sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt)
+      || left.outcomeId.localeCompare(right.outcomeId));
+  const rolloutStartedAt = Date.parse(active.scalpProfile.policyRollout?.startedAt ?? "");
+  if (!Number.isFinite(rolloutStartedAt)) {
+    throw new Error("The authoritative scalp policy is missing its persisted rollout boundary.");
+  }
+  const processedPolicyOutcomeIds = new Set(active.scalpProfile.processedPolicyOutcomeIds ?? []);
+  const unseenOutcomeCount = eligibleScalpOutcomes
+    .filter((outcome) => Date.parse(outcome.openedAt) >= rolloutStartedAt)
+    .slice(-1_000)
+    .filter((outcome) => !processedPolicyOutcomeIds.has(outcome.outcomeId))
+    .length;
+  if (!input.force && unseenOutcomeCount < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE) {
+    return {
+      profile: active,
+      activated: false,
+      outcomeCount: eligibleScalpOutcomes.length,
+      excludedOutcomeCount: storedOutcomes.length - eligibleScalpOutcomes.length,
+      skipped: true,
+      pendingScalpOutcomes: unseenOutcomeCount,
+      scalpBatchSize: SCALP_INCREMENTAL_LEARNING_BATCH_SIZE,
+      authoritative: true,
+      migrated: false,
+      scalpPolicyMigrated: false,
+    };
+  }
+
+  const scalpProfile = updateScalpLearningProfile(active.scalpProfile, eligibleScalpOutcomes);
+  const next = {
+    ...active,
+    profileId: `learn_${crypto.randomUUID()}`,
+    version: active.version + 1,
+    status: "candidate" as const,
+    source: input.source,
+    createdAt: new Date().toISOString(),
+    promotedAt: null,
+    scalpProfile,
+    summary: `${active.summary} Applied the Redis-authoritative scalp-only learning batch; Smart Trade parameters were preserved unchanged.`,
+  } satisfies DecisionLearningProfile;
+  const saved = await saveDecisionLearningProfileAuthoritative(next, true);
+  const verified = await getActiveDecisionLearningProfileAuthoritative(input.walletAddress);
+  if (
+    !verified
+    || verified.profileId !== saved.profileId
+    || verified.scalpProfile?.policyVersion !== SCALP_POLICY_VERSION
+    || JSON.stringify(verified.scalpProfile) !== JSON.stringify(saved.scalpProfile)
+  ) {
+    throw new Error("The authoritative scalp learning update could not be verified after persistence.");
+  }
+  return {
+    profile: verified,
+    activated: true,
+    outcomeCount: eligibleScalpOutcomes.length,
+    excludedOutcomeCount: storedOutcomes.length - eligibleScalpOutcomes.length,
+    skipped: false,
+    incremental: true,
+    authoritative: true,
+    migrated: false,
+    scalpPolicyMigrated: false,
     activeAsset: input.config ? getActivePerpsAsset(input.config) : null,
   };
 }

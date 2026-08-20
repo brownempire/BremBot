@@ -64,6 +64,7 @@ export const tradeDecisionPayloadSchema = z.object({
     indicatorQualified: z.boolean().optional(),
     indicatorTags: z.array(z.string().trim().min(1)).optional(),
     scalpSetupType: z.enum(["range-reversal", "liquidity-sweep", "v-reversal", "double-reversal"]).optional(),
+    scalpEntryPath: z.enum(["range-reversal", "reversal", "continuation", "breakout-retest", "unknown"]).optional(),
     priceActionScore: z.number().finite().min(0).max(1).optional(),
     priceActionTags: z.array(z.string().trim().min(1)).optional(),
     indicatorBypass: z.boolean().optional(),
@@ -71,6 +72,7 @@ export const tradeDecisionPayloadSchema = z.object({
     directionInverted: z.boolean().optional(),
     directionExperimentId: z.string().trim().min(1).optional(),
     directionExperimentTradeNumber: z.number().int().min(1).max(10).optional(),
+    estimatedRoundTripFeeRate: z.number().finite().positive().max(0.01).optional(),
     indicators: z.object({
       emaSpreadPercent: z.number().finite().nullable(),
       emaSlopePercent: z.number().finite().nullable(),
@@ -82,6 +84,7 @@ export const tradeDecisionPayloadSchema = z.object({
       adx: z.number().finite().nullable(),
       plusDi: z.number().finite().nullable(),
       minusDi: z.number().finite().nullable(),
+      atrPercent: z.number().finite().min(0).nullable().optional(),
       volumeRatio: z.number().finite().nullable(),
       bollingerBandwidthPercent: z.number().finite().nullable(),
       bollingerPosition: z.number().finite().nullable(),

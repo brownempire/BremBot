@@ -15,6 +15,11 @@ import {
 } from "@/lib/perps/tpslPlan";
 import type { PerpsSignalPayload } from "@/lib/perps/types";
 
+type FillAwarePerpsSignalPayload = PerpsSignalPayload & {
+  referenceEntryPriceUsd?: number | null;
+  estimatedRoundTripFeeRate?: number | null;
+};
+
 const perps = createPerpsClient();
 
 const MARKET_TO_ASSET: Record<string, Asset> = {
@@ -46,9 +51,10 @@ function getAssetForMarket(market: string): Asset {
 }
 
 export async function buildPerpsTransactionForSignal(
-  signal: PerpsSignalPayload,
+  signal: FillAwarePerpsSignalPayload,
   walletAddress: string,
-  tradingClient: PerpsTradingClient = perps.trading
+  tradingClient: PerpsTradingClient = perps.trading,
+  options: { forceDeferredProtection?: boolean } = {}
 ) {
   const asset = getAssetForMarket(signal.market);
   const side: Side = signal.side;
@@ -72,7 +78,8 @@ export async function buildPerpsTransactionForSignal(
 
   const built = await buildEntryWithTpslFallback(
     requestedTpsl,
-    (tpsl) => tradingClient.increasePosition({ ...request, tpsl })
+    (tpsl) => tradingClient.increasePosition({ ...request, tpsl }),
+    options
   );
   const { response, tpslMode } = built;
 
@@ -91,12 +98,13 @@ export async function buildPerpsTransactionForSignal(
 }
 
 export async function buildPerpsTpslTransactionForSignal(
-  signal: PerpsSignalPayload,
+  signal: FillAwarePerpsSignalPayload,
   walletAddress: string,
   positionPubkey: string,
   minimumNetProfitUsd = 1,
   tradingClient: PerpsTradingClient = perps.trading,
-  positionsClient: PerpsPositionsClient = perps.positions
+  positionsClient: PerpsPositionsClient = perps.positions,
+  options: { requireLivePosition?: boolean } = {}
 ) {
   let livePosition = null;
   try {
@@ -106,9 +114,17 @@ export async function buildPerpsTpslTransactionForSignal(
     // A transient read failure should not prevent Jupiter from accepting the
     // original protection request. A later retry will refresh the fill again.
   }
+  if (options.requireLivePosition && !livePosition) {
+    throw new PerpsExecutionError(
+      "LIVE_POSITION_NOT_READY",
+      "Jupiter has not returned the confirmed fill required to derive scalp TP/SL protection yet.",
+      409
+    );
+  }
   const tpsl = getStandalonePositionTpsl(signal, livePosition, minimumNetProfitUsd);
   if (tpsl.length === 0) return null;
-  return tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
+  const response = await tradingClient.createTpsl({ walletAddress, positionPubkey, tpsl });
+  return { ...response, plannedTpsl: tpsl };
 }
 
 export async function buildPerpsCloseTransaction(

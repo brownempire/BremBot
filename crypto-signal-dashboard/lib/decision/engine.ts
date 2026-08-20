@@ -7,10 +7,23 @@ import type {
   TradeDecisionRecord,
 } from "@/lib/decision/types";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
-import { SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED } from "@/lib/perps/scalpEngine";
+import {
+  SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT,
+  SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
+  SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
+  SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
+} from "@/lib/perps/scalpEngine";
+import {
+  ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
+  SCALP_MINIMUM_NET_REWARD_RISK_RATIO,
+} from "@/lib/perps/scalpExit";
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 
 const DECISION_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const SCALP_FALLBACK_LEVERAGE_CAP = 20;
+const SCALP_REWARD_RISK_ROUNDING_TOLERANCE = 0.02;
+
+type ScalpDecisionPath = "continuation" | "breakout-retest" | "range-reversal" | "reversal" | "unknown";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -18,6 +31,115 @@ function clamp(value: number, min: number, max: number) {
 
 function round(value: number, fractionDigits = 2) {
   return Number(value.toFixed(fractionDigits));
+}
+
+function includesAll(tags: Set<string>, required: string[]) {
+  return required.every((tag) => tags.has(tag));
+}
+
+function resolveScalpDecisionPath(tags: Set<string>): ScalpDecisionPath {
+  if (tags.has("INDICATORS_CONFIRMED_TREND_CONTINUATION")) return "continuation";
+  if (tags.has("INDICATORS_CONFIRMED_BREAKOUT_RETEST")) return "breakout-retest";
+  if (tags.has("SCALP_RANGE")) return "range-reversal";
+  if (
+    tags.has("INDICATORS_CONFIRMED_STRONG_PRICE_ACTION")
+    || tags.has("INDICATORS_CONFIRMED_PRICE_ACTION")
+  ) return "reversal";
+  return "unknown";
+}
+
+function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<string>) {
+  if (path === "continuation") {
+    return includesAll(tags, [
+      "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+      "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
+      "CONTINUATION_MACD_CONFIRMED",
+      "SCALP_EXHAUSTION_GUARD_PASSED",
+    ]);
+  }
+  if (path === "breakout-retest") {
+    return includesAll(tags, [
+      "PRICE_BREAKOUT",
+      "PRICE_BREAKOUT_RETEST",
+      "PRICE_BREAKOUT_RESUMPTION",
+      "BREAKOUT_ATR_CONFIRMED",
+      "SCALP_EXHAUSTION_GUARD_PASSED",
+    ]);
+  }
+  if (path === "range-reversal") {
+    return includesAll(tags, [
+      "RANGE_EXTREME_OBSERVED",
+      "RANGE_BAND_REENTRY",
+      "RANGE_RSI_MACD_TURN",
+      "RANGE_CONFIRMING_CANDLE",
+      "SCALP_EXHAUSTION_GUARD_PASSED",
+    ]);
+  }
+  if (path === "reversal") {
+    return includesAll(tags, [
+      "REVERSAL_TWO_CANDLE_CONFIRMATION",
+      "SCALP_EXHAUSTION_GUARD_PASSED",
+    ]);
+  }
+  return false;
+}
+
+function indicatorDirection(value: number | null | undefined, direction: "bullish" | "bearish") {
+  if (typeof value !== "number" || !Number.isFinite(value)) return false;
+  return direction === "bullish" ? value > 0 : value < 0;
+}
+
+function scalpIndicatorsSupportDirection(
+  payload: TradeDecisionPayload,
+  path: ScalpDecisionPath
+) {
+  const indicators = payload.strategyContext?.indicators;
+  if (!indicators) return false;
+  const direction = payload.direction;
+  const emaAligned = indicatorDirection(indicators.emaSpreadPercent, direction)
+    && indicatorDirection(indicators.emaSlopePercent, direction);
+  const dmiAligned = typeof indicators.plusDi === "number"
+    && typeof indicators.minusDi === "number"
+    && (direction === "bullish"
+      ? indicators.plusDi > indicators.minusDi
+      : indicators.minusDi > indicators.plusDi);
+  const macdAligned = indicatorDirection(indicators.macdHistogram, direction)
+    && indicatorDirection(indicators.macdHistogramChange, direction);
+
+  if (path === "continuation" || path === "breakout-retest") {
+    const atrQualified = path !== "breakout-retest"
+      || (typeof indicators.atrPercent === "number"
+        && indicators.atrPercent >= SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT);
+    return emaAligned && dmiAligned && macdAligned && atrQualified;
+  }
+
+  // A confirmed reversal can begin before every lagging indicator crosses. It
+  // must nevertheless have a directional momentum turn plus at least one of
+  // EMA or DMI no longer contradicting the trade.
+  const momentumTurn = indicatorDirection(indicators.macdHistogramChange, direction);
+  return momentumTurn && (emaAligned || dmiAligned || macdAligned);
+}
+
+function computeScalpNetRewardRisk(payload: TradeDecisionPayload) {
+  const entry = payload.marketContext.spotPrice;
+  const takeProfit = payload.requestedTrade.takeProfitPrice;
+  const stopLoss = payload.requestedTrade.stopLossPrice;
+  if (!entry || !takeProfit || !stopLoss) return null;
+  const isLong = payload.direction === "bullish";
+  const correctlyOrdered = isLong
+    ? takeProfit > entry && stopLoss < entry
+    : takeProfit < entry && stopLoss > entry;
+  if (!correctlyOrdered) return null;
+  const grossRewardRate = Math.abs(takeProfit - entry) / entry;
+  const grossLossRate = Math.abs(stopLoss - entry) / entry;
+  const observedFeeRate = payload.strategyContext?.estimatedRoundTripFeeRate;
+  const feeRate = typeof observedFeeRate === "number" && Number.isFinite(observedFeeRate)
+    ? Math.max(ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE, observedFeeRate)
+    : ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE;
+  const netRewardRate = grossRewardRate - feeRate;
+  const netLossRate = grossLossRate + feeRate;
+  if (netRewardRate <= 0 || netLossRate <= 0) return null;
+  return netRewardRate / netLossRate;
 }
 
 function adjustTriggerPrice(
@@ -138,6 +260,8 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
   const config = getTradeDecisionConfig();
   if (payload.strategyClass === "scalp") {
     const context = payload.strategyContext;
+    const rawTags = new Set(context?.priceActionTags ?? []);
+    const entryPath = context?.scalpEntryPath ?? resolveScalpDecisionPath(rawTags);
     const detectorQualified = Boolean(
       context
       && context.signalType === "scalp"
@@ -147,25 +271,61 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       && context.priceActionTags
       && context.priceActionTags.length > 0
     );
-    const confidence = clamp(
-      typeof payload.signalConfidence === "number"
-        ? payload.signalConfidence
-        : context?.priceActionScore ?? 0,
-      0,
-      1
-    );
+    const rawConfidence = typeof payload.signalConfidence === "number"
+      ? payload.signalConfidence
+      : context?.priceActionScore ?? 0;
+    // Detector confidence is intentionally not allowed to inflate a weaker
+    // observed price-action score into a lower risk grade.
+    const confidence = clamp(Math.min(rawConfidence, context?.priceActionScore ?? rawConfidence), 0, 1);
     const concurrentPositionAllowed = payload.marketContext.hasOpenPosition
       && payload.marketContext.allowConcurrentPosition === true;
     const pausedExceptionalBypass = context?.indicatorBypass === true
       && !SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED;
+    const completeSetupConfirmation = scalpPathHasCompleteConfirmation(entryPath, rawTags);
+    const indicatorsAligned = scalpIndicatorsSupportDirection(payload, entryPath);
+    const minimumPathScore = entryPath === "continuation" || entryPath === "breakout-retest"
+      ? SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE
+      : Math.max(0.58, learningProfile?.scalpProfile?.minimumPriceActionScore ?? 0.58);
+    const scoreQualified = (context?.priceActionScore ?? 0) >= minimumPathScore;
+    const leverageCap = Math.min(
+      SCALP_FALLBACK_LEVERAGE_CAP,
+      learningProfile?.leverageCap ?? SCALP_FALLBACK_LEVERAGE_CAP
+    );
+    const leverageQualified = payload.requestedTrade.leverage <= leverageCap;
+    const volatilityCeiling = Math.min(
+      SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
+      learningProfile?.volatilityCeilingPercent ?? SCALP_MAX_145M_NET_OR_RANGE_PERCENT
+    );
+    const volatility = payload.marketContext.volatilityPercent;
+    const volatilityQualified = typeof volatility === "number"
+      && Number.isFinite(volatility)
+      && volatility <= volatilityCeiling;
+    const netRewardRisk = computeScalpNetRewardRisk(payload);
+    const economicsQualified = netRewardRisk !== null
+      && netRewardRisk >= SCALP_MINIMUM_NET_REWARD_RISK_RATIO - SCALP_REWARD_RISK_ROUNDING_TOLERANCE;
+    const availableUsdc = payload.marketContext.availableUsdc;
+    const allocationPercent = typeof availableUsdc === "number" && availableUsdc > 0
+      ? payload.requestedTrade.collateralUsd / availableUsdc * 100
+      : null;
+    const allocationQualified = allocationPercent === null
+      || allocationPercent <= (learningProfile?.maximumAllocationPercent ?? 50);
     const shouldTrade = detectorQualified
       && !pausedExceptionalBypass
+      && completeSetupConfirmation
+      && indicatorsAligned
+      && scoreQualified
+      && leverageQualified
+      && volatilityQualified
+      && economicsQualified
+      && allocationQualified
       && (!payload.marketContext.hasOpenPosition || concurrentPositionAllowed);
     const tags = new Set<string>([
       "scalp-detector-authoritative",
+      "scalp-independent-veto",
       payload.shadowMode ? "shadow-mode" : "active-mode",
     ]);
     if (context?.scalpSetupType) tags.add(`scalp-${context.scalpSetupType}`);
+    tags.add(`scalp-path-${entryPath}`);
     context?.priceActionTags?.forEach((tag) => tags.add(tag));
     if (context?.indicatorBypass) {
       tags.add(pausedExceptionalBypass
@@ -176,14 +336,49 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       tags.add("structured-exits");
     }
     if (!detectorQualified) tags.add("scalp-detector-context-required");
+    if (!completeSetupConfirmation) tags.add("scalp-setup-confirmation-required");
+    if (!indicatorsAligned) tags.add("scalp-directional-indicator-veto");
+    if (!scoreQualified) tags.add("scalp-path-score-veto");
+    if (!leverageQualified) tags.add("scalp-leverage-cap-veto");
+    if (!volatilityQualified) tags.add("scalp-volatility-veto");
+    if (!economicsQualified) tags.add("scalp-post-fee-economics-veto");
+    if (!allocationQualified) tags.add("scalp-allocation-veto");
     if (payload.marketContext.hasOpenPosition) tags.add("existing-position-open");
     if (concurrentPositionAllowed) tags.add("opposite-side-scalp-position-allowed");
     if (shouldTrade) tags.add("scalp-detector-qualified");
 
+    const explanationSummary = shouldTrade
+      ? concurrentPositionAllowed
+        ? `The ${entryPath} scalp setup passed independent confirmation, indicator, volatility, leverage, and post-fee expectancy checks while the existing position remains independently managed.`
+        : `The ${entryPath} scalp setup passed independent confirmation, indicator, volatility, leverage, and post-fee expectancy checks.`
+      : !detectorQualified
+        ? "Scalp execution requires complete metadata produced by the independent scalp detector."
+        : pausedExceptionalBypass
+          ? "The exceptional scalp indicator bypass remains paused."
+          : !completeSetupConfirmation
+            ? `The ${entryPath} scalp candidate did not complete its required multi-candle confirmation sequence.`
+            : !indicatorsAligned
+              ? `The raw EMA, DMI, and MACD evidence did not independently confirm the ${payload.direction} ${entryPath} candidate.`
+              : !scoreQualified
+                ? `The ${entryPath} price-action score did not reach its ${minimumPathScore.toFixed(2)} execution threshold.`
+                : !leverageQualified
+                  ? `The requested ${payload.requestedTrade.leverage.toFixed(1)}x leverage exceeds the independent ${leverageCap.toFixed(1)}x scalp cap.`
+                  : !volatilityQualified
+                    ? `The current ${typeof volatility === "number" ? volatility.toFixed(2) : "unknown"}% range exceeds the independent ${volatilityCeiling.toFixed(2)}% scalp regime ceiling.`
+                    : !economicsQualified
+                      ? `The protected exits do not provide the required ${SCALP_MINIMUM_NET_REWARD_RISK_RATIO.toFixed(2)}:1 reward-to-risk after estimated fees.`
+                      : !allocationQualified
+                        ? "The requested collateral exceeds the learned wallet allocation limit."
+                        : "An existing position prevents this scalp entry from opening concurrently.";
+
+    const lowRisk = payload.requestedTrade.leverage <= 10
+      && (volatility ?? Number.POSITIVE_INFINITY) <= 1
+      && (netRewardRisk ?? 0) >= SCALP_MINIMUM_NET_REWARD_RISK_RATIO;
+
     return {
       shouldTrade,
       confidenceScore: round(confidence, 4),
-      riskGrade: confidence >= 0.72 ? "low" : confidence >= 0.5 ? "medium" : "high",
+      riskGrade: shouldTrade ? (lowRisk ? "low" : "medium") : "high",
       sizeMultiplier: 1,
       leverageMultiplier: 1,
       recommendedCollateralUsd: round(payload.requestedTrade.collateralUsd, 2),
@@ -191,13 +386,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       recommendedTakeProfitPrice: payload.requestedTrade.takeProfitPrice,
       recommendedStopLossPrice: payload.requestedTrade.stopLossPrice,
       explanationTags: [...tags],
-      explanationSummary: shouldTrade
-        ? concurrentPositionAllowed
-          ? `The independent scalp detector qualified a protected opposite-side ${context?.scalpSetupType ?? "reversal"} while the existing position remains independently managed.`
-          : `The independent scalp detector qualified a ${context?.scalpSetupType ?? "reversal"} setup; Smart Trade scoring is not applied.`
-        : detectorQualified
-          ? "The scalp detector qualified the setup, but an existing position prevents another entry."
-          : "Scalp execution requires a signal produced by the independent scalp reversal detector.",
+      explanationSummary,
       shadowMode: payload.shadowMode,
     };
   }

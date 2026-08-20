@@ -3,8 +3,19 @@ import test from "node:test";
 
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
+  SCALP_CONTINUATION_LIVE_ENABLED,
+  SCALP_RANGE_REVERSAL_LIVE_ENABLED,
+  SCALP_REVERSAL_LIVE_ENABLED,
+  SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
+  classifyScalpMarketRegime,
   detectAdaptiveScalpSignal,
+  evaluateAdaptiveScalpCandidate,
+  evaluateScalpBreakoutRetest,
+  evaluateScalpRangeReversal,
   evaluateScalpTrendContinuation,
+  scalpCandidatePathAllowsLiveSignal,
+  type ScalpMarketRegime,
   type ScalpPriceAction,
 } from "../lib/perps/scalpEngine";
 import type { PricePoint } from "../lib/price/simulated";
@@ -13,7 +24,7 @@ import type { IndicatorSnapshot } from "../lib/signal/indicators";
 const confirmedBullishPriceAction: ScalpPriceAction = {
   direction: "bullish",
   setupType: "v-reversal",
-  score: 0.58,
+  score: 0.76,
   strong: false,
   confirmed: true,
   tags: ["PRICE_RECLAIM", "PRICE_MOMENTUM_TURN", "PRICE_VOLUME_CONFIRMATION"],
@@ -22,10 +33,10 @@ const confirmedBullishPriceAction: ScalpPriceAction = {
 };
 
 const confirmedBullishIndicators: IndicatorSnapshot = {
-  emaFast: 100.1,
-  emaSlow: 100,
-  emaSpreadPercent: 0.1,
-  emaSlopePercent: 0.05,
+  emaFast: 100.04,
+  emaSlow: 99.98,
+  emaSpreadPercent: 0.06,
+  emaSlopePercent: 0.04,
   rsi: 68,
   macdLine: 0.1,
   macdSignal: 0.08,
@@ -34,83 +45,259 @@ const confirmedBullishIndicators: IndicatorSnapshot = {
   adx: 30,
   plusDi: 29,
   minusDi: 14,
-  atrPercent: 0.12,
+  atrPercent: 0.3,
   volumeRatio: 1.2,
   bollingerBandwidthPercent: 0.7,
   bollingerPosition: 0.7,
 };
 
-function continuationCandles(): PricePoint[] {
-  const start = 1_785_600_000_000;
-  const closes = [98.8, ...Array<number>(16).fill(100), 100, 99.95, 99.9, 99.8, 99.88, 99.94, 100.02];
+const bullishRegime: ScalpMarketRegime = {
+  bias: "bullish",
+  trending: true,
+  exhausted: false,
+  netMove145mPercent: 0.8,
+  range145mPercent: 1.2,
+  horizons: [],
+};
+
+function candlesFromCloses(closes: number[], start = 1_785_600_000_000): PricePoint[] {
   return closes.map((close, index) => ({
     t: start + index * 60_000,
-    o: index === 21 ? 99.82 : close - 0.01,
-    h: index === 21 ? 99.89 : close + 0.02,
-    l: index === 21 ? 99.75 : close - 0.02,
+    o: index === 0 ? close : closes[index - 1],
+    h: close + 0.025,
+    l: close - 0.025,
     v: close,
-    volume: index >= 22 ? 130 : 100,
+    volume: index >= closes.length - 3 ? 130 : 100,
   }));
 }
 
-test("the balanced scalp profile opens its price-action gate at 0.58", () => {
-  assert.equal(DEFAULT_SCALP_LEARNING_PROFILE.minimumPriceActionScore, 0.58);
+function pullbackRetestCandles(): PricePoint[] {
+  return candlesFromCloses([
+    99.7, 99.78, 99.84, 99.9, 99.96, 100.02, 100.08, 100.15,
+    100.2, 100.14, 100.09, 100.04, 100.03, 100.06, 100.1, 100.15,
+  ]);
+}
 
-  const belowFloor = evaluateScalpTrendContinuation({
-    priceAction: { ...confirmedBullishPriceAction, score: 0.42 },
-    trendBias: "bullish",
-    indicators: confirmedBullishIndicators,
-    profile: DEFAULT_SCALP_LEARNING_PROFILE,
-  });
-  assert.equal(belowFloor.qualified, false);
-  assert.match(belowFloor.reasons[0] ?? "", /0\.42 is below 0\.58/);
+function trendingCandles(netMovePercent: number): PricePoint[] {
+  return candlesFromCloses(Array.from({ length: 145 }, (_, index) => (
+    100 * (1 + netMovePercent / 100 * index / 144)
+  )));
+}
 
-  const atFloor = evaluateScalpTrendContinuation({
-    priceAction: confirmedBullishPriceAction,
-    trendBias: "bullish",
-    indicators: confirmedBullishIndicators,
-    profile: DEFAULT_SCALP_LEARNING_PROFILE,
-  });
-  assert.deepEqual(atFloor, { qualified: true, reasons: [] });
+function breakoutRetestCandles(): PricePoint[] {
+  const closes = Array.from({ length: 51 }, (_, index) => 100 + Math.sin(index / 2) * 0.025);
+  closes.push(100.15, 100.14, 100.09, 100.11, 100.13, 100.14, 100.12, 100.16, 100.2);
+  return candlesFromCloses(closes).map((point, index) => ({
+    ...point,
+    h: index < 51 ? Math.min(point.h!, 100.08) : point.h,
+    l: index === 53 ? 100.055 : point.l,
+    volume: index === 51 ? 220 : point.volume,
+  }));
+}
+
+function rangeReentryCandles(): PricePoint[] {
+  const closes = [
+    ...Array.from({ length: 50 }, (_, index) => 100 + Math.sin(index) * 0.015),
+    99.96, 99.88, 99.78, 99.68, 99.64, 99.72, 99.8, 99.88, 99.94, 100,
+  ];
+  return candlesFromCloses(closes);
+}
+
+test("multi-horizon regime classification recognizes a 0.62% move instead of calling it sideways", () => {
+  const points = candlesFromCloses(Array.from({ length: 80 }, (_, index) => (
+    100 + 0.62 * index / 79
+  )));
+  const regime = classifyScalpMarketRegime(points);
+
+  assert.equal(regime.bias, "bullish");
+  assert.equal(regime.trending, true);
+  assert.deepEqual(regime.horizons.map((horizon) => horizon.minutes), [5, 15, 60]);
+  assert.ok(regime.horizons.every((horizon) => horizon.atrPercent > 0));
 });
 
-test("continuation entries still require balanced trend, momentum, volatility, and volume", () => {
-  for (const [field, value, expectedReason] of [
-    ["rsi", 92, /RSI/],
-    ["adx", 54.3, /ADX/],
-    ["volumeRatio", 1.1, /Volume/],
-    ["atrPercent", 0.08, /ATR/],
-  ] as const) {
-    const result = evaluateScalpTrendContinuation({
-      priceAction: confirmedBullishPriceAction,
+test("continuation execution uses a 0.72 floor and requires prior completed-candle persistence", () => {
+  assert.equal(DEFAULT_SCALP_LEARNING_PROFILE.minimumPriceActionScore, 0.58);
+  assert.equal(SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE, 0.72);
+
+  const belowFloor = evaluateScalpTrendContinuation({
+    priceAction: { ...confirmedBullishPriceAction, score: 0.62 },
+    previousPriceAction: confirmedBullishPriceAction,
+    points: pullbackRetestCandles(),
+    trendBias: "bullish",
+    indicators: confirmedBullishIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: bullishRegime,
+  });
+  assert.equal(belowFloor.qualified, false);
+  assert.match(belowFloor.reasons.join(" "), /0\.62 is below.*0\.72/);
+
+  const unconfirmedPriorCandle = evaluateScalpTrendContinuation({
+    priceAction: confirmedBullishPriceAction,
+    previousPriceAction: { ...confirmedBullishPriceAction, confirmed: false },
+    points: pullbackRetestCandles(),
+    trendBias: "bullish",
+    indicators: confirmedBullishIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: bullishRegime,
+  });
+  assert.equal(unconfirmedPriorCandle.qualified, false);
+  assert.match(unconfirmedPriorCandle.reasons.join(" "), /two completed candles/);
+});
+
+test("a qualifying continuation remains shadow-only until after-fee validation authorizes it", () => {
+  assert.equal(SCALP_CONTINUATION_LIVE_ENABLED, false);
+  assert.equal(SCALP_RANGE_REVERSAL_LIVE_ENABLED, false);
+  assert.equal(SCALP_REVERSAL_LIVE_ENABLED, false);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("continuation"), false);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("breakout-retest"), true);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("reversal"), false);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("range-reversal"), false);
+});
+
+test("a continuation requires EMA, DMI, MACD strengthening, a safe band position, and pullback/retest/resumption", () => {
+  const evaluate = (indicators: IndicatorSnapshot, points = pullbackRetestCandles()) => evaluateScalpTrendContinuation({
+    priceAction: confirmedBullishPriceAction,
+    previousPriceAction: confirmedBullishPriceAction,
+    points,
+    trendBias: "bullish",
+    indicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: bullishRegime,
+  });
+
+  assert.deepEqual(evaluate(confirmedBullishIndicators), { qualified: true, reasons: [] });
+  assert.match(evaluate({ ...confirmedBullishIndicators, plusDi: 10, minusDi: 30 }).reasons.join(" "), /Directional movement/);
+  assert.match(evaluate({ ...confirmedBullishIndicators, macdHistogramChange: -0.01 }).reasons.join(" "), /MACD/);
+  assert.match(evaluate({ ...confirmedBullishIndicators, bollingerPosition: 0.721 }).reasons.join(" "), /Bollinger/);
+  assert.match(evaluate(confirmedBullishIndicators, candlesFromCloses(Array.from({ length: 16 }, (_, index) => 100 + index * 0.03))).reasons.join(" "), /pullback/);
+});
+
+test("the two post-v7 losing continuations are blocked by the live floor, persistence, and 2% exhaustion guard", () => {
+  for (const [score, netMove] of [[0.62, 5.7], [0.6, 3.44]] as const) {
+    const points = trendingCandles(netMove);
+    const regime = classifyScalpMarketRegime(points);
+    const evaluation = evaluateScalpTrendContinuation({
+      priceAction: { ...confirmedBullishPriceAction, score },
+      previousPriceAction: { ...confirmedBullishPriceAction, score, confirmed: false },
+      points,
       trendBias: "bullish",
-      indicators: { ...confirmedBullishIndicators, [field]: value },
+      indicators: confirmedBullishIndicators,
       profile: DEFAULT_SCALP_LEARNING_PROFILE,
+      regime,
     });
-    assert.equal(result.qualified, false, `${field} should block the continuation entry`);
-    assert.match(result.reasons.join(" "), expectedReason);
+
+    assert.equal(regime.exhausted, true);
+    assert.ok(regime.netMove145mPercent > SCALP_MAX_145M_NET_OR_RANGE_PERCENT);
+    assert.equal(evaluation.qualified, false);
+    assert.match(evaluation.reasons.join(" "), /0\.72/);
+    assert.match(evaluation.reasons.join(" "), /two completed candles/);
+    assert.match(evaluation.reasons.join(" "), /exhaustion/);
   }
 });
 
-test("a qualifying 0.58+ continuation becomes a scalp signal and an overheated move does not", () => {
-  const signal = detectAdaptiveScalpSignal({
+test("candidate diagnostics preserve the rejected path and exact gate reasons for journaling", () => {
+  const points = trendingCandles(5.7);
+  const evaluation = evaluateAdaptiveScalpCandidate({
     symbol: "SOL/USD",
-    points: continuationCandles(),
+    points,
     indicators: confirmedBullishIndicators,
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
   });
 
-  assert.ok(signal);
-  assert.equal(signal.type, "scalp");
-  assert.equal(signal.direction, "bullish");
-  assert.ok(signal.priceActionScore >= 0.58);
-  assert.ok(signal.priceActionTags.includes("INDICATORS_CONFIRMED_TREND_CONTINUATION"));
+  assert.equal(evaluation.signal, null);
+  assert.equal(evaluation.candidate.accepted, false);
+  assert.equal(evaluation.candidate.entryPrice, points.at(-1)!.v);
+  assert.equal(evaluation.candidate.timestamp, points.at(-1)!.t);
+  assert.equal(evaluation.candidate.regime.exhausted, true);
+  assert.ok(evaluation.candidate.rejectionReasons.some((reason) => /exhaustion|2%/.test(reason)));
+});
 
-  const overheated = detectAdaptiveScalpSignal({
+test("a genuine breakout, retest, and resumption emits an independently tagged scalp signal", () => {
+  const points = breakoutRetestCandles();
+  const regime: ScalpMarketRegime = { ...bullishRegime, netMove145mPercent: 0.2, range145mPercent: 0.4 };
+  const structural = evaluateScalpBreakoutRetest({ points, indicators: confirmedBullishIndicators, regime });
+
+  assert.equal(structural.qualified, true);
+  assert.equal(structural.direction, "bullish");
+  assert.ok(structural.tags.includes("PRICE_BREAKOUT_RETEST"));
+  assert.ok(structural.tags.includes("BREAKOUT_ATR_CONFIRMED"));
+  assert.ok(structural.score >= 0.72 && structural.score <= 0.86);
+  const thinAtr = evaluateScalpBreakoutRetest({
+    points,
+    indicators: { ...confirmedBullishIndicators, atrPercent: 0.089 },
+    regime,
+  });
+  assert.equal(thinAtr.qualified, false);
+  assert.match(thinAtr.reasons.join(" "), /0\.09%/);
+
+  const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
-    points: continuationCandles(),
-    indicators: { ...confirmedBullishIndicators, rsi: 92 },
+    points,
+    indicators: confirmedBullishIndicators,
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
   });
-  assert.equal(overheated, null);
+  assert.ok(signal);
+  assert.equal(signal.direction, "bullish");
+  assert.ok(signal.priceActionTags.includes("INDICATORS_CONFIRMED_BREAKOUT_RETEST"));
+
+  const missingVolume = evaluateScalpBreakoutRetest({
+    points: points.map(({ volume: _volume, ...point }) => point),
+    indicators: { ...confirmedBullishIndicators, volumeRatio: null },
+    regime: bullishRegime,
+  });
+  assert.equal(missingVolume.qualified, false, "breakout execution fails closed without relative-volume evidence");
+});
+
+test("range reversal is a completed state machine, not a one-candle synthetic score", () => {
+  const points = rangeReentryCandles();
+  const sidewaysRegime: ScalpMarketRegime = {
+    bias: "sideways",
+    trending: false,
+    exhausted: false,
+    netMove145mPercent: 0,
+    range145mPercent: 0.5,
+    horizons: [],
+  };
+  const rangeIndicators: IndicatorSnapshot = {
+    ...confirmedBullishIndicators,
+    emaFast: 99.9,
+    emaSlow: 99.89,
+    emaSpreadPercent: 0.01,
+    emaSlopePercent: 0.02,
+    rsi: 52,
+    macdHistogram: 0.02,
+    macdHistogramChange: 0.01,
+    adx: 12,
+    volumeRatio: 1.2,
+    bollingerPosition: 0.55,
+  };
+  const evaluation = evaluateScalpRangeReversal({
+    points,
+    indicators: rangeIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: sidewaysRegime,
+  });
+
+  assert.equal(evaluation.qualified, true);
+  assert.equal(evaluation.score, 1, "the score records completion of every observable state, not estimated extremity");
+  assert.ok(evaluation.tags.includes("RANGE_EXTREME_OBSERVED"));
+  assert.ok(evaluation.tags.includes("RANGE_BAND_REENTRY"));
+  assert.ok(evaluation.tags.includes("RANGE_RSI_MACD_TURN"));
+  assert.ok(evaluation.tags.includes("RANGE_CONFIRMING_CANDLE"));
+
+  const missingVolume = evaluateScalpRangeReversal({
+    points,
+    indicators: { ...rangeIndicators, volumeRatio: null },
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: sidewaysRegime,
+  });
+  assert.equal(missingVolume.qualified, false, "range execution fails closed without relative-volume evidence");
+
+  const premature = evaluateScalpRangeReversal({
+    points: points.slice(0, -5),
+    indicators: { ...rangeIndicators, rsi: 25, macdHistogram: -0.02, macdHistogramChange: -0.01 },
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: sidewaysRegime,
+  });
+  assert.equal(premature.qualified, false);
 });

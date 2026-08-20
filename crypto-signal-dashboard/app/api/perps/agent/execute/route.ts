@@ -1,6 +1,6 @@
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { isPerpsLiveWalletAllowed } from "@/lib/perps/sessionConfig";
-import { perpsAgentSignalSchema } from "@/lib/perps/sessionTypes";
+import { publicPerpsAgentSignalSchema } from "@/lib/perps/sessionTypes";
 import { getPerpsSessionWithTimeout, routePerpsSignalForUser } from "@/lib/perps/tradingAgent";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     }
 
     const payload = await request.json().catch(() => null);
-    const parsed = perpsAgentSignalSchema.safeParse(payload);
+    const parsed = publicPerpsAgentSignalSchema.safeParse(payload);
     if (!parsed.success) {
       return Response.json({ error: "Invalid perps agent payload.", detail: parsed.error.message }, { status: 400 });
     }

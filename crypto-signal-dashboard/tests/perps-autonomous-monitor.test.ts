@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { computeTriggerPrices, detectScalpSignal, getScalpTradePlanningConfig, resolveAutonomousCollateralUsd, runAutonomousPerpsMonitor, SCALP_SIGNAL_COOLDOWN_SECONDS } from "../lib/perps/autonomousMonitor";
+import { AutonomousMonitorLeaseLostError, classifyProfitLockSideEffectFailure, computeTriggerPrices, detectScalpSignal, evaluateScalpAdverseEntryDrift, getScalpTradePlanningConfig, hasMatchingEntirePositionProfitLockStop, mergeCompleteJupiterTradeHistoryForLearning, ProfitLockSideEffectError, resolveAutonomousCollateralUsd, resolveProfitLockPositionProvenance, runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl, runWithRenewingAutonomousMonitorLease, SCALP_SIGNAL_COOLDOWN_SECONDS, type AutonomousMonitorLeaseGuard, type AutonomousMonitorLeaseStore, type ProfitLockClaimSettlement, type ProfitLockSideEffectClaim } from "../lib/perps/autonomousMonitor";
 import { SCALP_STOP_LOSS_ROE_PERCENT } from "../lib/perps/scalpExit";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
@@ -15,10 +15,12 @@ import {
   detectAdaptiveScalpSignal,
   evaluateScalpReversalSafety,
 } from "../lib/perps/scalpEngine";
-import type { DecisionLearningProfile } from "../lib/decision/learningTypes";
+import type { DecisionLearningProfile, ScalpCandidate, TradeLearningOutcome } from "../lib/decision/learningTypes";
 import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import {
+  calculatePerpsPositionNetRoePercent,
   calculatePerpsPositionRoePercent,
+  calculateScalpProfitLockStopPrice,
   evaluatePerpsProfitLock,
   PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
   PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
@@ -28,11 +30,155 @@ import {
   SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
   type PerpsProfitLockState,
 } from "../lib/perps/profitLock";
-import type { PerpsAgentSignal, PerpsAutomationSession } from "../lib/perps/sessionTypes";
+import type { PerpsAgentSignal, PerpsAutomationSession, PerpsUserExecution } from "../lib/perps/sessionTypes";
+import { PerpsExecutionError } from "../lib/perps/errors";
+import { computeIndicatorSnapshot } from "../lib/signal/indicators";
 
 type RouteSignal = typeof import("../lib/perps/tradingAgent").routePerpsSignalForUser;
+type SaveScalpCandidate = typeof import("../lib/decision/scalpCandidateStore").saveScalpCandidate;
 
 const walletAddress = "owner-wallet";
+
+let testClaimSequence = 0;
+function createProfitLockTestClaim(label = "claim"): ProfitLockSideEffectClaim {
+  testClaimSequence += 1;
+  const ownerToken = `${label}-owner-${testClaimSequence}`;
+  return {
+    key: `${label}-key-${testClaimSequence}`,
+    ownerToken,
+    reservedValue: `${ownerToken}:reserved`,
+  };
+}
+
+function createProfitLockTestClaimLifecycle(label: string) {
+  let activeClaim: ProfitLockSideEffectClaim | null = null;
+  const settlements: ProfitLockClaimSettlement[] = [];
+  return {
+    settlements,
+    claim: async () => {
+      if (activeClaim) return null;
+      activeClaim = createProfitLockTestClaim(label);
+      return activeClaim;
+    },
+    settle: async (claim: ProfitLockSideEffectClaim, settlement: ProfitLockClaimSettlement) => {
+      if (
+        !activeClaim
+        || claim.ownerToken !== activeClaim.ownerToken
+      ) return false;
+      settlements.push(settlement);
+      if (settlement === "definite-failure") activeClaim = null;
+      return true;
+    },
+  };
+}
+
+const runAutonomousPerpsMonitor = (
+  overrides: Parameters<typeof runAutonomousPerpsMonitorImpl>[0] = {},
+  leaseGuard?: AutonomousMonitorLeaseGuard
+) => {
+  const ensureScalpPolicyProfile = overrides.ensureScalpPolicyProfile ?? (async (address: string) => (
+    await overrides.getLearningProfile?.(address) ?? qualifyingRangeLearningProfile()
+  ));
+  const latestFetchedPriceByProduct = new Map<string, number>();
+  const providedFetchCandles = overrides.fetchCandles;
+  const fetchCandles = providedFetchCandles
+    ? async (...args: Parameters<typeof providedFetchCandles>) => {
+        const points = await providedFetchCandles(...args);
+        const latest = points.at(-1)?.v;
+        if (typeof latest === "number" && Number.isFinite(latest) && latest > 0) {
+          latestFetchedPriceByProduct.set(args[0], latest);
+        }
+        return points;
+      }
+    : undefined;
+  const providedFetchSnapshot = overrides.fetchSnapshot;
+  const fetchSnapshot = providedFetchSnapshot
+    ? async (...args: Parameters<typeof providedFetchSnapshot>) => {
+        const snapshot = await providedFetchSnapshot(...args);
+        if (snapshot.readEvidence) return snapshot;
+        const hasLivePosition = snapshot.positions.some((position) => position.source !== "mock");
+        return {
+          ...snapshot,
+          readEvidence: {
+            liveApiSucceeded: true,
+            rpcSucceeded: true,
+            authoritativePositionAbsence: !hasLivePosition,
+          },
+        };
+      }
+    : undefined;
+  return runAutonomousPerpsMonitorImpl({
+    // Production scalp monitoring requires authoritative Redis reconciliation.
+    // Focused unit cases inject deterministic in-memory outcomes by default.
+    reconcileLearningHistory: async () => 0,
+    getClosedScalpOutcomes: async () => [],
+    recordScalpCircuitOutcomes: (async () => null) as never,
+    getScalpCircuitDecision: (async () => ({ allowed: true, reasons: [], state: null })) as never,
+    autoTrain: async () => undefined,
+    recoverPendingScalpProtection: async () => ({
+      status: "no-pending-recovery",
+      blockNewEntries: false,
+      record: null,
+      message: "No pending recovery.",
+    }),
+    listPendingScalpProtectionRecoveryWallets: async () => [],
+    fetchLivePrice: async (product) => latestFetchedPriceByProduct.get(product) ?? null,
+    getProfitLockPositionProvenance: async (address, positionPubkey) => {
+      const configs = await overrides.listConfigs?.() ?? [];
+      const strategyClass = configs.find((config) => config.walletAddress === address)?.settings.scalpModeEnabled
+        ? "scalp" as const
+        : "smart" as const;
+      return {
+        episodeId: `test-episode:${positionPubkey}`,
+        executionId: `test-episode:${positionPubkey}`,
+        strategyClass,
+        createdAt: "2026-08-19T12:00:00.000Z",
+      };
+    },
+    readProfitLockTransactionStatus: async () => "processing",
+    submitProfitLockStop: async (_walletAddress, _position, triggerPrice) => ({
+      txid: "test-profit-lock-stop-tx",
+      triggerPrice,
+    }),
+    claimProfitLockStop: async () => createProfitLockTestClaim("stop"),
+    claimProfitLockClose: async () => createProfitLockTestClaim("close"),
+    settleProfitLockClaim: async () => true,
+    commitFailedProfitLockClaim: async (address, _positionPubkey, claim, nextState) => {
+      const committed = overrides.settleProfitLockClaim
+        ? await overrides.settleProfitLockClaim(claim, "definite-failure")
+        : true;
+      if (!committed) return false;
+      await overrides.writeProfitLockState?.(address, nextState);
+      return true;
+    },
+    cancelDirectionExperiment: async () => null,
+    ...overrides,
+    ...(fetchCandles ? { fetchCandles } : {}),
+    ...(fetchSnapshot ? { fetchSnapshot } : {}),
+    ensureScalpPolicyProfile,
+  }, leaseGuard);
+};
+
+function createCandidateRecorder(records: ScalpCandidate[]): SaveScalpCandidate {
+  const stored = new Map<string, ScalpCandidate>();
+  return (async (input) => {
+    const existing = stored.get(input.candidateId);
+    const now = new Date().toISOString();
+    const candidate = {
+      ...existing,
+      ...input,
+      rejectionReasons: input.rejectionReasons ?? existing?.rejectionReasons ?? [],
+      metrics: { ...existing?.metrics, ...input.metrics },
+      tags: input.tags ?? existing?.tags ?? [],
+      labels: { ...existing?.labels, ...input.labels },
+      createdAt: existing?.createdAt ?? input.createdAt ?? now,
+      updatedAt: input.updatedAt ?? now,
+    } as ScalpCandidate;
+    stored.set(candidate.candidateId, candidate);
+    records.push(candidate);
+    return candidate;
+  }) as SaveScalpCandidate;
+}
 
 function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAutomationConfig {
   return {
@@ -73,7 +219,7 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
   };
 }
 
-test("scalp detection only creates a range-edge signal in a sideways market", () => {
+test("scalp detection does not enter from a one-candle range edge without the full reversal sequence", () => {
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.1, 100.05, 99.95, 99.9].map((value, index) => ({
     t: baseTime + index * 60_000,
@@ -103,34 +249,12 @@ test("scalp detection only creates a range-edge signal in a sideways market", ()
     },
   });
 
-  assert.equal(signal?.type, "scalp");
-  assert.equal(signal?.direction, "bullish");
+  assert.equal(signal, null);
 });
 
 test("scalp detection uses an independent 42.5-minute cooldown", () => {
-  const baseTime = 1_784_174_800_000;
-  const points = [100, 100.1, 100.05, 99.95, 99.9].map((value, index) => ({
-    t: baseTime + index * 60_000,
-    v: value,
-  }));
-  const indicators = {
-    emaFast: 99.98,
-    emaSlow: 100,
-    emaSpreadPercent: -0.02,
-    emaSlopePercent: -0.01,
-    rsi: 39,
-    macdLine: -0.01,
-    macdSignal: -0.01,
-    macdHistogram: 0,
-    macdHistogramChange: 0,
-    adx: 14,
-    plusDi: 18,
-    minusDi: 20,
-    atrPercent: 0.08,
-    volumeRatio: 1.1,
-    bollingerBandwidthPercent: 0.6,
-    bollingerPosition: -0.2,
-  };
+  const points = qualifyingRangePoints();
+  const indicators = computeIndicatorSnapshot(points);
   const latestTimestamp = points[points.length - 1]!.t;
 
   assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 2_550);
@@ -201,25 +325,41 @@ function exceptionalBullishSweepPoints() {
 
 function qualifyingRangePoints() {
   const baseTime = 1_784_174_800_000;
-  return Array.from({ length: 80 }, (_, index) => {
-    const close = index >= 72
-      ? 100.02 - (index - 72) * 0.04
-      : 100 + (index % 2 === 0 ? 0.05 : -0.05);
-    return {
-      t: baseTime + index * 60_000,
-      o: 100,
-      h: 100.08,
-      l: 99.4,
-      v: close,
-      volume: index === 79 ? 130 : 100,
-    };
-  });
+  const closes = Array.from({ length: 51 }, (_, index) => 100 + Math.sin(index / 2) * 0.025);
+  closes.push(100.15, 100.14, 100.09, 100.11, 100.13, 100.14, 100.12, 100.16, 100.2);
+  return closes.map((close, index) => ({
+    t: baseTime + index * 60_000,
+    o: index === 0 ? close : closes[index - 1],
+    h: index < 51 ? Math.min(close + 0.05, 100.08) : close + 0.05,
+    l: index === 53 ? 100.055 : close - 0.05,
+    v: close,
+    volume: index === 51 ? 220 : index >= closes.length - 3 ? 130 : 100,
+  }));
 }
 
 function qualifyingRangeLearningProfile() {
   const profile = createLearningProfile();
   profile.scalpProfile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
   profile.scalpProfile.minimumConfidence = 0.7;
+  profile.scalpProfile.policyRollout = {
+    status: "probation",
+    startedAt: "2026-08-19T12:00:00.000Z",
+    baselineOutcomeCount: 0,
+    reviewedOutcomeCount: 0,
+    minimumValidationTrades: 10,
+    liveTradingAuthorized: true,
+    authorization: "operator-approved-live-rollout",
+    reason: "Test policy v8 rollout.",
+  };
+  profile.leverageFloor = 5;
+  profile.leverageCap = 20;
+  profile.maximumAllocationPercent = 50;
+  profile.targetWalletRiskPercent = 10;
+  profile.assetAdjustments = {
+    SOL: { ...profile.assetAdjustments.SOL, leverageMultiplier: 1, allocationMultiplier: 1 },
+    ETH: { ...profile.assetAdjustments.ETH, leverageMultiplier: 1, allocationMultiplier: 1 },
+    BTC: { ...profile.assetAdjustments.BTC, leverageMultiplier: 1, allocationMultiplier: 1 },
+  };
   return profile;
 }
 
@@ -400,23 +540,415 @@ test("scalp trigger pricing adds estimated fees to the adaptive net target", () 
   assert.equal(triggers.stopLossPrice, null);
 });
 
-test("scalp planning uses 50 percent wallet allocation and 50x leverage", () => {
+test("scalp planning uses the configured 50 percent base allocation with a 20x safety ceiling", () => {
   const planningConfig = getScalpTradePlanningConfig(createConfig());
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
   assert.equal(planningConfig.settings.perpsLeverage, SCALP_TRADE_LEVERAGE);
   assert.equal(planningConfig.settings.stopLossPercent, SCALP_STOP_LOSS_ROE_PERCENT);
-  assert.equal(SCALP_TRADE_LEVERAGE, 50);
+  assert.equal(SCALP_TRADE_LEVERAGE, 20);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
-test("low-balance collateral uses exactly $12 from $12 up to but not including $50", () => {
+test("low-balance collateral preserves the learned allocation instead of forcing a $12 trade", () => {
   assert.equal(resolveAutonomousCollateralUsd(11.99, 20), 2.398);
-  assert.equal(resolveAutonomousCollateralUsd(11.99, 100), 9.999999);
-  assert.equal(resolveAutonomousCollateralUsd(12, 20), 12);
-  assert.equal(resolveAutonomousCollateralUsd(25, 20), 12);
-  assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(11.99, 100), 11.99);
+  assert.equal(resolveAutonomousCollateralUsd(12, 20), 2.4);
+  assert.equal(resolveAutonomousCollateralUsd(25, 20), 5);
+  assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 9.998);
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
+});
+
+test("pre-submit scalp drift uses a bounded ATR-relative adverse tolerance", () => {
+  const accepted = evaluateScalpAdverseEntryDrift({
+    side: "long",
+    referencePrice: 100,
+    livePrice: 99.96,
+    atrPercent: 0.1,
+  });
+  const rejected = evaluateScalpAdverseEntryDrift({
+    side: "long",
+    referencePrice: 100,
+    livePrice: 99.9,
+    atrPercent: 0.1,
+  });
+
+  assert.equal(accepted.tolerancePercent, 0.05);
+  assert.equal(accepted.allowed, true);
+  assert.equal(rejected.allowed, false);
+  assert.ok(rejected.adverseMovePercent > rejected.tolerancePercent);
+});
+
+test("scalp monitor journals the v8 path, uses real indicators, learned risk, and conservative fees", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  const candidates: ScalpCandidate[] = [];
+  let labelCalls = 0;
+  let routedSignal: PerpsAgentSignal | null = null;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return {
+        ok: true,
+        message: "submitted",
+        execution: { executionId: "execution-v8", decisionId: "decision-v8", status: "submitted" },
+      };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    getClosedScalpOutcomes: async () => [],
+    saveScalpCandidate: createCandidateRecorder(candidates),
+    labelMatureScalpCandidates: (async () => {
+      labelCalls += 1;
+      return [];
+    }) as never,
+    getScalpCircuitDecision: (async () => ({ allowed: true, reasons: [], state: null })) as never,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  const routed = routedSignal as PerpsAgentSignal | null;
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routed?.strategyContext?.scalpEntryPath, "breakout-retest");
+  assert.equal(routed?.strategyContext?.indicatorScore, 5.5);
+  assert.equal(routed?.strategyContext?.indicatorQualified, false);
+  assert.equal(routed?.strategyContext?.estimatedRoundTripFeeRate, 0.00205);
+  assert.equal(routed?.strategyContext?.indicators?.atrPercent !== null, true);
+  assert.ok((routed?.leverage ?? Number.POSITIVE_INFINITY) <= 20);
+  assert.ok((routed?.collateralUsd ?? Number.POSITIVE_INFINITY) <= 50);
+  assert.equal(labelCalls, 1);
+  assert.equal(candidates.at(-1)?.disposition, "accepted");
+  assert.equal(candidates.at(-1)?.entryPath, "breakout-retest");
+  assert.equal(candidates.at(-1)?.executionId, "execution-v8");
+});
+
+test("an adverse live tick vetoes a scalp even when the completed-candle recheck is unchanged", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routeCalls = 0;
+  let candleReads = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => {
+      candleReads += 1;
+      return points;
+    },
+    // The signal and revalidation see the exact same completed candle. Only
+    // the no-cache ticker observes the adverse move before submission.
+    fetchLivePrice: async () => 99,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.ok(candleReads >= 2, "the setup was revalidated with completed candles");
+  assert.equal(result.results[0]?.code, "SCALP_ADVERSE_ENTRY_DRIFT", JSON.stringify(result.results));
+  assert.match(result.results[0]?.message ?? "", /live Coinbase price/i);
+  assert.equal(routeCalls, 0);
+});
+
+test("scalp circuit ingests only positions opened after the v8 rollout and blocks the affected path", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  const profile = qualifyingRangeLearningProfile();
+  profile.scalpProfile!.policyRollout = {
+    ...profile.scalpProfile!.policyRollout!,
+    startedAt: "2026-08-19T12:00:00.000Z",
+  };
+  const outcome = (outcomeId: string, openedAt: string): TradeLearningOutcome => ({
+    outcomeId,
+    openedAt,
+    closedAt: "2026-08-19T13:30:00.000Z",
+    signalType: "scalp",
+    scalpSetupType: "v-reversal",
+    scalpEntryPath: "breakout-retest",
+    priceActionTags: ["PRICE_BREAKOUT_RETEST"],
+    netPnlUsd: -2,
+    feesUsd: 1,
+    sizeUsd: 500,
+  }) as TradeLearningOutcome;
+  const recorded: string[] = [];
+  let routeCalls = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => profile,
+    getClosedScalpOutcomes: async () => [
+      outcome("legacy-v7", "2026-08-19T11:59:00.000Z"),
+      outcome("policy-v8", "2026-08-19T12:01:00.000Z"),
+    ],
+    recordScalpCircuitOutcomes: (async (input: { outcomes: Array<{ outcomeId: string }> }) => {
+      recorded.push(...input.outcomes.map((outcome) => outcome.outcomeId));
+      return null;
+    }) as never,
+    getScalpCircuitDecision: (async () => ({
+      allowed: false,
+      reasons: ["breakout-retest disabled after 2 consecutive post-fee losses on that entry path."],
+      state: null,
+    })) as never,
+    saveScalpCandidate: createCandidateRecorder([]),
+    labelMatureScalpCandidates: (async () => []) as never,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.deepEqual(recorded, ["policy-v8"]);
+  assert.equal(routeCalls, 0);
+  assert.equal(result.results[0]?.code, "SCALP_CIRCUIT_OPEN");
+});
+
+test("set-parameters monitoring persists one stable v8 rollout boundary before circuit accounting", async () => {
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true, perpsExecutionMode: "set-parameters" },
+  });
+  const points = Array.from({ length: 70 }, (_, index) => ({
+    t: 1_784_174_800_000 + index * 60_000,
+    o: 100,
+    h: 100.01,
+    l: 99.99,
+    v: 100,
+    volume: 100,
+  }));
+  let persistedProfile = qualifyingRangeLearningProfile();
+  persistedProfile.scalpProfile!.policyVersion = 7;
+  persistedProfile.scalpProfile!.policyRollout = null;
+  const originalSmartConfidence = persistedProfile.minimumConfidence;
+  let migrationWrites = 0;
+  let authoritativeScalpTrainingRuns = 0;
+  let fallbackProfileReads = 0;
+  let reconciliationComplete = false;
+  const observedRolloutBoundaries: string[] = [];
+  const circuitBatches: string[][] = [];
+  const postRolloutOutcome = {
+    outcomeId: "stable-v8-outcome",
+    openedAt: "2026-08-19T12:01:00.000Z",
+    closedAt: "2026-08-19T12:05:00.000Z",
+    signalType: "scalp",
+    scalpSetupType: "v-reversal",
+    scalpEntryPath: "continuation",
+    netPnlUsd: 1,
+  } as TradeLearningOutcome;
+  let authoritativeOutcomes = [postRolloutOutcome];
+
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => {
+      fallbackProfileReads += 1;
+      return persistedProfile;
+    },
+    reconcileLearningHistory: async () => {
+      reconciliationComplete = true;
+      return 0;
+    },
+    ensureScalpPolicyProfile: async () => {
+      if (persistedProfile.scalpProfile?.policyVersion !== 8) {
+        migrationWrites += 1;
+        const migrated = qualifyingRangeLearningProfile();
+        migrated.minimumConfidence = persistedProfile.minimumConfidence;
+        migrated.scalpProfile!.policyRollout!.startedAt = "2026-08-19T12:00:00.000Z";
+        persistedProfile = migrated;
+      }
+      return persistedProfile;
+    },
+    autoTrain: async () => {
+      authoritativeScalpTrainingRuns += 1;
+    },
+    getClosedScalpOutcomes: async () => {
+      assert.equal(reconciliationComplete, true);
+      return authoritativeOutcomes;
+    },
+    recordScalpCircuitOutcomes: (async (input: { outcomes: Array<{ outcomeId: string }> }) => {
+      observedRolloutBoundaries.push(persistedProfile.scalpProfile!.policyRollout!.startedAt);
+      circuitBatches.push(input.outcomes.map((outcome) => outcome.outcomeId));
+      return null;
+    }) as never,
+    reconcileNoOpenPosition: async () => [],
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  await run();
+  authoritativeOutcomes = [{
+    ...postRolloutOutcome,
+    outcomeId: "late-reconciled-older-loss",
+    closedAt: "2026-08-19T12:03:00.000Z",
+    netPnlUsd: -2,
+  }, postRolloutOutcome];
+  await run();
+
+  assert.equal(migrationWrites, 1);
+  assert.equal(authoritativeScalpTrainingRuns, 2);
+  assert.equal(fallbackProfileReads, 0);
+  assert.equal(persistedProfile.minimumConfidence, originalSmartConfidence);
+  assert.deepEqual(observedRolloutBoundaries, [
+    "2026-08-19T12:00:00.000Z",
+    "2026-08-19T12:00:00.000Z",
+  ]);
+  assert.deepEqual(circuitBatches, [
+    ["stable-v8-outcome"],
+    ["late-reconciled-older-loss", "stable-v8-outcome"],
+  ]);
+});
+
+test("set-parameters scalp learning fails closed when its authoritative updater fails", async () => {
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true, perpsExecutionMode: "set-parameters" },
+  });
+  let routeCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    ensureScalpPolicyProfile: async () => qualifyingRangeLearningProfile(),
+    autoTrain: async () => {
+      throw new Error("authoritative scalp profile write failed");
+    },
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(result.results[0]?.status, "failed");
+  assert.match(result.results[0]?.message ?? "", /authoritative scalp profile write failed/);
+  assert.equal(routeCalls, 0);
+});
+
+test("scalp admission fails closed when the authoritative circuit outcome batch cannot be persisted", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let routeCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => qualifyingRangePoints(),
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    ensureScalpPolicyProfile: async () => qualifyingRangeLearningProfile(),
+    getClosedScalpOutcomes: async () => [{
+      outcomeId: "checkpoint-failure-outcome",
+      openedAt: "2026-08-19T12:01:00.000Z",
+      closedAt: "2026-08-19T12:05:00.000Z",
+      signalType: "scalp",
+      scalpSetupType: "v-reversal",
+      netPnlUsd: -1,
+    } as TradeLearningOutcome],
+    recordScalpCircuitOutcomes: (async () => {
+      throw new Error("circuit Redis unavailable");
+    }) as never,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(result.results[0]?.status, "failed");
+  assert.match(result.results[0]?.message ?? "", /circuit Redis unavailable/);
+  assert.equal(routeCalls, 0);
+});
+
+test("scalp admission requires a complete paginated Jupiter trade history", async () => {
+  assert.throws(() => mergeCompleteJupiterTradeHistoryForLearning(
+    {
+      positions: [],
+      pendingTriggers: [],
+      recentTrades: [],
+      readEvidence: {
+        liveApiSucceeded: true,
+        rpcSucceeded: true,
+        authoritativePositionAbsence: true,
+      },
+    },
+    { trades: [], totalCount: 3, complete: false }
+  ), /only 0 of 3 trades/);
+
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let routed = 0;
+  let requiredCompleteHistory = false;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    reconcileLearningHistory: async (_wallet, _snapshot, options) => {
+      requiredCompleteHistory = options?.requireCompleteTradeHistory === true;
+      throw new Error("Jupiter trade history pagination failed");
+    },
+    routeSignal: (async () => {
+      routed += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(requiredCompleteHistory, true);
+  assert.equal(result.results[0]?.status, "failed");
+  assert.match(result.results[0]?.message ?? "", /pagination failed/);
+  assert.equal(routed, 0);
 });
 
 test("monitor does not revive the paused exceptional bypass after a profitable cooldown", async () => {
@@ -467,10 +999,11 @@ test("monitor does not revive the paused exceptional bypass after a profitable c
   assert.equal(routedSignal, null);
 });
 
-test("three-trade scalp experiment executes the exact opposite direction and counts only submissions", async () => {
+test("policy v8 cancels a stale opposite-direction experiment and routes the detector direction", async () => {
   const points = qualifyingRangePoints();
   let routedSignal: PerpsAgentSignal | null = null;
   let recordedTrades = 0;
+  let cancelledExperiments = 0;
   const base = createConfig();
   const config = createConfig({
     settings: { ...base.settings, scalpModeEnabled: true },
@@ -504,58 +1037,69 @@ test("three-trade scalp experiment executes the exact opposite direction and cou
       startedAt: new Date().toISOString(),
       completedAt: null,
     }),
-    recordDirectionExperimentTrade: async () => {
-      recordedTrades += 1;
+    cancelDirectionExperiment: async () => {
+      cancelledExperiments += 1;
       return {
         experimentId: "inverse-test",
         baselineProfileId: "baseline-test",
-        enabled: true,
+        enabled: false,
         maxTrades: 3,
-        tradesCompleted: 1,
-        tradesRemaining: 2,
+        tradesCompleted: 0,
+        tradesRemaining: 0,
         startedAt: new Date().toISOString(),
-        completedAt: null,
+        completedAt: new Date().toISOString(),
       };
+    },
+    recordDirectionExperimentTrade: async () => {
+      recordedTrades += 1;
+      return null;
     },
   });
 
   const routed = routedSignal as PerpsAgentSignal | null;
   const entry = routed?.marketContext?.spotPrice ?? 0;
-  assert.equal(routed?.strategyClass, "scalp");
-  assert.equal(routed?.strategyContext?.detectedDirection, "bullish");
-  assert.equal(routed?.direction, "bearish");
-  assert.equal(routed?.strategyContext?.directionInverted, true);
-  assert.equal(routed?.strategyContext?.directionExperimentId, "inverse-test");
-  assert.equal(routed?.strategyContext?.directionExperimentTradeNumber, 1);
-  assert.ok((routed?.takeProfitPrice ?? Number.POSITIVE_INFINITY) < entry);
-  assert.ok((routed?.stopLossPrice ?? 0) > entry);
-  assert.equal(recordedTrades, 1);
-  assert.match(result.results[0]?.message ?? "", /1\/3 submitted, 2 remaining/);
+  assert.equal(routed?.strategyClass, "scalp", JSON.stringify(result.results[0]));
+  assert.equal(routed?.direction, "bullish");
+  assert.equal(routed?.strategyContext?.detectedDirection, undefined);
+  assert.equal(routed?.strategyContext?.directionInverted, undefined);
+  assert.equal(routed?.strategyContext?.directionExperimentId, undefined);
+  assert.equal(routed?.strategyContext?.directionExperimentTradeNumber, undefined);
+  assert.ok((routed?.takeProfitPrice ?? 0) > entry);
+  assert.ok((routed?.stopLossPrice ?? Number.POSITIVE_INFINITY) < entry);
+  assert.equal(cancelledExperiments, 1, JSON.stringify(result.results[0]));
+  assert.equal(recordedTrades, 0);
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
 });
 
-test("opposite-direction experiment does not consume a trade when routing is rejected", async () => {
+test("a stale v8 direction experiment cannot trigger the decision-veto cooldown deadlock", async () => {
   const points = qualifyingRangePoints();
   let recordedTrades = 0;
+  let cursorWrites = 0;
+  let cancelledExperiments = 0;
   const base = createConfig();
   const config = createConfig({
     settings: { ...base.settings, scalpModeEnabled: true },
     params: { ...base.params, trendWindow: 24 },
   });
 
-  await runAutonomousPerpsMonitor({
+  const result = await runAutonomousPerpsMonitor({
     listConfigs: async () => [config],
     listSessions: async () => [createSession()],
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => points,
     fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
     getUsdcBalance: async () => 100,
-    routeSignal: (async () => ({ ok: false, code: "NOT_EXECUTED", message: "rejected" })) as unknown as RouteSignal,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => (
+      signal.strategyContext?.directionInverted
+        ? { ok: false, code: "DECISION_LAYER_SKIP", message: "Directional indicators vetoed the inverted experiment." }
+        : { ok: true, message: "normal detector direction submitted", execution: { status: "submitted" } }
+    )) as unknown as RouteSignal,
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
     getLearningProfile: async () => qualifyingRangeLearningProfile(),
     readLastSignal: async () => null,
-    writeLastSignal: async () => undefined,
+    writeLastSignal: async () => { cursorWrites += 1; },
     getDirectionExperiment: async () => ({
       experimentId: "inverse-test",
       baselineProfileId: "baseline-test",
@@ -566,13 +1110,20 @@ test("opposite-direction experiment does not consume a trade when routing is rej
       startedAt: new Date().toISOString(),
       completedAt: null,
     }),
+    cancelDirectionExperiment: async () => {
+      cancelledExperiments += 1;
+      return null;
+    },
     recordDirectionExperimentTrade: async () => {
       recordedTrades += 1;
       return null;
     },
   });
 
+  assert.equal(cancelledExperiments, 1);
   assert.equal(recordedTrades, 0);
+  assert.equal(cursorWrites, 1, JSON.stringify(result.results[0]));
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
 });
 
 test("monitor pauses scalp entries while the winner-derived profile fails validation", async () => {
@@ -594,6 +1145,16 @@ test("monitor pauses scalp entries while the winner-derived profile fails valida
     ...profile.scalpProfile.validation,
     passed: false,
     reasons: ["Loss-history validation failed."],
+  };
+  profile.scalpProfile.policyRollout = {
+    status: "paused",
+    startedAt: "2026-08-19T12:00:00.000Z",
+    baselineOutcomeCount: 0,
+    reviewedOutcomeCount: 10,
+    minimumValidationTrades: 10,
+    liveTradingAuthorized: false,
+    authorization: "operator-approved-live-rollout",
+    reason: "Loss-history validation failed.",
   };
   let routeCalls = 0;
 
@@ -656,14 +1217,15 @@ test("a successfully taken smart trade turns Scalp Mode off after routing", asyn
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
   assert.equal(disabledWallet, walletAddress);
   assert.equal(routedStrategy, "smart");
 });
 
-test("an active opposite-direction experiment waits for scalp and suppresses Smart entries", async () => {
+test("a stale v8 direction experiment cannot suppress an otherwise eligible Smart entry", async () => {
   let routeCalls = 0;
   let disableCalls = 0;
+  let cancelCalls = 0;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
     t: baseTime + index * 60_000,
@@ -702,13 +1264,16 @@ test("an active opposite-direction experiment waits for scalp and suppresses Sma
       startedAt: new Date().toISOString(),
       completedAt: null,
     }),
+    cancelDirectionExperiment: async () => {
+      cancelCalls += 1;
+      return null;
+    },
   });
 
-  assert.equal(result.results[0]?.code, "NO_SIGNAL");
-  assert.match(result.results[0]?.message ?? "", /waiting for a qualifying scalp setup/i);
-  assert.match(result.results[0]?.message ?? "", /0\/3 submitted, 3 remaining/);
-  assert.equal(routeCalls, 0);
-  assert.equal(disableCalls, 0);
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routeCalls, 1);
+  assert.equal(disableCalls, 1);
+  assert.equal(cancelCalls, 1);
 });
 
 test("a generated smart signal that is skipped leaves Scalp Mode enabled", async () => {
@@ -847,6 +1412,1105 @@ function createOpenPosition(
     ...overrides,
   };
 }
+
+function createExecutionEpisode(input: {
+  executionId: string;
+  positionPubkey: string;
+  createdAt: string;
+  updatedAt?: string;
+  strategyClass?: "smart" | "scalp";
+}): PerpsUserExecution {
+  return {
+    executionId: input.executionId,
+    sessionId: "session-1",
+    walletAddress,
+    signalId: `signal-${input.executionId}`,
+    symbol: "SOL/USD",
+    summary: "Execution provenance test",
+    side: "long",
+    asset: "SOL",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "confirmed",
+    reasonCode: "LIVE_SUBMITTED",
+    reasonMessage: "Submitted",
+    collateralUsd: 100,
+    sizeUsd: 2_000,
+    leverage: 20,
+    takeProfitPrice: 102,
+    stopLossPrice: 98,
+    txid: `tx-${input.executionId}`,
+    positionPubkey: input.positionPubkey,
+    ...(input.strategyClass ? { strategyClass: input.strategyClass } : {}),
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt ?? input.createdAt,
+  };
+}
+
+test("profit-lock provenance selects the newest same-pubkey episode and treats legacy manual entries as smart", () => {
+  const oldEpisode = createExecutionEpisode({
+    executionId: "old-scalp",
+    positionPubkey: "reused-position",
+    createdAt: "2026-08-19T10:00:00.000Z",
+    // A later reconciliation update must not make this the newer episode.
+    updatedAt: "2026-08-19T13:00:00.000Z",
+    strategyClass: "scalp",
+  });
+  const reopenedManualEpisode = createExecutionEpisode({
+    executionId: "new-manual",
+    positionPubkey: "reused-position",
+    createdAt: "2026-08-19T12:00:00.000Z",
+  });
+
+  assert.deepEqual(
+    resolveProfitLockPositionProvenance([oldEpisode, reopenedManualEpisode], "reused-position"),
+    {
+      episodeId: "new-manual",
+      executionId: "new-manual",
+      strategyClass: "smart",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }
+  );
+});
+
+test("profit-lock ROE normalizes only direct-RPC gross PnL", () => {
+  const live = createOpenPosition(14.1, { leverage: 20, source: "live-api" });
+  const rpc = createOpenPosition(14.1, { leverage: 20, source: "rpc-direct" });
+
+  assert.equal(Number(calculatePerpsPositionNetRoePercent(live, 0.00205)?.toFixed(4)), 14.1);
+  assert.equal(Number(calculatePerpsPositionNetRoePercent(rpc, 0.00205)?.toFixed(4)), 10);
+});
+
+test("fee-protected scalp stop prices preserve positive net ROE on both sides", () => {
+  assert.equal(calculateScalpProfitLockStopPrice({
+    side: "long",
+    entryPrice: 100,
+    leverage: 20,
+    exitNetRoePercent: 7,
+    estimatedRoundTripFeeRate: 0.00205,
+  }), 100.555);
+  assert.equal(calculateScalpProfitLockStopPrice({
+    side: "short",
+    entryPrice: 100,
+    leverage: 20,
+    exitNetRoePercent: 7,
+    estimatedRoundTripFeeRate: 0.00205,
+  }), 99.445);
+});
+
+test("matching entire-position stops are recognized without resubmission", () => {
+  assert.equal(hasMatchingEntirePositionProfitLockStop({
+    positionPubkey: "position-pubkey",
+    triggerPrice: 100.555,
+    pendingTriggers: [{
+      positionPubkey: "position-pubkey",
+      kind: "stop-loss",
+      entirePosition: true,
+      executed: false,
+      triggerPrice: 100.555001,
+    } as never],
+  }), true);
+});
+
+test("enabling Scalp Mode cannot reclassify an existing Smart/manual position", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let writtenState: PerpsProfitLockState | null = null;
+  let stopSubmissions = 0;
+  let closeSubmissions = 0;
+
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, { leverage: 20, markPrice: 101 })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId: "manual-smart-episode",
+      executionId: "manual-smart-episode",
+      strategyClass: "smart",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => null,
+    writeProfitLockState: async (_address, state) => { writtenState = state; },
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      stopSubmissions += 1;
+      return { txid: "must-not-submit-stop", triggerPrice };
+    },
+    closePosition: async () => {
+      closeSubmissions += 1;
+      return { txid: "must-not-close" };
+    },
+  });
+
+  assert.equal((writtenState as PerpsProfitLockState | null)?.episodeId, "manual-smart-episode");
+  assert.equal((writtenState as PerpsProfitLockState | null)?.strategyClass, "smart");
+  assert.equal((writtenState as PerpsProfitLockState | null)?.activeTier, null);
+  assert.equal(stopSubmissions, 0);
+  assert.equal(closeSubmissions, 0);
+});
+
+test("a reopened same-pubkey episode can claim and submit the same scalp tier", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let episodeId = "episode-one";
+  let state: PerpsProfitLockState | null = null;
+  const claimKeys = new Set<string>();
+  const submittedEpisodes: string[] = [];
+
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId,
+      executionId: episodeId,
+      strategyClass: "scalp",
+      createdAt: episodeId === "episode-one"
+        ? "2026-08-19T10:00:00.000Z"
+        : "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockStop: async (_address, _positionPubkey, claimEpisodeId, tier) => {
+      const key = `${claimEpisodeId}:${tier}`;
+      if (claimKeys.has(key)) return null;
+      claimKeys.add(key);
+      return createProfitLockTestClaim(key);
+    },
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      submittedEpisodes.push(episodeId);
+      return { txid: `stop-${episodeId}`, triggerPrice };
+    },
+  });
+
+  await run();
+  episodeId = "episode-two";
+  await run();
+
+  assert.deepEqual(submittedEpisodes, ["episode-one", "episode-two"]);
+  assert.deepEqual([...claimKeys], ["episode-one:ten-to-seven", "episode-two:ten-to-seven"]);
+  assert.equal((state as PerpsProfitLockState | null)?.episodeId, "episode-two");
+});
+
+test("overlapping profit-lock close workers atomically submit one full close per episode", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const previousState: PerpsProfitLockState = {
+    positionPubkey: "position-pubkey",
+    episodeId: "close-episode",
+    strategyClass: "scalp",
+    peakRoePercent: 11,
+    activeTier: "ten-to-seven",
+    protectedExitRoePercent: 7,
+    armedAt: 1_000,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: 1_000,
+  };
+  let claimed = false;
+  let closeCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { leverage: 20, markPrice: 100.4 })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId: "close-episode",
+      executionId: "close-episode",
+      strategyClass: "scalp",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => previousState,
+    writeProfitLockState: async () => undefined,
+    claimProfitLockClose: async (_address, _positionPubkey, claimEpisodeId) => {
+      assert.equal(claimEpisodeId, "close-episode");
+      if (claimed) return null;
+      claimed = true;
+      return createProfitLockTestClaim("overlap-close");
+    },
+    closePosition: async () => {
+      closeCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { txid: "single-close" };
+    },
+  });
+
+  const outcomes = await Promise.all([run(), run()]);
+  assert.equal(closeCalls, 1);
+  assert.deepEqual(
+    outcomes.map((outcome) => outcome.results[0]?.code).sort(),
+    ["PROFIT_LOCK_CLOSE_PENDING", "PROFIT_LOCK_CLOSE_SUBMITTED"]
+  );
+});
+
+test("scalp staircase submits one closer profitable stop per armed tier", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let state: PerpsProfitLockState | null = null;
+  const submitted: number[] = [];
+  let roePercent = 11;
+  let markPrice = 101;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(roePercent, {
+        entryPrice: 100,
+        markPrice,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => {
+      state = next;
+    },
+    submitProfitLockStop: async (_address, position, triggerPrice) => {
+      assert.equal(position.stopLoss, 98.85, "the original hard SL remains untouched");
+      submitted.push(triggerPrice);
+      return { txid: `lock-stop-${submitted.length}`, triggerPrice };
+    },
+  });
+
+  await run();
+  await run();
+  assert.deepEqual(submitted, [100.555], "the same tier is reserved and never duplicated");
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopStatus, "submitted");
+
+  roePercent = 31;
+  markPrice = 103;
+  await run();
+  assert.deepEqual(submitted, [100.555, 101.355]);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopTier, "thirty-to-twenty-three");
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopPrice, 101.355);
+});
+
+test("ambiguous on-chain stop failure is reserved and not blindly retried", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let state: PerpsProfitLockState | null = null;
+  let submitCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => {
+      state = next;
+    },
+    submitProfitLockStop: async () => {
+      submitCalls += 1;
+      throw new Error("ambiguous network response");
+    },
+  });
+
+  await run();
+  await run();
+  assert.equal(submitCalls, 1);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopStatus, "uncertain");
+  assert.match((state as PerpsProfitLockState | null)?.onChainStopError ?? "", /ambiguous network response/);
+});
+
+test("overlapping monitor workers atomically claim one on-chain stop submission", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let claimed = false;
+  let submitCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => null,
+    writeProfitLockState: async () => undefined,
+    claimProfitLockStop: async () => {
+      if (claimed) return null;
+      claimed = true;
+      return createProfitLockTestClaim("overlap-stop");
+    },
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      submitCalls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { txid: "single-stop", triggerPrice };
+    },
+  });
+
+  await Promise.all([run(), run()]);
+  assert.equal(submitCalls, 1);
+});
+
+test("a definitively rejected profit-lock stop releases its owner claim and retries safely", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const lifecycle = createProfitLockTestClaimLifecycle("definite-stop");
+  let state: PerpsProfitLockState | null = null;
+  let submitCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockStop: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      submitCalls += 1;
+      if (submitCalls === 1) {
+        throw new ProfitLockSideEffectError(
+          "definite-failure",
+          "Jupiter rejected the stop before submission."
+        );
+      }
+      return { txid: "retry-stop-tx", triggerPrice };
+    },
+  });
+
+  await run();
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopStatus, null);
+  await run();
+
+  assert.equal(submitCalls, 2);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure", "submitted"]);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopStatus, "submitted");
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopTxid, "retry-stop-tx");
+});
+
+test("a failed durable stop reservation releases the claim before any side effect", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const lifecycle = createProfitLockTestClaimLifecycle("stop-state-write");
+  let state: PerpsProfitLockState | null = null;
+  let failReservedWrite = true;
+  let submitCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => {
+      if (failReservedWrite && next.onChainStopStatus === "reserved") {
+        failReservedWrite = false;
+        throw new Error("stop reservation HSET failed");
+      }
+      state = next;
+    },
+    claimProfitLockStop: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      submitCalls += 1;
+      return { txid: "stop-after-state-retry", triggerPrice };
+    },
+  });
+
+  const failed = await run();
+  assert.equal(failed.results[0]?.code, "MONITOR_ERROR");
+  assert.equal(submitCalls, 0);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure"]);
+
+  await run();
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure", "submitted"]);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopTxid, "stop-after-state-retry");
+});
+
+test("an explicitly failed submitted stop transaction releases its claim and retries", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const lifecycle = createProfitLockTestClaimLifecycle("failed-stop-tx");
+  let state: PerpsProfitLockState | null = null;
+  let submitCalls = 0;
+  let transactionStatus: "processing" | "failed" = "processing";
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockStop: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    readProfitLockTransactionStatus: async () => transactionStatus,
+    submitProfitLockStop: async (_address, _position, triggerPrice) => {
+      submitCalls += 1;
+      return { txid: `stop-tx-${submitCalls}`, triggerPrice };
+    },
+  });
+
+  await run();
+  assert.equal(submitCalls, 1);
+  transactionStatus = "failed";
+  await run();
+
+  assert.equal(submitCalls, 2);
+  assert.deepEqual(lifecycle.settlements, ["submitted", "definite-failure", "submitted"]);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopTxid, "stop-tx-2");
+});
+
+for (const transactionStatus of ["confirmed", "processing", "not-found", "unavailable"] as const) {
+  test(`a ${transactionStatus} submitted stop status remains blocked without resubmission`, async () => {
+    const base = createConfig();
+    const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+    const lifecycle = createProfitLockTestClaimLifecycle(`blocked-stop-${transactionStatus}`);
+    let state: PerpsProfitLockState | null = null;
+    let submitCalls = 0;
+    const run = () => runAutonomousPerpsMonitor({
+      listConfigs: async () => [config],
+      listSessions: async () => [createSession()],
+      getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+      fetchCandles: async () => [],
+      fetchSnapshot: async () => ({
+        positions: [createOpenPosition(11, {
+          entryPrice: 100,
+          markPrice: 101,
+          leverage: 20,
+          positionValue: 2_000,
+          collateralValue: 100,
+          stopLoss: 98.85,
+        })],
+        pendingTriggers: [],
+        recentTrades: [],
+      }),
+      getUsdcBalance: async () => 100,
+      getAgentWallet: () => "agent-wallet",
+      isWalletAllowed: () => true,
+      readProfitLockState: async () => state,
+      writeProfitLockState: async (_address, next) => { state = next; },
+      claimProfitLockStop: lifecycle.claim,
+      settleProfitLockClaim: lifecycle.settle,
+      readProfitLockTransactionStatus: async () => {
+        if (transactionStatus === "unavailable") throw new Error("RPC unavailable");
+        return transactionStatus;
+      },
+      submitProfitLockStop: async (_address, _position, triggerPrice) => {
+        submitCalls += 1;
+        return { txid: "blocked-stop-tx", triggerPrice };
+      },
+    });
+
+    await run();
+    await run();
+    assert.equal(submitCalls, 1);
+    assert.deepEqual(lifecycle.settlements, ["submitted"]);
+    assert.equal((state as PerpsProfitLockState | null)?.onChainStopTxid, "blocked-stop-tx");
+  });
+}
+
+test("profit-lock claim classification releases explicit 4xx rejections but reserves uncertain failures", () => {
+  assert.equal(
+    classifyProfitLockSideEffectFailure(
+      new PerpsExecutionError("JUPITER_EXECUTE_FAILED", "invalid trigger", 422)
+    ),
+    "definite-failure"
+  );
+  assert.equal(
+    classifyProfitLockSideEffectFailure(
+      new PerpsExecutionError("JUPITER_EXECUTE_FAILED", "upstream unavailable", 503)
+    ),
+    "ambiguous"
+  );
+  assert.equal(
+    classifyProfitLockSideEffectFailure(
+      new PerpsExecutionError("JUPITER_EXECUTE_FAILED", "request timed out", 408)
+    ),
+    "ambiguous"
+  );
+  assert.equal(classifyProfitLockSideEffectFailure(new TypeError("fetch failed")), "ambiguous");
+});
+
+test("an ambiguous profit-lock stop response remains claimed and never auto-submits a duplicate", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const lifecycle = createProfitLockTestClaimLifecycle("ambiguous-stop");
+  let state: PerpsProfitLockState | null = null;
+  let submitCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(11, {
+        entryPrice: 100,
+        markPrice: 101,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+        stopLoss: 98.85,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockStop: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    submitProfitLockStop: async () => {
+      submitCalls += 1;
+      throw new ProfitLockSideEffectError(
+        "ambiguous",
+        "The execute response was dropped after the request left this worker."
+      );
+    },
+  });
+
+  await run();
+  await run();
+
+  assert.equal(submitCalls, 1);
+  assert.deepEqual(lifecycle.settlements, ["ambiguous"]);
+  assert.equal((state as PerpsProfitLockState | null)?.onChainStopStatus, "uncertain");
+});
+
+test("a rejected profit-lock close retries while an ambiguous retry remains reserved", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let state: PerpsProfitLockState | null = {
+    positionPubkey: "position-pubkey",
+    episodeId: "close-lifecycle-episode",
+    strategyClass: "scalp",
+    peakRoePercent: 11,
+    activeTier: "ten-to-seven",
+    protectedExitRoePercent: 7,
+    armedAt: 1_000,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: 1_000,
+  };
+  const lifecycle = createProfitLockTestClaimLifecycle("close-lifecycle");
+  let closeCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { leverage: 20, markPrice: 100.4 })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId: "close-lifecycle-episode",
+      executionId: "close-lifecycle-episode",
+      strategyClass: "scalp",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockClose: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    closePosition: async () => {
+      closeCalls += 1;
+      if (closeCalls === 1) {
+        throw new ProfitLockSideEffectError("definite-failure", "Close build rejected.");
+      }
+      throw new ProfitLockSideEffectError("ambiguous", "Close response dropped.");
+    },
+  });
+
+  await run();
+  assert.equal((state as PerpsProfitLockState | null)?.closeStatus, null);
+  await run();
+  await run();
+
+  assert.equal(closeCalls, 2);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure", "ambiguous"]);
+  assert.equal((state as PerpsProfitLockState | null)?.closeStatus, "uncertain");
+});
+
+test("a failed durable close reservation releases the claim before any side effect", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let state: PerpsProfitLockState | null = {
+    positionPubkey: "position-pubkey",
+    episodeId: "close-state-write-episode",
+    strategyClass: "scalp",
+    peakRoePercent: 11,
+    activeTier: "ten-to-seven",
+    protectedExitRoePercent: 7,
+    armedAt: 1_000,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: 1_000,
+  };
+  const lifecycle = createProfitLockTestClaimLifecycle("close-state-write");
+  let failReservedWrite = true;
+  let closeCalls = 0;
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { leverage: 20, markPrice: 100.4 })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId: "close-state-write-episode",
+      executionId: "close-state-write-episode",
+      strategyClass: "scalp",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => {
+      if (failReservedWrite && next.closeStatus === "reserved") {
+        failReservedWrite = false;
+        throw new Error("close reservation HSET failed");
+      }
+      state = next;
+    },
+    claimProfitLockClose: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "close-after-state-retry" };
+    },
+  });
+
+  const failed = await run();
+  assert.equal(failed.results[0]?.code, "MONITOR_ERROR");
+  assert.equal(closeCalls, 0);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure"]);
+
+  await run();
+  assert.equal(closeCalls, 1);
+  assert.deepEqual(lifecycle.settlements, ["definite-failure", "submitted"]);
+  assert.equal((state as PerpsProfitLockState | null)?.closeTxid, "close-after-state-retry");
+});
+
+test("an explicitly failed submitted close transaction releases its claim and retries", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let state: PerpsProfitLockState | null = {
+    positionPubkey: "position-pubkey",
+    episodeId: "failed-close-tx-episode",
+    strategyClass: "scalp",
+    peakRoePercent: 11,
+    activeTier: "ten-to-seven",
+    protectedExitRoePercent: 7,
+    armedAt: 1_000,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: 1_000,
+  };
+  const lifecycle = createProfitLockTestClaimLifecycle("failed-close-tx");
+  let closeCalls = 0;
+  let transactionStatus: "processing" | "failed" = "processing";
+  const run = () => runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => [],
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { leverage: 20, markPrice: 100.4 })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getProfitLockPositionProvenance: async () => ({
+      episodeId: "failed-close-tx-episode",
+      executionId: "failed-close-tx-episode",
+      strategyClass: "scalp",
+      createdAt: "2026-08-19T12:00:00.000Z",
+    }),
+    readProfitLockState: async () => state,
+    writeProfitLockState: async (_address, next) => { state = next; },
+    claimProfitLockClose: lifecycle.claim,
+    settleProfitLockClaim: lifecycle.settle,
+    readProfitLockTransactionStatus: async () => transactionStatus,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: `close-tx-${closeCalls}` };
+    },
+  });
+
+  await run();
+  assert.equal(closeCalls, 1);
+  transactionStatus = "failed";
+  await run();
+
+  assert.equal(closeCalls, 2);
+  assert.deepEqual(lifecycle.settlements, ["submitted", "definite-failure", "submitted"]);
+  assert.equal((state as PerpsProfitLockState | null)?.closeTxid, "close-tx-2");
+});
+
+for (const transactionStatus of ["confirmed", "processing", "not-found", "unavailable"] as const) {
+  test(`a ${transactionStatus} submitted close status remains blocked without resubmission`, async () => {
+    const base = createConfig();
+    const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+    let state: PerpsProfitLockState | null = {
+      positionPubkey: "position-pubkey",
+      episodeId: `blocked-close-${transactionStatus}`,
+      strategyClass: "scalp",
+      peakRoePercent: 11,
+      activeTier: "ten-to-seven",
+      protectedExitRoePercent: 7,
+      armedAt: 1_000,
+      closeTxid: null,
+      closeSubmittedAt: null,
+      updatedAt: 1_000,
+    };
+    const lifecycle = createProfitLockTestClaimLifecycle(`blocked-close-${transactionStatus}`);
+    let closeCalls = 0;
+    const run = () => runAutonomousPerpsMonitor({
+      listConfigs: async () => [config],
+      listSessions: async () => [createSession()],
+      getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+      fetchCandles: async () => [],
+      fetchSnapshot: async () => ({
+        positions: [createOpenPosition(6, { leverage: 20, markPrice: 100.4 })],
+        pendingTriggers: [],
+        recentTrades: [],
+      }),
+      getUsdcBalance: async () => 100,
+      getAgentWallet: () => "agent-wallet",
+      isWalletAllowed: () => true,
+      getProfitLockPositionProvenance: async () => ({
+        episodeId: `blocked-close-${transactionStatus}`,
+        executionId: `blocked-close-${transactionStatus}`,
+        strategyClass: "scalp",
+        createdAt: "2026-08-19T12:00:00.000Z",
+      }),
+      readProfitLockState: async () => state,
+      writeProfitLockState: async (_address, next) => { state = next; },
+      claimProfitLockClose: lifecycle.claim,
+      settleProfitLockClaim: lifecycle.settle,
+      readProfitLockTransactionStatus: async () => {
+        if (transactionStatus === "unavailable") throw new Error("RPC unavailable");
+        return transactionStatus;
+      },
+      closePosition: async () => {
+        closeCalls += 1;
+        return { txid: "blocked-close-tx" };
+      },
+    });
+
+    await run();
+    if (state) {
+      state = {
+        ...(state as PerpsProfitLockState),
+        closeSubmittedAt: Date.now() - 10 * 60_000,
+      };
+    }
+    await run();
+    assert.equal(closeCalls, 1);
+    assert.deepEqual(lifecycle.settlements, ["submitted"]);
+    assert.equal((state as PerpsProfitLockState | null)?.closeTxid, "blocked-close-tx");
+  });
+}
+
+test("renewing monitor lease stays exclusive past its original TTL", async () => {
+  let owner: string | null = null;
+  let expiresAt = 0;
+  let renewals = 0;
+  const store: AutonomousMonitorLeaseStore = {
+    acquire: async (candidate, ttlMs) => {
+      const now = Date.now();
+      if (owner && expiresAt > now) return false;
+      owner = candidate;
+      expiresAt = now + ttlMs;
+      return true;
+    },
+    renew: async (candidate, ttlMs) => {
+      if (owner !== candidate || expiresAt <= Date.now()) return false;
+      renewals += 1;
+      expiresAt = Date.now() + ttlMs;
+      return true;
+    },
+    release: async (candidate) => {
+      if (owner !== candidate) return false;
+      owner = null;
+      expiresAt = 0;
+      return true;
+    },
+  };
+  let finishFirst!: () => void;
+  const firstTask = new Promise<void>((resolve) => { finishFirst = resolve; });
+  const first = runWithRenewingAutonomousMonitorLease({
+    leaseStore: store,
+    ownerToken: "first-owner",
+    ttlMs: 60,
+    renewalIntervalMs: 10,
+    task: async () => {
+      await firstTask;
+      return "first";
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 85));
+  const overlapping = await runWithRenewingAutonomousMonitorLease({
+    leaseStore: store,
+    ownerToken: "second-owner",
+    ttlMs: 60,
+    renewalIntervalMs: 10,
+    task: async () => "second",
+  });
+  assert.deepEqual(overlapping, { acquired: false });
+  assert.ok(renewals >= 2);
+
+  finishFirst();
+  assert.deepEqual(await first, { acquired: true, result: "first" });
+  const afterRelease = await runWithRenewingAutonomousMonitorLease({
+    leaseStore: store,
+    ownerToken: "third-owner",
+    ttlMs: 60,
+    renewalIntervalMs: 10,
+    task: async () => "third",
+  });
+  assert.deepEqual(afterRelease, { acquired: true, result: "third" });
+});
+
+test("a worker that loses its lease to a successor cannot continue to live routing", async () => {
+  let owner: string | null = null;
+  let routeCalls = 0;
+  let releaseFirstRenewal!: () => void;
+  const firstRenewal = new Promise<void>((resolve) => { releaseFirstRenewal = resolve; });
+  let continueMonitor!: () => void;
+  const monitorPaused = new Promise<void>((resolve) => { continueMonitor = resolve; });
+  let finishSuccessor!: () => void;
+  const successorTask = new Promise<void>((resolve) => { finishSuccessor = resolve; });
+  const store: AutonomousMonitorLeaseStore = {
+    acquire: async (candidate) => {
+      if (owner) return false;
+      owner = candidate;
+      return true;
+    },
+    renew: async (candidate) => {
+      if (owner !== candidate) return false;
+      if (candidate === "first-owner") {
+        owner = null;
+        releaseFirstRenewal();
+        return false;
+      }
+      return true;
+    },
+    release: async (candidate) => {
+      if (owner !== candidate) return false;
+      owner = null;
+      return true;
+    },
+  };
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const first = runWithRenewingAutonomousMonitorLease({
+    leaseStore: store,
+    ownerToken: "first-owner",
+    ttlMs: 100,
+    renewalIntervalMs: 5,
+    task: (leaseGuard) => runAutonomousPerpsMonitor({
+      listConfigs: async () => [createConfig()],
+      listSessions: async () => [createSession()],
+      getRuntimeOverride: async () => ({ killSwitchOverride: null, updatedAt: new Date().toISOString() }),
+      fetchCandles: async () => points,
+      fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+      getUsdcBalance: async () => 100,
+      routeSignal: (async () => {
+        routeCalls += 1;
+        return { ok: true, message: "unexpected route" };
+      }) as unknown as RouteSignal,
+      reconcileNoOpenPosition: async () => [],
+      getAgentWallet: () => "agent-wallet",
+      isWalletAllowed: () => true,
+      readLastSignal: async () => {
+        await monitorPaused;
+        return null;
+      },
+      writeLastSignal: async () => undefined,
+    }, leaseGuard),
+  });
+  const firstRejected = assert.rejects(first, AutonomousMonitorLeaseLostError);
+
+  await firstRenewal;
+  let successorStarted!: () => void;
+  const successorIsRunning = new Promise<void>((resolve) => { successorStarted = resolve; });
+  const successor = runWithRenewingAutonomousMonitorLease({
+    leaseStore: store,
+    ownerToken: "successor-owner",
+    ttlMs: 100,
+    renewalIntervalMs: 10,
+    task: async () => {
+      successorStarted();
+      await successorTask;
+      return "successor";
+    },
+  });
+  await successorIsRunning;
+  assert.equal(owner, "successor-owner");
+  continueMonitor();
+  await firstRejected;
+
+  assert.equal(routeCalls, 0);
+  assert.equal(owner, "successor-owner", "the stale first-worker release must preserve its successor");
+  finishSuccessor();
+  assert.deepEqual(await successor, { acquired: true, result: "successor" });
+});
+
+test("an expired monitor owner cannot renew or stale-release its successor", async () => {
+  let owner: string | null = null;
+  let expiresAt = 0;
+  const store: AutonomousMonitorLeaseStore = {
+    acquire: async (candidate, ttlMs) => {
+      const now = Date.now();
+      if (owner && expiresAt > now) return false;
+      owner = candidate;
+      expiresAt = now + ttlMs;
+      return true;
+    },
+    renew: async (candidate, ttlMs) => {
+      if (owner !== candidate || expiresAt <= Date.now()) return false;
+      expiresAt = Date.now() + ttlMs;
+      return true;
+    },
+    release: async (candidate) => {
+      if (owner !== candidate) return false;
+      owner = null;
+      expiresAt = 0;
+      return true;
+    },
+  };
+
+  assert.equal(await store.acquire("expired-owner", 20), true);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await store.acquire("successor-owner", 100), true);
+  assert.equal(await store.renew("expired-owner", 100), false);
+  assert.equal(await store.release("expired-owner"), false);
+  assert.equal(owner, "successor-owner");
+  assert.equal(await store.release("successor-owner"), true);
+  assert.equal(owner, null);
+});
 
 function createLearningProfile(): DecisionLearningProfile {
   const now = new Date().toISOString();
@@ -1134,7 +2798,7 @@ test("the upper tier immediately closes a current position below 15% after a Red
   assert.equal(evaluation.state.armedAt, 2_000);
 });
 
-test("a submitted profit-lock close is not duplicated while it is pending", () => {
+test("a submitted profit-lock close stays pending until its txid is authoritatively reconciled", () => {
   const previousState: PerpsProfitLockState = {
     positionPubkey: "position-pubkey",
     peakRoePercent: 30,
@@ -1154,7 +2818,7 @@ test("a submitted profit-lock close is not duplicated while it is pending", () =
     currentRoePercent: 14,
     previousState,
     now: 130_000,
-  }).action, "close");
+  }).action, "close-pending");
 });
 
 test("server monitor routes a qualifying signal while the app is closed", async () => {
@@ -1201,7 +2865,150 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   assert.equal(savedCursor, points[points.length - 1]?.t);
 });
 
-test("server monitor routes exactly $12 when available USDC is between $12 and $50", async () => {
+test("monitor recovery blocks the whole cycle even when pending scalp protection is repaired", async () => {
+  let snapshotReads = 0;
+  let routeCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    recoverPendingScalpProtection: async () => ({
+      status: "protected",
+      blockNewEntries: true,
+      record: { recoveryId: "recovery-1" },
+      message: "The pending scalp position is now protected.",
+    }) as never,
+    fetchSnapshot: async () => {
+      snapshotReads += 1;
+      return { positions: [], pendingTriggers: [], recentTrades: [] };
+    },
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(result.results[0]?.code, "SCALP_PROTECTION_RECOVERY_RESOLVED");
+  assert.equal(snapshotReads, 0);
+  assert.equal(routeCalls, 0);
+});
+
+test("durable protection recovery runs for a disabled no-asset config", async () => {
+  const recoveredWallets: string[] = [];
+  const base = createConfig();
+  const disabledConfig = createConfig({
+    walletAddress: "orphaned-wallet",
+    settings: { ...base.settings, perpsActiveSlotId: null },
+  });
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [disabledConfig],
+    listSessions: async () => [],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    listPendingScalpProtectionRecoveryWallets: async () => ["orphaned-wallet"],
+    recoverPendingScalpProtection: async (address) => {
+      recoveredWallets.push(address);
+      return {
+        status: "protection-pending",
+        blockNewEntries: true,
+        record: { recoveryId: "orphaned-recovery" },
+        message: "The orphaned position is still being protected.",
+      } as never;
+    },
+  });
+
+  assert.deepEqual(recoveredWallets, ["orphaned-wallet"]);
+  assert.equal(result.results[0]?.walletAddress, "orphaned-wallet");
+  assert.equal(result.results[0]?.code, "SCALP_PROTECTION_RECOVERY_PENDING");
+});
+
+test("an unverified empty inventory cannot reconcile the wallet flat or admit a new scalp", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  let reconciliationCalls = 0;
+  let flatReconciliationCalls = 0;
+  let routeCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    fetchSnapshot: async () => ({
+      positions: [],
+      pendingTriggers: [],
+      recentTrades: [],
+      readEvidence: {
+        liveApiSucceeded: true,
+        rpcSucceeded: false,
+        authoritativePositionAbsence: false,
+      },
+    }),
+    getUsdcBalance: async () => 100,
+    reconcileLearningHistory: async () => {
+      reconciliationCalls += 1;
+      return 0;
+    },
+    reconcileNoOpenPosition: async () => {
+      flatReconciliationCalls += 1;
+      return [];
+    },
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+  });
+
+  assert.equal(result.results[0]?.code, "POSITION_ABSENCE_UNVERIFIED");
+  assert.equal(reconciliationCalls, 0);
+  assert.equal(flatReconciliationCalls, 0);
+  assert.equal(routeCalls, 0);
+});
+
+test("pending scalp protection recovery runs while the wallet is clocked out and kill switch is on", async () => {
+  let recoveryCalls = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [],
+    getRuntimeOverride: async () => ({ killSwitchOverride: true, updatedAt: new Date().toISOString() }),
+    recoverPendingScalpProtection: async () => {
+      recoveryCalls += 1;
+      return {
+        status: "protection-pending",
+        blockNewEntries: true,
+        record: { recoveryId: "clocked-out-recovery" },
+        message: "Protection recovery is still pending.",
+      } as never;
+    },
+  });
+
+  assert.equal(recoveryCalls, 1);
+  assert.equal(result.results[0]?.code, "SCALP_PROTECTION_RECOVERY_PENDING");
+});
+
+test("monitor fails closed before scanning when scalp protection recovery cannot be verified", async () => {
+  let snapshotReads = 0;
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [createConfig()],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    recoverPendingScalpProtection: async () => {
+      throw new Error("authoritative recovery store unavailable");
+    },
+    fetchSnapshot: async () => {
+      snapshotReads += 1;
+      return { positions: [], pendingTriggers: [], recentTrades: [] };
+    },
+  });
+
+  assert.equal(result.results[0]?.code, "SCALP_PROTECTION_RECOVERY_UNAVAILABLE");
+  assert.equal(snapshotReads, 0);
+});
+
+test("server monitor skips a low-balance allocation that is below Jupiter's minimum", async () => {
   let routedSignal: PerpsAgentSignal | null = null;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
@@ -1227,9 +3034,9 @@ test("server monitor routes exactly $12 when available USDC is between $12 and $
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "executed");
-  assert.equal((routedSignal as PerpsAgentSignal | null)?.collateralUsd, 12);
-  assert.equal((routedSignal as PerpsAgentSignal | null)?.marketContext?.availableUsdc, 20);
+  assert.equal(result.results[0]?.status, "skipped");
+  assert.equal(result.results[0]?.code, "COLLATERAL_BELOW_MINIMUM");
+  assert.equal(routedSignal, null);
 });
 
 test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", async () => {
@@ -1428,6 +3235,156 @@ test("server monitor applies the 10-to-7 staircase only to an open scalp positio
   assert.equal(closed.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
   assert.equal(closeCalls, 1);
   assert.equal((profitLockState as PerpsProfitLockState | null)?.closeTxid, "scalp-staircase-close-tx");
+});
+
+test("server monitor recovers a completed-candle scalp peak before evaluating the staircase", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const points = qualifyingRangePoints().map((point, index, all) => (
+    index === all.length - 1 ? { ...point, h: 100.8, v: 100.6 } : point
+  ));
+  let closeCalls = 0;
+  const previousState: PerpsProfitLockState = {
+    positionPubkey: "position-pubkey",
+    episodeId: "test-episode:position-pubkey",
+    strategyClass: "scalp",
+    peakRoePercent: 6,
+    activeTier: null,
+    protectedExitRoePercent: null,
+    armedAt: null,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: points[0]!.t - 60_000,
+  };
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { entryPrice: 100, leverage: 20, side: "long" })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "completed-candle-lock" };
+    },
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => previousState,
+    writeProfitLockState: async () => undefined,
+    getClosedScalpOutcomes: async () => [],
+  });
+
+  assert.equal(closeCalls, 1);
+  assert.equal(result.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
+});
+
+test("profit-lock peak recovery uses candles for each position's own market", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const baseTime = 1_787_100_000_000;
+  const requestedProducts: string[] = [];
+  let closeCalls = 0;
+  const previousState: PerpsProfitLockState = {
+    positionPubkey: "btc-position",
+    strategyClass: "scalp",
+    peakRoePercent: 6,
+    activeTier: null,
+    protectedExitRoePercent: null,
+    armedAt: null,
+    closeTxid: null,
+    closeSubmittedAt: null,
+    updatedAt: baseTime - 60_000,
+  };
+
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async (product) => {
+      requestedProducts.push(product);
+      if (product === "BTC-USD") {
+        return [
+          { t: baseTime, v: 59_990, h: 60_010, l: 59_980 },
+          { t: baseTime + 60_000, v: 59_985, h: 60_005, l: 59_975 },
+        ];
+      }
+      // Applying these SOL prices to the BTC short would fabricate an enormous
+      // favorable peak and immediately submit a false profit-lock close.
+      return [
+        { t: baseTime, v: 80, h: 81, l: 79 },
+        { t: baseTime + 60_000, v: 80.5, h: 81.5, l: 79.5 },
+      ];
+    },
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, {
+        id: "btc-position",
+        accountRef: "btc-position",
+        marketSymbol: "BTC",
+        marketName: "Bitcoin Perps",
+        side: "short",
+        entryPrice: 60_000,
+        markPrice: 59_985,
+        leverage: 20,
+        positionValue: 2_000,
+        collateralValue: 100,
+      })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "must-not-close" };
+    },
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => previousState,
+    writeProfitLockState: async () => undefined,
+    getClosedScalpOutcomes: async () => [],
+  });
+
+  assert.equal(closeCalls, 0);
+  assert.ok(requestedProducts.includes("BTC-USD"));
+});
+
+test("a newly observed position cannot arm from favorable candles that predate its tracking boundary", async () => {
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const points = qualifyingRangePoints().map((point, index) => (
+    index === 10 ? { ...point, h: 101.5 } : point
+  ));
+  let closeCalls = 0;
+  let writtenState: PerpsProfitLockState | null = null;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({
+      positions: [createOpenPosition(6, { entryPrice: 100, leverage: 20, side: "long" })],
+      pendingTriggers: [],
+      recentTrades: [],
+    }),
+    getUsdcBalance: async () => 100,
+    closePosition: async () => {
+      closeCalls += 1;
+      return { txid: "must-not-close" };
+    },
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readProfitLockState: async () => null,
+    writeProfitLockState: async (_address, state) => { writtenState = state; },
+  });
+
+  assert.equal(closeCalls, 0);
+  assert.equal((writtenState as PerpsProfitLockState | null)?.peakRoePercent, 6);
+  assert.notEqual(result.results[0]?.code, "PROFIT_LOCK_CLOSE_SUBMITTED");
 });
 
 test("server monitor closes an armed profitable position at 15% even with pending TP and SL", async () => {
@@ -1732,7 +3689,7 @@ test("scalp monitor can route an opposite-side entry while independently managin
   });
 
   const routed = routedSignal as PerpsAgentSignal | null;
-  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
   assert.equal(routed?.strategyClass, "scalp");
   assert.equal(routed?.direction, "bullish");
   assert.equal(routed?.marketContext?.hasOpenPosition, true);
@@ -1771,7 +3728,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.code, "SAME_SIDE_POSITION_OPEN");
+  assert.equal(result.results[0]?.code, "SAME_SIDE_POSITION_OPEN", JSON.stringify(result.results[0]));
   assert.equal(routeCalls, 0);
 });
 

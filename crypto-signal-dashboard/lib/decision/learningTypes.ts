@@ -11,6 +11,25 @@ export const scalpSetupTypeSchema = z.enum([
   "double-reversal",
 ]);
 
+export const scalpEntryPathSchema = z.enum([
+  "range-reversal",
+  "reversal",
+  "continuation",
+  "breakout-retest",
+  "unknown",
+]);
+
+export const scalpPolicyRolloutSchema = z.object({
+  status: z.enum(["probation", "validated", "paused"]),
+  startedAt: z.string().datetime(),
+  baselineOutcomeCount: z.number().int().min(0),
+  reviewedOutcomeCount: z.number().int().min(0),
+  minimumValidationTrades: z.number().int().min(1),
+  liveTradingAuthorized: z.boolean(),
+  authorization: z.enum(["operator-approved-live-rollout", "historically-validated"]),
+  reason: z.string().trim().min(1),
+});
+
 export const tradeLearningOutcomeSchema = z.object({
   outcomeId: z.string().trim().min(1),
   episodeId: z.string().trim().min(1).optional(),
@@ -62,6 +81,7 @@ export const tradeLearningOutcomeSchema = z.object({
   bollingerBandwidthPercent: z.number().finite().nullable().optional(),
   bollingerPosition: z.number().finite().nullable().optional(),
   scalpSetupType: scalpSetupTypeSchema.nullable().optional(),
+  scalpEntryPath: scalpEntryPathSchema.optional(),
   priceActionScore: z.number().finite().min(0).max(1).nullable().optional(),
   priceActionTags: z.array(z.string().trim().min(1)).optional(),
   detectedDirection: z.enum(["bullish", "bearish"]).optional(),
@@ -88,6 +108,7 @@ export const scalpLearningProfileSchema = z.object({
   policyVersion: z.number().int().positive().default(1),
   policyOutcomeOffset: z.number().int().min(0).default(0),
   learnedFromClosedTrades: z.number().int().min(0),
+  processedPolicyOutcomeIds: z.array(z.string().trim().min(1)).max(1_000).default([]),
   minimumConfidence: z.number().finite().min(0.55).max(0.85),
   cooldownSeconds: z.number().int().min(300).max(7_200),
   longRsiMaximum: z.number().finite().min(30).max(65),
@@ -120,7 +141,48 @@ export const scalpLearningProfileSchema = z.object({
     historicalProfitFactor: z.number().finite().min(0),
     reason: z.string().trim().min(1),
   }).nullable().default(null),
+  policyRollout: scalpPolicyRolloutSchema.nullable().optional(),
   validation: learningValidationSchema,
+});
+
+export const scalpCandidateForwardLabelSchema = z.object({
+  horizonMinutes: z.union([z.literal(5), z.literal(15), z.literal(30), z.literal(60)]),
+  targetAt: z.string().datetime(),
+  evaluatedAt: z.string().datetime(),
+  sampleSize: z.number().int().min(1),
+  endpointPrice: z.number().finite().positive(),
+  maximumPrice: z.number().finite().positive(),
+  minimumPrice: z.number().finite().positive(),
+  directionalReturnPercent: z.number().finite(),
+  maximumFavorableExcursionPercent: z.number().finite().min(0),
+  maximumAdverseExcursionPercent: z.number().finite().min(0),
+});
+
+export const scalpCandidateSchema = z.object({
+  candidateId: z.string().trim().min(1),
+  walletAddress: z.string().trim().min(1),
+  policyVersion: z.number().int().positive(),
+  asset: learningAssetSchema,
+  side: z.enum(["long", "short"]),
+  entryPath: scalpEntryPathSchema,
+  setupType: scalpSetupTypeSchema.nullable().optional(),
+  observedAt: z.string().datetime(),
+  referencePrice: z.number().finite().positive(),
+  disposition: z.enum(["accepted", "rejected"]),
+  rejectionReasons: z.array(z.string().trim().min(1)).default([]),
+  signalId: z.string().trim().min(1).nullable().optional(),
+  decisionId: z.string().trim().min(1).nullable().optional(),
+  executionId: z.string().trim().min(1).nullable().optional(),
+  metrics: z.record(z.union([z.number().finite(), z.null()])).default({}),
+  tags: z.array(z.string().trim().min(1)).default([]),
+  labels: z.object({
+    "5": scalpCandidateForwardLabelSchema.optional(),
+    "15": scalpCandidateForwardLabelSchema.optional(),
+    "30": scalpCandidateForwardLabelSchema.optional(),
+    "60": scalpCandidateForwardLabelSchema.optional(),
+  }).default({}),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
 });
 
 const learnedAssetAdjustmentSchema = z.object({
@@ -182,4 +244,8 @@ export type TradeLearningOutcome = z.infer<typeof tradeLearningOutcomeSchema>;
 export type DecisionLearningProfile = z.infer<typeof decisionLearningProfileSchema>;
 export type ScalpLearningProfile = z.infer<typeof scalpLearningProfileSchema>;
 export type ScalpSetupType = z.infer<typeof scalpSetupTypeSchema>;
+export type ScalpEntryPath = z.infer<typeof scalpEntryPathSchema>;
+export type ScalpPolicyRollout = z.infer<typeof scalpPolicyRolloutSchema>;
+export type ScalpCandidate = z.infer<typeof scalpCandidateSchema>;
+export type ScalpCandidateForwardLabel = z.infer<typeof scalpCandidateForwardLabelSchema>;
 export type LearningAsset = z.infer<typeof learningAssetSchema>;

@@ -13,6 +13,8 @@ function clamp(value: number, min: number, max: number) {
 const MIN_PROFITABLE_BASELINE_TRADES = 5;
 const MIN_BASELINE_VALIDATION_TRADES = 4;
 export const SCALP_INCREMENTAL_LEARNING_BATCH_SIZE = 5;
+export const SCALP_POLICY_PROBATION_MIN_TRADES = 10;
+export const SCALP_POLICY_PROBATION_MIN_PROFIT_FACTOR = 1.15;
 
 function quantile(values: Array<number | null | undefined>, percentile: number) {
   const sorted = values
@@ -79,6 +81,18 @@ export function createAuditedScalpBaseline(allScalpOutcomes: TradeLearningOutcom
   const baseline = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
   baseline.policyOutcomeOffset = ordered.length;
   baseline.learnedFromClosedTrades = ordered.length;
+  baseline.consecutiveLosses = 0;
+  baseline.operatorActivation = null;
+  baseline.policyRollout = {
+    status: "probation",
+    startedAt: new Date().toISOString(),
+    baselineOutcomeCount: ordered.length,
+    reviewedOutcomeCount: 0,
+    minimumValidationTrades: SCALP_POLICY_PROBATION_MIN_TRADES,
+    liveTradingAuthorized: true,
+    authorization: "operator-approved-live-rollout",
+    reason: "The operator explicitly authorized policy v8 for a controlled live probation; validation remains pending and circuit breakers remain in force.",
+  };
   baseline.validation = {
     sampleSize: 0,
     trainingSize: 0,
@@ -87,8 +101,8 @@ export function createAuditedScalpBaseline(allScalpOutcomes: TradeLearningOutcom
     expectancyUsd: 0,
     profitFactor: 0,
     maxDrawdownUsd: 0,
-    passed: true,
-    reasons: ["Audited recent-performance scalp baseline activated; prior outcomes were retained for audit and new post-upgrade learning starts after migration."],
+    passed: false,
+    reasons: ["Policy v8 is in an explicitly authorized live probation; zero-sample migration is not considered validation."],
   };
   return baseline;
 }
@@ -159,6 +173,7 @@ export function createProfitableScalpBaseline(
   baseline.learnedFromClosedTrades = ordered.length;
   baseline.riskMultiplier = 0.5;
   baseline.cooldownSeconds = 3_600;
+  baseline.policyRollout = null;
 
   if (winners.length < MIN_PROFITABLE_BASELINE_TRADES) {
     baseline.validation = {
@@ -253,10 +268,19 @@ export function createOperatorActivatedProfitableScalpBaseline(
     historicalProfitFactor: baseline.validation.profitFactor,
     reason,
   };
-  // Keep older deployed monitors compatible while the explicit operator-activation
-  // metadata rolls out. The metadata preserves the true historical result.
-  baseline.validation.passed = true;
-  baseline.validation.reasons = [reason];
+  baseline.policyRollout = {
+    status: historicalValidationPassed ? "validated" : "probation",
+    startedAt: activatedAt.toISOString(),
+    baselineOutcomeCount: baseline.learnedFromClosedTrades,
+    reviewedOutcomeCount: baseline.validation.validationSize,
+    minimumValidationTrades: SCALP_POLICY_PROBATION_MIN_TRADES,
+    liveTradingAuthorized: true,
+    authorization: historicalValidationPassed
+      ? "historically-validated"
+      : "operator-approved-live-rollout",
+    reason,
+  };
+  baseline.validation.reasons = [reason, ...baseline.validation.reasons];
   return baseline;
 }
 
@@ -271,12 +295,29 @@ export function updateScalpLearningProfile(
     return createAuditedScalpBaseline(ordered);
   }
   const profile = structuredClone(current);
-  const newOutcomes = ordered.slice(profile.learnedFromClosedTrades);
-  const policyOutcomes = ordered.slice(profile.policyOutcomeOffset);
+  const rolloutStartedAt = profile.policyRollout
+    ? Date.parse(profile.policyRollout.startedAt)
+    : Number.NaN;
+  const allPolicyOutcomes = Number.isFinite(rolloutStartedAt)
+    ? ordered.filter((outcome) => Date.parse(outcome.openedAt) >= rolloutStartedAt)
+    : ordered.slice(profile.policyOutcomeOffset);
+  // Bound both the durable membership cursor and its training/statistics window
+  // so late reconciliation cannot shift an index cursor or grow profile state
+  // without limit. Outcomes older than the retained window are never revisited.
+  const policyOutcomes = allPolicyOutcomes.slice(-1_000);
+  const policyOutcomeIds = new Set(policyOutcomes.map((outcome) => outcome.outcomeId));
+  const processedPolicyOutcomeIds = new Set(
+    (profile.processedPolicyOutcomeIds ?? []).filter((outcomeId) => policyOutcomeIds.has(outcomeId))
+  );
+  const newOutcomes = profile.policyRollout
+    ? policyOutcomes.filter((outcome) => !processedPolicyOutcomeIds.has(outcome.outcomeId))
+    : ordered.slice(profile.learnedFromClosedTrades);
 
   if (newOutcomes.length === 0) {
     profile.learnedFromClosedTrades = ordered.length;
-    profile.validation.reasons = ["No new closed scalp outcomes were available; the existing validation gate was preserved."];
+    profile.validation.reasons = profile.policyRollout?.status === "probation"
+      ? ["Live probation remains pending; no new post-migration scalp outcomes were available."]
+      : ["No new closed scalp outcomes were available; the existing validation gate was preserved."];
     return profile;
   }
   if (newOutcomes.length < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE) {
@@ -359,18 +400,49 @@ export function updateScalpLearningProfile(
     }
   }
 
+  if (profile.policyRollout) {
+    newOutcomes.forEach((outcome) => processedPolicyOutcomeIds.add(outcome.outcomeId));
+    profile.processedPolicyOutcomeIds = policyOutcomes
+      .map((outcome) => outcome.outcomeId)
+      .filter((outcomeId) => processedPolicyOutcomeIds.has(outcomeId));
+  }
+
   const validationStart = Math.max(0, Math.floor(policyOutcomes.length * 0.8));
   const validationOutcomes = policyOutcomes.length >= 20 ? policyOutcomes.slice(validationStart) : [];
-  const measured = stats(validationOutcomes.length > 0 ? validationOutcomes : policyOutcomes);
-  const validationPassed = validationOutcomes.length < 4
-    ? profile.validation.passed
-    : measured.expectancyUsd > 0 && measured.profitFactor >= 1.05;
-  if (!validationPassed) {
+  const measuredOutcomes = profile.policyRollout ? policyOutcomes : (validationOutcomes.length > 0 ? validationOutcomes : policyOutcomes);
+  const measured = stats(measuredOutcomes);
+  const probationSampleComplete = profile.policyRollout
+    ? policyOutcomes.length >= profile.policyRollout.minimumValidationTrades
+    : false;
+  const validationPassed = profile.policyRollout
+    ? probationSampleComplete
+      && measured.expectancyUsd > 0
+      && measured.profitFactor >= SCALP_POLICY_PROBATION_MIN_PROFIT_FACTOR
+    : validationOutcomes.length < MIN_BASELINE_VALIDATION_TRADES
+      ? profile.validation.passed
+      : measured.expectancyUsd > 0 && measured.profitFactor >= 1.05;
+  const validationFailed = profile.policyRollout
+    ? probationSampleComplete && !validationPassed
+    : !validationPassed;
+  if (validationFailed) {
     profile.riskMultiplier = clamp(profile.riskMultiplier, 0.5, 0.65);
     profile.minimumConfidence = clamp(profile.minimumConfidence + 0.01, 0.58, 0.82);
     profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore + 0.01, 0.52, 0.8);
   }
-  if (validationOutcomes.length >= MIN_BASELINE_VALIDATION_TRADES) {
+  if (profile.policyRollout) {
+    profile.policyRollout.reviewedOutcomeCount = policyOutcomes.length;
+    if (probationSampleComplete) {
+      profile.policyRollout.status = validationPassed ? "validated" : "paused";
+      profile.policyRollout.liveTradingAuthorized = validationPassed;
+      profile.policyRollout.authorization = validationPassed
+        ? "historically-validated"
+        : profile.policyRollout.authorization;
+      profile.policyRollout.reason = validationPassed
+        ? `Policy v${profile.policyVersion} passed live probation with positive post-fee expectancy and a ${measured.profitFactor.toFixed(2)} profit factor.`
+        : `Policy v${profile.policyVersion} failed live probation after ${policyOutcomes.length} post-fee outcomes and was paused.`;
+    }
+  }
+  if (validationOutcomes.length >= MIN_BASELINE_VALIDATION_TRADES || probationSampleComplete) {
     profile.operatorActivation = null;
   }
   profile.learnedFromClosedTrades = ordered.length;
@@ -391,14 +463,20 @@ export function updateScalpLearningProfile(
   });
   profile.validation = {
     sampleSize: policyOutcomes.length,
-    trainingSize: validationOutcomes.length > 0 ? validationStart : policyOutcomes.length,
-    validationSize: validationOutcomes.length,
+    trainingSize: profile.policyRollout
+      ? 0
+      : validationOutcomes.length > 0 ? validationStart : policyOutcomes.length,
+    validationSize: measuredOutcomes.length,
     winRate: Number(measured.winRate.toFixed(4)),
     expectancyUsd: Number(measured.expectancyUsd.toFixed(4)),
     profitFactor: Number(measured.profitFactor.toFixed(4)),
     maxDrawdownUsd: Number(measured.maxDrawdownUsd.toFixed(4)),
     passed: validationPassed,
-    reasons: !validationPassed
+    reasons: profile.policyRollout?.status === "probation"
+      ? [`Live probation has reviewed ${policyOutcomes.length}/${profile.policyRollout.minimumValidationTrades} required post-fee outcomes; it has not been marked validated.`]
+      : profile.policyRollout?.status === "paused"
+        ? [profile.policyRollout.reason]
+      : !validationPassed
       ? ["Recent chronological scalp holdout expectancy or profit factor deteriorated; scalp risk and admission thresholds were automatically tightened."]
       : newOutcomes.length > 0
         ? [`Applied bounded scalp-only learning from ${newOutcomes.length} new closed scalp trade${newOutcomes.length === 1 ? "" : "s"}; Smart Trade parameters were untouched.`]

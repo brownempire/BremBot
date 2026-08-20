@@ -62,6 +62,7 @@ export const perpsAgentSignalSchema = z.object({
     indicatorQualified: z.boolean().optional(),
     indicatorTags: z.array(z.string().trim().min(1)).optional(),
     scalpSetupType: z.enum(["range-reversal", "liquidity-sweep", "v-reversal", "double-reversal"]).optional(),
+    scalpEntryPath: z.enum(["range-reversal", "reversal", "continuation", "breakout-retest", "unknown"]).optional(),
     priceActionScore: z.number().finite().min(0).max(1).optional(),
     priceActionTags: z.array(z.string().trim().min(1)).optional(),
     indicatorBypass: z.boolean().optional(),
@@ -69,6 +70,7 @@ export const perpsAgentSignalSchema = z.object({
     directionInverted: z.boolean().optional(),
     directionExperimentId: z.string().trim().min(1).optional(),
     directionExperimentTradeNumber: z.number().int().min(1).max(10).optional(),
+    estimatedRoundTripFeeRate: z.number().finite().positive().max(0.01).optional(),
     indicators: z.object({
       emaSpreadPercent: z.number().finite().nullable(),
       emaSlopePercent: z.number().finite().nullable(),
@@ -80,6 +82,7 @@ export const perpsAgentSignalSchema = z.object({
       adx: z.number().finite().nullable(),
       plusDi: z.number().finite().nullable(),
       minusDi: z.number().finite().nullable(),
+      atrPercent: z.number().finite().min(0).nullable().optional(),
       volumeRatio: z.number().finite().nullable(),
       bollingerBandwidthPercent: z.number().finite().nullable(),
       bollingerPosition: z.number().finite().nullable(),
@@ -95,6 +98,48 @@ export const perpsAgentSignalSchema = z.object({
     allowConcurrentPosition: z.boolean().optional(),
     recentPriceChangePercent: z.number().finite().nullable().optional(),
   }).optional(),
+});
+
+/**
+ * The HTTP execution endpoint accepts user-authored Smart Trade requests only.
+ * Scalp provenance and its detector context are created inside the autonomous
+ * server monitor and must never be trusted when supplied by an API caller.
+ * Protection overrides are likewise server-internal and have no public route.
+ */
+export const publicPerpsAgentSignalSchema = perpsAgentSignalSchema.superRefine((signal, context) => {
+  if (signal.strategyClass === "scalp") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["strategyClass"],
+      message: "Scalp signals can only be routed by the trusted autonomous monitor.",
+    });
+  }
+  if (signal.protectionOverride) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["protectionOverride"],
+      message: "Protection overrides are not accepted by the public execution endpoint.",
+    });
+  }
+  const strategyContext = signal.strategyContext;
+  const hasScalpDetectorContext = strategyContext?.signalType === "scalp"
+    || strategyContext?.scalpSetupType !== undefined
+    || strategyContext?.scalpEntryPath !== undefined
+    || strategyContext?.priceActionScore !== undefined
+    || strategyContext?.priceActionTags !== undefined
+    || strategyContext?.indicatorBypass !== undefined
+    || strategyContext?.detectedDirection !== undefined
+    || strategyContext?.directionInverted !== undefined
+    || strategyContext?.directionExperimentId !== undefined
+    || strategyContext?.directionExperimentTradeNumber !== undefined
+    || strategyContext?.estimatedRoundTripFeeRate !== undefined;
+  if (hasScalpDetectorContext) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["strategyContext"],
+      message: "Scalp detector context can only be supplied by the trusted autonomous monitor.",
+    });
+  }
 });
 
 export const perpsExecutionAckSchema = z.object({
@@ -154,6 +199,9 @@ export const perpsUserExecutionSchema = z.object({
   decisionTags: z.array(z.string().trim().min(1)).optional(),
   decisionShadowMode: z.boolean().optional(),
   strategyClass: z.enum(["smart", "scalp"]).optional(),
+  scalpSetupType: z.enum(["range-reversal", "liquidity-sweep", "v-reversal", "double-reversal"]).nullable().optional(),
+  scalpEntryPath: z.enum(["range-reversal", "reversal", "continuation", "breakout-retest", "unknown"]).nullable().optional(),
+  priceActionTags: z.array(z.string().trim().min(1)).optional(),
   protectionOverrideReason: z.string().trim().nullable().optional(),
   protectionOverrideScopes: z.array(z.enum([
     "decision-rejection",

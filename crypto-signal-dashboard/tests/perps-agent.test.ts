@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { Keypair } from "@solana/web3.js";
+import { publicPerpsAgentSignalSchema } from "../lib/perps/sessionTypes";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "brembot-perps-agent-"));
 process.env.REDIS_URL = "";
@@ -58,6 +59,136 @@ test.before(async () => {
   auditStore = await import("../lib/perps/userExecutionAudit");
   sessionConfig = await import("../lib/perps/sessionConfig");
   decisionEngine = await import("../lib/decision/engine");
+});
+
+test("the public execution payload cannot claim scalp provenance or a protection override", () => {
+  const baseSignal = {
+    signalId: "public-provenance-test",
+    symbol: "SOL/USD",
+    summary: "Caller-authored signal",
+    direction: "bullish" as const,
+    asset: "SOL" as const,
+    collateralUsd: 10,
+    leverage: 2,
+    maxSlippageBps: 100,
+  };
+
+  assert.equal(publicPerpsAgentSignalSchema.safeParse({
+    ...baseSignal,
+    strategyClass: "scalp",
+  }).success, false);
+  assert.equal(publicPerpsAgentSignalSchema.safeParse({
+    ...baseSignal,
+    protectionOverride: {
+      allowDecisionRejection: true,
+      reason: "Caller cannot override the independent server decision.",
+    },
+  }).success, false);
+  assert.equal(publicPerpsAgentSignalSchema.safeParse({
+    ...baseSignal,
+    strategyClass: "smart",
+    strategyContext: {
+      signalType: "scalp",
+      trendWindow: 145,
+      trendThreshold: 0,
+      breakoutPercent: 0,
+      cooldownSeconds: 2_550,
+      trendStrengthPercent: 0.4,
+      breakoutStrengthPercent: 0.2,
+      atrPercent: 0.15,
+      scalpSetupType: "v-reversal",
+      scalpEntryPath: "breakout-retest",
+      priceActionScore: 0.8,
+      priceActionTags: ["PRICE_BREAKOUT_RETEST"],
+    },
+  }).success, false);
+  assert.equal(publicPerpsAgentSignalSchema.safeParse({
+    ...baseSignal,
+    strategyContext: {
+      signalType: "trend",
+      trendWindow: 15,
+      trendThreshold: 0.14,
+      breakoutPercent: 0.19,
+      cooldownSeconds: 180,
+      trendStrengthPercent: 0.2,
+      breakoutStrengthPercent: 0.1,
+      atrPercent: 0.08,
+      priceActionTags: ["CALLER_AUTHORED_SCALP_CONTEXT"],
+    },
+  }).success, false);
+  assert.equal(publicPerpsAgentSignalSchema.safeParse(baseSignal).success, true);
+});
+
+test("live scalp routing requires trusted monitor provenance and prohibits every override", async () => {
+  const owner = Keypair.generate();
+  const agent = Keypair.generate();
+  const wallet = owner.publicKey.toBase58();
+  process.env.PERPS_AGENT_OWNER_WALLET = wallet;
+  process.env.PERPS_AGENT_WALLET_PUBLIC_KEY = agent.publicKey.toBase58();
+  process.env.PERPS_AGENT_WALLET_PRIVATE_KEY = JSON.stringify(Array.from(agent.secretKey));
+  await tradingAgent.clockInPerpsSession(wallet, {
+    mode: "live",
+    platform: "native",
+    walletProvider: "Agent wallet",
+  });
+  const scalpSignal = {
+    signalId: "trusted-scalp-provenance-test",
+    symbol: "SOL/USD",
+    summary: "Server-derived breakout retest",
+    direction: "bullish" as const,
+    asset: "SOL" as const,
+    collateralUsd: 10,
+    leverage: 20,
+    takeProfitPrice: 101,
+    stopLossPrice: 99,
+    maxSlippageBps: 100,
+    strategyClass: "scalp" as const,
+    strategyContext: {
+      signalType: "scalp" as const,
+      trendWindow: 145,
+      trendThreshold: 0,
+      breakoutPercent: 0,
+      cooldownSeconds: 2_550,
+      trendStrengthPercent: 0.4,
+      breakoutStrengthPercent: 0.2,
+      atrPercent: 0.15,
+      scalpSetupType: "v-reversal" as const,
+      scalpEntryPath: "breakout-retest" as const,
+      priceActionScore: 0.8,
+      priceActionTags: ["PRICE_BREAKOUT_RETEST"],
+    },
+  };
+
+  const callerAuthored = await tradingAgent.routePerpsSignalForUser(wallet, scalpSignal);
+  assert.equal(callerAuthored.ok, false);
+  assert.equal(callerAuthored.code, "SCALP_TRUSTED_SOURCE_REQUIRED");
+
+  const overridden = await tradingAgent.routePerpsSignalFromAutonomousMonitor(wallet, {
+    ...scalpSignal,
+    protectionOverride: {
+      allowDecisionRejection: true,
+      reason: "Even the monitor cannot bypass a live scalp decision veto.",
+    },
+  });
+  assert.equal(overridden.ok, false);
+  assert.equal(overridden.code, "SCALP_PROTECTION_OVERRIDE_PROHIBITED");
+});
+
+test("live scalp decision rejection remains binding when decision mode is shadow", () => {
+  assert.equal(tradingAgent.decisionVetoBlocksPerpsExecution({
+    decisionControlsExecution: true,
+    liveDelegatedScalp: true,
+    shadowMode: true,
+    shouldTrade: false,
+    decisionRejectionOverridden: false,
+  }), true);
+  assert.equal(tradingAgent.decisionVetoBlocksPerpsExecution({
+    decisionControlsExecution: true,
+    liveDelegatedScalp: false,
+    shadowMode: true,
+    shouldTrade: false,
+    decisionRejectionOverridden: false,
+  }), false);
 });
 
 test("clock in and clock out persists a wallet-scoped session", async () => {

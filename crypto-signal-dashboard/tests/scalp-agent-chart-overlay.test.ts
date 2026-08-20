@@ -37,6 +37,16 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
     passed: false,
     reasons: ["Loss-history validation remained negative."],
   };
+  profile.policyRollout = {
+    status: "paused",
+    startedAt: "2026-08-19T12:00:00.000Z",
+    baselineOutcomeCount: 0,
+    reviewedOutcomeCount: 10,
+    minimumValidationTrades: 10,
+    liveTradingAuthorized: false,
+    authorization: "operator-approved-live-rollout",
+    reason: "Loss-history validation remained negative.",
+  };
 
   const snapshot = buildScalpAgentOverlaySnapshot({
     symbol: "COINBASE:SOLUSD",
@@ -56,6 +66,10 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
   assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, false);
+  assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.72);
+  assert.equal(snapshot.thresholds.continuationLongBollingerMaximum, 0.72);
+  assert.equal(snapshot.thresholds.continuationShortBollingerMinimum, 0.28);
+  assert.equal(snapshot.thresholds.maximum145mNetOrRangePercent, 2);
   assert.ok(snapshot.indicators.emaFast !== null);
   assert.ok(snapshot.indicators.rsi !== null);
   assert.ok(snapshot.indicators.adx !== null);

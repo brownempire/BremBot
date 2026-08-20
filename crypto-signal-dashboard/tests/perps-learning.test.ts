@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { TradeDecisionRecord } from "../lib/decision/types";
+import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import type { PerpsUserExecution } from "../lib/perps/sessionTypes";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "brembot-perps-learning-"));
@@ -128,7 +129,7 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.equal(refreshed.profile.minimumConfidence, 0.71);
   assert.equal(refreshed.profile.preferredDirection, "bearish");
   assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
-  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 7);
+  assert.equal(refreshed.profile.scalpProfile?.policyVersion, 8);
   assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.77);
   assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 2_550);
   assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.58);
@@ -146,8 +147,10 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
     vReversal: 0.075,
     doubleReversal: 0.02,
   });
-  assert.equal(refreshed.profile.scalpProfile?.validation.passed, true);
-  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /audited recent-performance scalp baseline/i);
+  assert.equal(refreshed.profile.scalpProfile?.validation.passed, false);
+  assert.equal(refreshed.profile.scalpProfile?.policyRollout?.status, "probation");
+  assert.equal(refreshed.profile.scalpProfile?.policyRollout?.liveTradingAuthorized, true);
+  assert.match(refreshed.profile.scalpProfile?.validation.reasons[0] ?? "", /zero-sample migration is not considered validation/i);
 });
 
 test("winner-derived scalp reset learns only from compatible post-fee winners and preserves a failed gate", async () => {
@@ -220,7 +223,7 @@ test("winner-derived scalp reset learns only from compatible post-fee winners an
 
   const baseline = scalpTrainer.createProfitableScalpBaseline(prior, outcomes);
 
-  assert.equal(baseline.policyVersion, 7);
+  assert.equal(baseline.policyVersion, 8);
   assert.equal(baseline.learnedFromClosedTrades, outcomes.length);
   assert.equal(baseline.policyOutcomeOffset, outcomes.length);
   assert.equal(baseline.validation.trainingSize, 5);
@@ -834,6 +837,86 @@ test("closed Jupiter trades reconcile into fee-aware training outcomes", async (
   assert.equal(saved[0]?.trendWindow, 30);
 });
 
+test("a partial decrease cannot close or train an episode while its Jupiter position remains open", async () => {
+  const walletAddress = "learning-wallet-partial-decrease";
+  const openedAtMs = 1_725_000_000_000;
+  const openedAt = new Date(openedAtMs).toISOString();
+  const execution: PerpsUserExecution = {
+    executionId: "execution-partial-decrease",
+    sessionId: "session-partial-decrease",
+    walletAddress,
+    signalId: "signal-partial-decrease",
+    symbol: "SOL/USD",
+    summary: "Open scalp with a partial decrease",
+    side: "long",
+    asset: "SOL",
+    mode: "live",
+    executionModel: "delegated-ready",
+    status: "submitted",
+    reasonCode: "APPROVED",
+    reasonMessage: "Submitted",
+    collateralUsd: 10,
+    sizeUsd: 200,
+    leverage: 20,
+    takeProfitPrice: 101,
+    stopLossPrice: 99,
+    txid: "partial-entry-tx",
+    positionPubkey: "partial-open-position",
+    decisionId: null,
+    strategyClass: "scalp",
+    scalpEntryPath: "breakout-retest",
+    createdAt: openedAt,
+    updatedAt: openedAt,
+  };
+  const openPosition: JupiterPerpsPosition = {
+    id: "partial-open-position",
+    source: "live-api",
+    platformId: "jupiter-exchange",
+    marketSymbol: "SOL",
+    marketName: "SOL Perps",
+    marketAddress: null,
+    custodyAddress: null,
+    collateralCustodyAddress: null,
+    collateralSymbol: "USDC",
+    imageUri: null,
+    side: "long",
+    entryPrice: 100,
+    markPrice: 100.5,
+    positionSize: 1,
+    positionValue: 100,
+    collateralValue: 5,
+    leverage: 20,
+    unrealizedPnl: 0.5,
+    realizedPnl: 0.25,
+    liquidationPrice: 96,
+    fundingSnapshot: null,
+    borrowSnapshot: null,
+    takeProfit: 101,
+    stopLoss: 99,
+    markPriceIsLive: true,
+    liquidationPriceIsEstimated: false,
+    accountRef: "partial-open-position",
+    lastUpdated: openedAtMs + 120_000,
+  };
+
+  const saved = await outcomeReconciler.reconcileTradeLearningOutcomes({
+    walletAddress,
+    executions: [execution],
+    decisions: [],
+    snapshot: {
+      positions: [openPosition],
+      pendingTriggers: [],
+      recentTrades: [
+        { id: "partial-entry", source: "live-api", positionPubkey: execution.positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 100, sizeUsd: 200, collateralUsdDelta: 10, feeUsd: 0.2, pnl: null, pnlPercentage: null, txHash: execution.txid, createdAt: openedAtMs + 1_000, lastUpdated: openedAtMs + 1_000 },
+        { id: "partial-exit", source: "live-api", positionPubkey: execution.positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Decrease", orderType: "Market", price: 100.5, sizeUsd: 100, collateralUsdDelta: -5, feeUsd: 0.1, pnl: 0.25, pnlPercentage: 2.5, txHash: "partial-exit-tx", createdAt: openedAtMs + 120_000, lastUpdated: openedAtMs + 120_000 },
+      ],
+    },
+  });
+
+  assert.equal(saved.length, 0);
+  assert.equal((await learningStore.listTradeLearningOutcomes(walletAddress)).length, 0);
+});
+
 test("reused Jupiter position accounts are reconciled as separate chronological episodes", async () => {
   const walletAddress = "learning-wallet-reused-position";
   const positionPubkey = "reused-position";
@@ -865,11 +948,13 @@ test("reused Jupiter position accounts are reconciled as separate chronological 
   });
   const firstOpenedAt = 1_730_000_000_000;
   const secondOpenedAt = firstOpenedAt + 3_600_000;
+  const thirdOpenedAt = secondOpenedAt + 3_600_000;
   const trades = [
     { id: "exit-2", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Close", orderType: "StopLoss", price: 99, sizeUsd: 50, collateralUsdDelta: -10, feeUsd: 0.1, pnl: -0.6, pnlPercentage: -7, txHash: "exit-tx-2", createdAt: secondOpenedAt + 600_000, lastUpdated: secondOpenedAt + 600_000 },
     { id: "entry-1", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 100, sizeUsd: 50, collateralUsdDelta: 10, feeUsd: 0.1, pnl: null, pnlPercentage: null, txHash: "entry-tx-1", createdAt: firstOpenedAt + 1_000, lastUpdated: firstOpenedAt + 1_000 },
     { id: "entry-2", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 101, sizeUsd: 50, collateralUsdDelta: 10, feeUsd: 0.1, pnl: null, pnlPercentage: null, txHash: "entry-tx-2", createdAt: secondOpenedAt + 1_000, lastUpdated: secondOpenedAt + 1_000 },
     { id: "exit-1", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Close", orderType: "TakeProfit", price: 102, sizeUsd: 50, collateralUsdDelta: -10, feeUsd: 0.1, pnl: 0.9, pnlPercentage: 8, txHash: "exit-tx-1", createdAt: firstOpenedAt + 600_000, lastUpdated: firstOpenedAt + 600_000 },
+    { id: "entry-3", source: "live-api", positionPubkey, marketSymbol: "SOL", marketName: "SOL", side: "long", action: "Increase", orderType: "Market", price: 100.5, sizeUsd: 50, collateralUsdDelta: 10, feeUsd: 0.1, pnl: null, pnlPercentage: null, txHash: "entry-tx-3", createdAt: thirdOpenedAt + 1_000, lastUpdated: thirdOpenedAt + 1_000 },
   ] as const;
 
   await learningStore.saveTradeLearningOutcomes([learningTypes.tradeLearningOutcomeSchema.parse({
@@ -915,9 +1000,21 @@ test("reused Jupiter position accounts are reconciled as separate chronological 
     executions: [
       makeExecution(1, firstOpenedAt, "entry-tx-1"),
       makeExecution(2, secondOpenedAt, "entry-tx-2"),
+      makeExecution(3, thirdOpenedAt, "entry-tx-3"),
     ],
     decisions: [],
-    snapshot: { positions: [], pendingTriggers: [], recentTrades: [...trades] },
+    snapshot: {
+      // The third reuse is still open. Historical episodes one and two must
+      // remain reconcilable even though Jupiter reused the same account key.
+      positions: [{
+        source: "live-api",
+        accountRef: positionPubkey,
+        side: "long",
+        marketSymbol: "SOL",
+      } as JupiterPerpsPosition],
+      pendingTriggers: [],
+      recentTrades: [...trades],
+    },
     replaceWalletHistory: true,
   });
 
@@ -930,6 +1027,7 @@ test("reused Jupiter position accounts are reconciled as separate chronological 
   assert.equal(saved[1]?.durationMinutes, 10);
   assert.notEqual(saved[0]?.episodeId, saved[1]?.episodeId);
   assert.ok(saved.every((outcome) => outcome.reconciliationVersion === 2));
+  assert.ok(saved.every((outcome) => outcome.signalType === "scalp"));
   assert.equal((await learningStore.listTradeLearningOutcomes(walletAddress)).length, 2);
 });
 

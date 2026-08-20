@@ -55,6 +55,29 @@ export async function getActiveDecisionLearningProfile(walletAddress: string) {
   return parseProfile(disk[walletAddress]);
 }
 
+export async function getActiveDecisionLearningProfileAuthoritative(walletAddress: string) {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) throw new Error("Authoritative Redis learning-profile storage is unavailable.");
+  let raw: string | null;
+  try {
+    raw = await redis.hGet(ACTIVE_PROFILE_KEY, walletAddress);
+  } catch (error) {
+    throw new Error(
+      `Authoritative Redis learning profile could not be read: ${error instanceof Error ? error.message : "unknown Redis error"}`
+    );
+  }
+  if (!raw) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("The authoritative Redis learning profile contains malformed JSON.");
+  }
+  const profile = parseProfile(value);
+  if (!profile) throw new Error("The authoritative Redis learning profile failed schema validation.");
+  return profile;
+}
+
 export async function listDecisionLearningProfileHistory(walletAddress: string) {
   const profiles = new Map<string, DecisionLearningProfile>();
   const redis = await getRedisClient().catch(() => null);
@@ -116,17 +139,52 @@ export async function saveDecisionLearningProfile(profile: DecisionLearningProfi
   return parsed;
 }
 
-export async function saveTradeLearningOutcomes(outcomes: TradeLearningOutcome[]) {
+export async function saveDecisionLearningProfileAuthoritative(
+  profile: DecisionLearningProfile,
+  activate: boolean
+) {
+  const parsed = decisionLearningProfileSchema.parse({
+    ...profile,
+    status: activate ? "active" : profile.status,
+    promotedAt: activate ? new Date().toISOString() : profile.promotedAt,
+  });
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) throw new Error("Authoritative Redis learning-profile storage is unavailable.");
+  try {
+    const multi = redis.multi();
+    multi.hSet(`${PROFILE_HISTORY_KEY}:${parsed.walletAddress}`, parsed.profileId, JSON.stringify(parsed));
+    if (activate) multi.hSet(ACTIVE_PROFILE_KEY, parsed.walletAddress, JSON.stringify(parsed));
+    await multi.exec();
+  } catch (error) {
+    throw new Error(
+      `Authoritative Redis learning profile could not be saved: ${error instanceof Error ? error.message : "unknown Redis error"}`
+    );
+  }
+  return parsed;
+}
+
+export async function saveTradeLearningOutcomes(
+  outcomes: TradeLearningOutcome[],
+  options: { requireAuthoritative?: boolean } = {}
+) {
   if (outcomes.length === 0) return [];
   const parsed = outcomes.map((outcome) => tradeLearningOutcomeSchema.parse(outcome));
   const redis = await getRedisClient().catch(() => null);
+  if (options.requireAuthoritative && !redis) {
+    throw new Error("Authoritative Redis learning-outcome storage is unavailable.");
+  }
   if (redis) {
     try {
       const multi = redis.multi();
       parsed.forEach((outcome) => multi.hSet(OUTCOMES_KEY, outcome.outcomeId, JSON.stringify(outcome)));
       await multi.exec();
       return parsed;
-    } catch {
+    } catch (error) {
+      if (options.requireAuthoritative) {
+        throw new Error(
+          `Authoritative Redis learning outcomes could not be saved: ${error instanceof Error ? error.message : "unknown Redis error"}`
+        );
+      }
       // Local fail-safe below.
     }
   }
@@ -138,7 +196,8 @@ export async function saveTradeLearningOutcomes(outcomes: TradeLearningOutcome[]
 
 export async function replaceTradeLearningOutcomesForWallet(
   walletAddress: string,
-  outcomes: TradeLearningOutcome[]
+  outcomes: TradeLearningOutcome[],
+  options: { requireAuthoritative?: boolean } = {}
 ) {
   const parsed = outcomes.map((outcome) => tradeLearningOutcomeSchema.parse(outcome));
   if (parsed.some((outcome) => outcome.walletAddress !== walletAddress)) {
@@ -146,6 +205,9 @@ export async function replaceTradeLearningOutcomesForWallet(
   }
 
   const redis = await getRedisClient().catch(() => null);
+  if (options.requireAuthoritative && !redis) {
+    throw new Error("Authoritative Redis learning-outcome storage is unavailable.");
+  }
   if (redis) {
     try {
       const existing = await redis.hGetAll(OUTCOMES_KEY);
@@ -160,7 +222,12 @@ export async function replaceTradeLearningOutcomesForWallet(
       if (staleIds.length > 0) multi.hDel(OUTCOMES_KEY, staleIds);
       parsed.forEach((outcome) => multi.hSet(OUTCOMES_KEY, outcome.outcomeId, JSON.stringify(outcome)));
       await multi.exec();
-    } catch {
+    } catch (error) {
+      if (options.requireAuthoritative) {
+        throw new Error(
+          `Authoritative Redis learning outcomes could not be replaced: ${error instanceof Error ? error.message : "unknown Redis error"}`
+        );
+      }
       // Keep the local fail-safe internally consistent if Redis is interrupted.
     }
   }
@@ -198,4 +265,30 @@ export async function listTradeLearningOutcomes(walletAddress: string) {
     if (outcome?.walletAddress === walletAddress) outcomes.set(outcome.outcomeId, outcome);
   });
   return [...outcomes.values()].sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt));
+}
+
+export async function listTradeLearningOutcomesAuthoritative(walletAddress: string) {
+  const redis = await getRedisClient().catch(() => null);
+  if (!redis) throw new Error("Authoritative Redis learning-outcome storage is unavailable.");
+  let values: string[];
+  try {
+    values = await redis.hVals(OUTCOMES_KEY);
+  } catch (error) {
+    throw new Error(
+      `Authoritative Redis learning outcomes could not be read: ${error instanceof Error ? error.message : "unknown Redis error"}`
+    );
+  }
+  const outcomes: TradeLearningOutcome[] = [];
+  values.forEach((value) => {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(value);
+    } catch {
+      throw new Error("Authoritative Redis learning outcomes contain malformed JSON.");
+    }
+    const outcome = parseOutcome(decoded);
+    if (!outcome) throw new Error("An authoritative Redis learning outcome failed schema validation.");
+    if (outcome.walletAddress === walletAddress) outcomes.push(outcome);
+  });
+  return outcomes.sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
 }

@@ -3,6 +3,7 @@ import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
 export type JupiterPerpsPositionSide = "long" | "short";
 export type JupiterPerpsPositionSource = "live-api" | "portfolio-api" | "mock" | "rpc-direct" | "rpc-placeholder";
 export type JupiterPerpsPendingTriggerKind = "take-profit" | "stop-loss";
+export type JupiterPerpsTransactionStatus = "confirmed" | "processing" | "failed" | "not-found";
 
 export type JupiterPerpsPosition = {
   id: string;
@@ -67,7 +68,49 @@ export type JupiterPerpsAccountSnapshot = {
   positions: JupiterPerpsPosition[];
   pendingTriggers: JupiterPerpsPendingTrigger[];
   recentTrades: JupiterPerpsTrade[];
+  readEvidence?: {
+    liveApiSucceeded: boolean;
+    rpcSucceeded: boolean;
+    /** True only when a successful owner-account RPC scan proves no position exists. */
+    authoritativePositionAbsence: boolean;
+  };
 };
+
+type SolanaSignatureStatusLike = {
+  err: unknown;
+  confirmationStatus?: "processed" | "confirmed" | "finalized" | null;
+} | null;
+
+export function classifyJupiterPerpsTransactionStatus(
+  status: SolanaSignatureStatusLike
+): JupiterPerpsTransactionStatus {
+  if (!status) return "not-found";
+  if (status.err !== null && status.err !== undefined) return "failed";
+  return status.confirmationStatus === "confirmed" || status.confirmationStatus === "finalized"
+    ? "confirmed"
+    : "processing";
+}
+
+/**
+ * Reads one signed Jupiter transaction from authoritative Solana history.
+ * A null status is deliberately returned as `not-found`, not `failed`: an RPC
+ * node can temporarily omit a recently broadcast signature, so callers must
+ * fail closed unless an on-chain status explicitly reports an error.
+ */
+export async function fetchJupiterPerpsTransactionStatus(
+  signature: string,
+  rpcUrl = process.env.SOLANA_RPC_URL?.trim()
+    || process.env.NEXT_PUBLIC_SOLANA_RPC_URL?.trim()
+    || clusterApiUrl("mainnet-beta")
+): Promise<JupiterPerpsTransactionStatus> {
+  const normalized = signature.trim();
+  if (!normalized) throw new Error("A transaction signature is required for recovery reconciliation.");
+  const connection = new Connection(rpcUrl, "confirmed");
+  const response = await connection.getSignatureStatuses([normalized], {
+    searchTransactionHistory: true,
+  });
+  return classifyJupiterPerpsTransactionStatus(response.value[0] ?? null);
+}
 
 export type JupiterPerpsTrade = {
   id: string;
@@ -90,6 +133,38 @@ export type JupiterPerpsTrade = {
   walletAddress?: string | null;
   walletRole?: "primary" | "agent";
 };
+
+export function isAuthoritativeJupiterRpcPositionAbsence(input: {
+  positionCount: number;
+  pendingTriggerCount: number;
+  decodeFailureCount: number;
+  unclassifiedAccountCount: number;
+}) {
+  return input.positionCount === 0
+    && input.pendingTriggerCount === 0
+    && input.decodeFailureCount === 0
+    && input.unclassifiedAccountCount === 0;
+}
+
+/**
+ * A partial owner-account decode is not a complete exposure inventory. Even
+ * when one valid Position is present, an additional unclassified account may
+ * be another open position using a layout this build cannot decode yet. Live
+ * risk decisions must therefore fail closed instead of returning the known
+ * subset and treating it as the wallet's full inventory.
+ */
+export function assertCompleteJupiterRpcOwnerAccountClassification(input: {
+  ownerAccountCount: number;
+  positionCount: number;
+  pendingTriggerCount: number;
+  unclassifiedAccountCount: number;
+}) {
+  if (input.unclassifiedAccountCount > 0) {
+    throw new Error(
+      `Direct Jupiter Perps account reads classified ${input.positionCount} position(s) and ${input.pendingTriggerCount} pending trigger(s), but ${input.unclassifiedAccountCount} of ${input.ownerAccountCount} owner-scoped account(s) could not be classified. Live exposure is incomplete.`
+    );
+  }
+}
 
 type LivePerpsPositionsResponse = {
   dataList?: LivePerpsPosition[];
@@ -1085,7 +1160,14 @@ export async function fetchJupiterPerpsAccountSnapshot(
   try {
     const liveSnapshot = await fetchLivePerpsSnapshot(walletAddress, options.includeRecentTrades ?? true);
     if (liveSnapshot.positions.length > 0 || liveSnapshot.pendingTriggers.length > 0) {
-      return liveSnapshot;
+      return {
+        ...liveSnapshot,
+        readEvidence: {
+          liveApiSucceeded: true,
+          rpcSucceeded: false,
+          authoritativePositionAbsence: false,
+        },
+      };
     }
 
     try {
@@ -1094,9 +1176,21 @@ export async function fetchJupiterPerpsAccountSnapshot(
         ...liveSnapshot,
         positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
         pendingTriggers: directSnapshot.pendingTriggers,
+        readEvidence: {
+          liveApiSucceeded: true,
+          rpcSucceeded: true,
+          authoritativePositionAbsence: directSnapshot.readEvidence?.authoritativePositionAbsence === true,
+        },
       };
     } catch {
-      return liveSnapshot;
+      return {
+        ...liveSnapshot,
+        readEvidence: {
+          liveApiSucceeded: true,
+          rpcSucceeded: false,
+          authoritativePositionAbsence: false,
+        },
+      };
     }
   } catch {
     try {
@@ -1105,6 +1199,11 @@ export async function fetchJupiterPerpsAccountSnapshot(
         positions: await enrichPositionsWithLiveMetrics(directSnapshot.positions),
         pendingTriggers: directSnapshot.pendingTriggers,
         recentTrades: [],
+        readEvidence: {
+          liveApiSucceeded: false,
+          rpcSucceeded: true,
+          authoritativePositionAbsence: directSnapshot.readEvidence?.authoritativePositionAbsence === true,
+        },
       };
     } catch (rpcError) {
       const message = rpcError instanceof Error ? rpcError.message : "Unable to load Jupiter Perps positions right now.";
@@ -1136,11 +1235,13 @@ export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: str
     ],
   });
 
+  const decodeFailureAccountRefs = new Set<string>();
   const positions = ownerScopedAccounts
     .map(({ pubkey, account }) => {
       try {
         return decodePositionAccount(pubkey.toBase58(), account.data);
       } catch {
+        decodeFailureAccountRefs.add(pubkey.toBase58());
         return null;
       }
     })
@@ -1160,19 +1261,41 @@ export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: str
           decodePositionRequestAccount(pubkey.toBase58(), account.data)
         );
       } catch {
+        decodeFailureAccountRefs.add(pubkey.toBase58());
         return null;
       }
     })
     .filter((trigger): trigger is JupiterPerpsPendingTrigger => trigger !== null);
 
-  if (ownerScopedAccounts.length > 0 && positions.length === 0 && pendingTriggers.length === 0) {
-    throw new Error("Direct Jupiter Perps account reads returned owner-scoped data, but none matched the documented Position or PositionRequest layouts.");
-  }
+  const classifiedAccountRefs = new Set([
+    ...positions.flatMap((position) => position.accountRef ? [position.accountRef] : []),
+    ...pendingTriggers.map((trigger) => trigger.accountRef),
+  ]);
+  const unclassifiedAccountCount = ownerScopedAccounts.filter(({ pubkey }) => (
+    !classifiedAccountRefs.has(pubkey.toBase58())
+  )).length;
+
+  assertCompleteJupiterRpcOwnerAccountClassification({
+    ownerAccountCount: ownerScopedAccounts.length,
+    positionCount: positions.length,
+    pendingTriggerCount: pendingTriggers.length,
+    unclassifiedAccountCount,
+  });
 
   return {
     positions: applyPendingTriggersToPositions(positions, pendingTriggers),
     pendingTriggers,
     recentTrades: [],
+    readEvidence: {
+      liveApiSucceeded: false,
+      rpcSucceeded: true,
+      authoritativePositionAbsence: isAuthoritativeJupiterRpcPositionAbsence({
+        positionCount: positions.length,
+        pendingTriggerCount: pendingTriggers.length,
+        decodeFailureCount: decodeFailureAccountRefs.size,
+        unclassifiedAccountCount,
+      }),
+    },
   };
 }
 

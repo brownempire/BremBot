@@ -160,8 +160,8 @@ test("entry notification falls back to the round-trip fee estimate when live net
     execution,
   });
 
-  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.76\)/);
-  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.24\)/);
+  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.59\)/);
+  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.41\)/);
 });
 
 test("an exit near SL is not mislabeled as TP when both triggers existed", () => {

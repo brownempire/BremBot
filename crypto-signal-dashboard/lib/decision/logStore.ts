@@ -43,7 +43,10 @@ function formatDecisionMarkdown(record: TradeDecisionRecord) {
   ].join("\n");
 }
 
-export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
+export async function appendTradeDecisionRecord(
+  record: TradeDecisionRecord,
+  options: { requireAuthoritative?: boolean } = {}
+) {
   const config = getTradeDecisionConfig();
   const markdownEntry = formatDecisionMarkdown(record);
   const ndjsonEntry = `${JSON.stringify(record)}\n`;
@@ -56,8 +59,15 @@ export async function appendTradeDecisionRecord(record: TradeDecisionRecord) {
         record.payload.decisionId,
         JSON.stringify(record)
       );
+    } else if (options.requireAuthoritative) {
+      throw new Error("Authoritative Redis decision audit is unavailable.");
     }
-  } catch {
+  } catch (error) {
+    if (options.requireAuthoritative) {
+      throw new Error(
+        `The live scalp decision could not be written to the authoritative audit: ${error instanceof Error ? error.message : "Redis write failed"}`
+      );
+    }
     // The local fallback below keeps decision logging non-fatal.
   }
 
@@ -115,6 +125,28 @@ async function readTradeDecisionRecordsFromRedis() {
   }
 }
 
+async function readTradeDecisionRecordsFromRedisAuthoritative() {
+  const client = await getRedisClient().catch(() => null);
+  if (!client) throw new Error("Authoritative Redis decision audit is unavailable; live scalp admission is blocked.");
+  let values: string[];
+  try {
+    values = await client.hVals(DECISION_RECORDS_REDIS_KEY);
+  } catch (error) {
+    throw new Error(
+      `Authoritative Redis decision audit could not be read: ${error instanceof Error ? error.message : "unknown Redis error"}`
+    );
+  }
+  return values.map((value) => {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(value);
+    } catch {
+      throw new Error("An authoritative Redis decision record contains malformed JSON.");
+    }
+    return tradeDecisionRecordSchema.parse(decoded);
+  });
+}
+
 export async function listTradeDecisionRecords(limit = 50, walletAddress?: string | null) {
   const redisRecords = await readTradeDecisionRecordsFromRedis();
   const diskRecords = readTradeDecisionRecordsFromDisk();
@@ -126,6 +158,27 @@ export async function listTradeDecisionRecords(limit = 50, walletAddress?: strin
     .filter((record) => !walletAddress || record.payload.walletAddress === walletAddress)
     .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt))
     .slice(0, Math.max(1, limit));
+}
+
+export async function listTradeDecisionRecordsAuthoritative(limit = 50, walletAddress?: string | null) {
+  const records = await readTradeDecisionRecordsFromRedisAuthoritative();
+  return records
+    .filter((record) => !walletAddress || record.payload.walletAddress === walletAddress)
+    .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt))
+    .slice(0, Math.max(1, limit));
+}
+
+/**
+ * Returns the complete authoritative decision journal for one wallet. Outcome
+ * reconciliation must not use a global row limit: an older execution can be
+ * reconciled late, and omitting its matching decision would erase its scalp
+ * attribution from the live circuit breaker.
+ */
+export async function listAllTradeDecisionRecordsAuthoritative(walletAddress: string) {
+  const records = await readTradeDecisionRecordsFromRedisAuthoritative();
+  return records
+    .filter((record) => record.payload.walletAddress === walletAddress)
+    .sort((left, right) => Date.parse(right.payload.createdAt) - Date.parse(left.payload.createdAt));
 }
 
 export async function readTradeDecisionJournal(walletAddress?: string | null) {

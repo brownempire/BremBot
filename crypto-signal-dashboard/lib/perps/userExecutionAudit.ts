@@ -11,6 +11,27 @@ const FEED_STATE_REDIS_KEY = "brembot:perps:user-execution-feed-state";
 
 type UserExecutionMap = Record<string, PerpsUserExecution[]>;
 type UserExecutionFeedStateMap = Record<string, string>;
+type ExecutionAuditMigrationClient = {
+  hSetNX: (key: string, field: string, value: string) => Promise<boolean | number>;
+};
+
+function executionRecordField(record: Pick<PerpsUserExecution, "walletAddress" | "executionId">) {
+  return `${record.walletAddress}:${record.executionId}`;
+}
+
+export async function migrateMissingUserExecutionRecordsToRedis(
+  client: ExecutionAuditMigrationClient,
+  diskRecords: readonly PerpsUserExecution[],
+  authoritativeRecords: readonly PerpsUserExecution[]
+) {
+  const authoritativeFields = new Set(authoritativeRecords.map(executionRecordField));
+  for (const record of diskRecords) {
+    const field = executionRecordField(record);
+    if (authoritativeFields.has(field)) continue;
+    await client.hSetNX(REDIS_RECORDS_KEY, field, JSON.stringify(record));
+    authoritativeFields.add(field);
+  }
+}
 
 function parseExecutionMap(raw: string) {
   try {
@@ -115,6 +136,71 @@ async function readRedisStore() {
   return merged;
 }
 
+async function readRedisStoreAuthoritative() {
+  const client = await getRedisClient().catch(() => null);
+  if (!client) throw new Error("Authoritative Redis execution audit is unavailable; live scalp admission is blocked.");
+  let legacyRaw: string | null;
+  let recordValues: string[];
+  try {
+    [legacyRaw, recordValues] = await Promise.all([
+      client.get(REDIS_KEY),
+      client.hVals(REDIS_RECORDS_KEY),
+    ]);
+  } catch (error) {
+    throw new Error(
+      `Authoritative Redis execution audit could not be read: ${error instanceof Error ? error.message : "unknown Redis error"}`
+    );
+  }
+
+  const merged: UserExecutionMap = {};
+  if (legacyRaw) {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(legacyRaw);
+    } catch {
+      throw new Error("The authoritative legacy execution audit contains malformed JSON.");
+    }
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new Error("The authoritative legacy execution audit failed schema validation.");
+    }
+    for (const [walletAddress, entries] of Object.entries(decoded)) {
+      if (!Array.isArray(entries)) throw new Error("The authoritative legacy execution audit failed schema validation.");
+      merged[walletAddress] = entries.map((entry) => perpsUserExecutionSchema.parse(entry));
+    }
+  }
+  for (const value of recordValues) {
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(value);
+    } catch {
+      throw new Error("An authoritative Redis execution record contains malformed JSON.");
+    }
+    const record = perpsUserExecutionSchema.parse(decoded);
+    const current = merged[record.walletAddress] ?? [];
+    merged[record.walletAddress] = [
+      record,
+      ...current.filter((entry) => entry.executionId !== record.executionId),
+    ];
+  }
+  return merged;
+}
+
+function normalizeAndSortExecutions(entries: PerpsUserExecution[]) {
+  return entries
+    .map((entry) => (
+      entry.status === "cancelled"
+      && entry.reasonCode === "POSITION_CLOSED"
+      && Boolean(entry.txid || entry.positionPubkey)
+        ? perpsUserExecutionSchema.parse({
+            ...entry,
+            status: "closed",
+            reasonMessage: "Trade completed and no matching open position remains on Jupiter Perps.",
+          })
+        : entry
+    ))
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
+
 async function readStore() {
   const diskStore = readDiskStore();
   const redisStore = await readRedisStore();
@@ -130,7 +216,18 @@ async function readStore() {
 
   const diskRecords = Object.values(diskStore).flat();
   if (diskRecords.length > 0) {
-    await writeRedisRecords(diskRecords);
+    const client = await getRedisClient().catch(() => null);
+    if (client) {
+      try {
+        await migrateMissingUserExecutionRecordsToRedis(
+          client,
+          diskRecords,
+          Object.values(redisStore).flat()
+        );
+      } catch {
+        // A later read retries missing fallback records; authoritative Redis values always win.
+      }
+    }
   }
   return merged;
 }
@@ -152,19 +249,12 @@ async function writeRedisRecords(records: PerpsUserExecution[]) {
 
 export async function listUserPerpsExecutions(walletAddress: string) {
   const store = await readStore();
-  return (store[walletAddress] ?? [])
-    .map((entry) => (
-      entry.status === "cancelled"
-      && entry.reasonCode === "POSITION_CLOSED"
-      && Boolean(entry.txid || entry.positionPubkey)
-        ? perpsUserExecutionSchema.parse({
-            ...entry,
-            status: "closed",
-            reasonMessage: "Trade completed and no matching open position remains on Jupiter Perps.",
-          })
-        : entry
-    ))
-    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return normalizeAndSortExecutions(store[walletAddress] ?? []);
+}
+
+export async function listUserPerpsExecutionsAuthoritative(walletAddress: string) {
+  const store = await readRedisStoreAuthoritative();
+  return normalizeAndSortExecutions(store[walletAddress] ?? []);
 }
 
 export async function listVisibleUserPerpsExecutions(walletAddress: string) {
@@ -194,9 +284,15 @@ export async function clearUserPerpsExecutionFeed(walletAddress: string) {
   return clearedBefore;
 }
 
-export async function createUserPerpsExecution(record: PerpsUserExecution) {
+export async function createUserPerpsExecution(
+  record: PerpsUserExecution,
+  options: { requireAuthoritative?: boolean } = {}
+) {
   const wroteRedis = await writeRedisRecords([record]);
   if (!wroteRedis) {
+    if (options.requireAuthoritative) {
+      throw new Error("Authoritative Redis execution audit is unavailable; live scalp submission is blocked.");
+    }
     const store = readDiskStore();
     store[record.walletAddress] = [
       record,
@@ -207,13 +303,23 @@ export async function createUserPerpsExecution(record: PerpsUserExecution) {
   return record;
 }
 
-export async function updateUserPerpsExecution(walletAddress: string, executionId: string, patch: Partial<PerpsUserExecution>) {
-  const current = await listUserPerpsExecutions(walletAddress);
+export async function updateUserPerpsExecution(
+  walletAddress: string,
+  executionId: string,
+  patch: Partial<PerpsUserExecution>,
+  options: { requireAuthoritative?: boolean } = {}
+) {
+  const current = options.requireAuthoritative
+    ? await listUserPerpsExecutionsAuthoritative(walletAddress)
+    : await listUserPerpsExecutions(walletAddress);
   const existing = current.find((entry) => entry.executionId === executionId);
   if (!existing) return null;
   const updated = perpsUserExecutionSchema.parse({ ...existing, ...patch, updatedAt: new Date().toISOString() });
   const wroteRedis = await writeRedisRecords([updated]);
   if (!wroteRedis) {
+    if (options.requireAuthoritative) {
+      throw new Error("Authoritative Redis execution audit is unavailable; scalp recovery remains blocked.");
+    }
     const store = readDiskStore();
     store[walletAddress] = [
       updated,

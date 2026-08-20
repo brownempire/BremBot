@@ -4,10 +4,14 @@ import type {
   ScalpSetupType,
 } from "@/lib/decision/learningTypes";
 import type { PricePoint } from "@/lib/price/simulated";
-import type { IndicatorSnapshot } from "@/lib/signal/indicators";
+import {
+  computeIndicatorSnapshot,
+  type IndicatorSnapshot,
+} from "@/lib/signal/indicators";
 
-// Audited August 13 baseline: retains the tightened entry behavior that
-// produced a 73.3% recent win rate while the exit policy is corrected.
+// Policy v8 only routes completed, structurally confirmed entries. The lower
+// learned score remains useful for chart watching, while live continuations
+// require the independent 0.72 floor and the safeguards below.
 export const SCALP_STANDARD_COOLDOWN_SECONDS = 42.5 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
@@ -17,21 +21,38 @@ export const SCALP_REVERSAL_MIN_VOLUME_RATIO = 0.75;
 export const SCALP_REVERSAL_MAX_ADX = 40;
 export const SCALP_CONTINUATION_MIN_ADX = 20;
 export const SCALP_CONTINUATION_MAX_ADX = 45;
+export const SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE = 0.72;
 export const SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT = 0.45;
 export const SCALP_CONTINUATION_MIN_ATR_PERCENT = 0.1;
 export const SCALP_CONTINUATION_MIN_VOLUME_RATIO = 1.15;
+export const SCALP_CONTINUATION_LONG_BOLLINGER_MAXIMUM = 0.72;
+export const SCALP_CONTINUATION_SHORT_BOLLINGER_MINIMUM = 0.28;
 export const SCALP_CONTINUATION_LONG_RSI_MIN = 55;
 export const SCALP_CONTINUATION_LONG_RSI_MAX = 82;
 export const SCALP_CONTINUATION_SHORT_RSI_MIN = 18;
 export const SCALP_CONTINUATION_SHORT_RSI_MAX = 45;
 export const SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT = 10;
-export const SCALP_TRADE_LEVERAGE = 50;
-export const SCALP_POLICY_VERSION = 7;
+// Continuation produced the two policy-v7 live losses and has not yet shown a
+// positive after-fee walk-forward sample. Keep evaluating it for the candidate
+// journal/chart, but do not emit a live signal until that path is explicitly
+// validated under the v8 gates.
+export const SCALP_CONTINUATION_LIVE_ENABLED = false;
+// The rewritten range and sweep-reversal paths are still collecting shadow
+// outcomes. The only v8 path with positive chronological after-fee evidence is
+// breakout/retest, so these paths cannot spend live risk during probation.
+export const SCALP_RANGE_REVERSAL_LIVE_ENABLED = false;
+export const SCALP_REVERSAL_LIVE_ENABLED = false;
+export const SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT = 0.09;
+export const SCALP_EXHAUSTION_LOOKBACK_MINUTES = 145;
+export const SCALP_MAX_145M_NET_OR_RANGE_PERCENT = 2;
+export const SCALP_TRADE_LEVERAGE = 20;
+export const SCALP_POLICY_VERSION = 8;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   policyVersion: SCALP_POLICY_VERSION,
   policyOutcomeOffset: 0,
   learnedFromClosedTrades: 0,
+  processedPolicyOutcomeIds: [],
   minimumConfidence: 0.77,
   cooldownSeconds: SCALP_STANDARD_COOLDOWN_SECONDS,
   longRsiMaximum: 40.62,
@@ -57,6 +78,10 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   preferredDirection: "balanced",
   consecutiveLosses: 0,
   operatorActivation: null,
+  // A live rollout boundary is wallet state, not a module-load timestamp. The
+  // monitor persists it through ensureWalletScalpPolicyProfile before v8 can
+  // account outcomes or admit live scalp entries.
+  policyRollout: null,
   validation: {
     sampleSize: 0,
     trainingSize: 0,
@@ -65,8 +90,8 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
     expectancyUsd: 0,
     profitFactor: 0,
     maxDrawdownUsd: 0,
-    passed: true,
-    reasons: ["The audited recent-performance scalp baseline is active while post-upgrade outcomes are collected."],
+    passed: false,
+    reasons: ["Policy v8 requires a persisted wallet rollout before live probation can begin."],
   },
 };
 
@@ -93,6 +118,33 @@ export type ScalpSignal = {
   priceActionScore: number;
   priceActionTags: string[];
   indicatorBypass: boolean;
+};
+
+export type ScalpCandidatePath = "breakout-retest" | "continuation" | "reversal" | "range-reversal" | "none";
+
+export function scalpCandidatePathAllowsLiveSignal(path: ScalpCandidatePath) {
+  if (path === "breakout-retest") return true;
+  if (path === "continuation") return SCALP_CONTINUATION_LIVE_ENABLED;
+  if (path === "range-reversal") return SCALP_RANGE_REVERSAL_LIVE_ENABLED;
+  if (path === "reversal") return SCALP_REVERSAL_LIVE_ENABLED;
+  return false;
+}
+
+export type ScalpCandidateDiagnostic = {
+  path: ScalpCandidatePath;
+  direction: "bullish" | "bearish" | null;
+  score: number;
+  accepted: boolean;
+  rejectionReasons: string[];
+  tags: string[];
+  entryPrice: number | null;
+  timestamp: number | null;
+  regime: ScalpMarketRegime;
+};
+
+export type ScalpCandidateEvaluation = {
+  signal: ScalpSignal | null;
+  candidate: ScalpCandidateDiagnostic;
 };
 
 export type RecentClosedScalpTrade = {
@@ -130,11 +182,139 @@ function recentVolumeRatio(points: PricePoint[]) {
   return baseline > 0 ? latest / baseline : null;
 }
 
+type Direction = "bullish" | "bearish";
+
+export type ScalpRegimeHorizon = {
+  minutes: 5 | 15 | 60;
+  direction: Direction | "sideways";
+  netMovePercent: number;
+  atrPercent: number;
+  emaFast: number | null;
+  emaSlow: number | null;
+  plusDi: number | null;
+  minusDi: number | null;
+};
+
+export type ScalpMarketRegime = {
+  bias: Direction | "sideways";
+  trending: boolean;
+  exhausted: boolean;
+  netMove145mPercent: number;
+  range145mPercent: number;
+  horizons: ScalpRegimeHorizon[];
+};
+
+function emaLast(values: number[], period: number) {
+  if (values.length < period || period < 1) return null;
+  let current = average(values.slice(0, period));
+  const multiplier = 2 / (period + 1);
+  for (const value of values.slice(period)) current = (value - current) * multiplier + current;
+  return current;
+}
+
+function directionalMovement(points: PricePoint[], period: number) {
+  if (points.length < 3) return { plusDi: null, minusDi: null };
+  const window = points.slice(-(Math.min(period, points.length - 1) + 1));
+  let trueRange = 0;
+  let plus = 0;
+  let minus = 0;
+  for (let index = 1; index < window.length; index += 1) {
+    const current = window[index]!;
+    const previous = window[index - 1]!;
+    const high = candleHigh(current);
+    const low = candleLow(current);
+    const previousHigh = candleHigh(previous);
+    const previousLow = candleLow(previous);
+    trueRange += Math.max(high - low, Math.abs(high - previous.v), Math.abs(low - previous.v));
+    const upMove = high - previousHigh;
+    const downMove = previousLow - low;
+    if (upMove > downMove && upMove > 0) plus += upMove;
+    if (downMove > upMove && downMove > 0) minus += downMove;
+  }
+  return {
+    plusDi: trueRange > 0 ? plus / trueRange * 100 : 0,
+    minusDi: trueRange > 0 ? minus / trueRange * 100 : 0,
+  };
+}
+
+function horizonRegime(points: PricePoint[], minutes: 5 | 15 | 60): ScalpRegimeHorizon {
+  const window = points.slice(-Math.min(points.length, minutes + 1));
+  const values = window.map((point) => point.v);
+  const first = values[0] ?? 0;
+  const latest = values[values.length - 1] ?? 0;
+  const netMovePercent = first > 0 ? percent(latest - first, first) : 0;
+  const trueRanges = window.slice(1).map((point, index) => {
+    const previous = window[index]!;
+    return Math.max(
+      candleHigh(point) - candleLow(point),
+      Math.abs(candleHigh(point) - previous.v),
+      Math.abs(candleLow(point) - previous.v),
+    );
+  });
+  const atrPercent = latest > 0 && trueRanges.length > 0
+    ? average(trueRanges) / latest * 100
+    : 0;
+  const fastPeriod = minutes === 5 ? 2 : minutes === 15 ? 5 : 9;
+  const slowPeriod = minutes === 5 ? 4 : minutes === 15 ? 10 : 21;
+  const emaFast = emaLast(values, fastPeriod);
+  const emaSlow = emaLast(values, slowPeriod);
+  const dmi = directionalMovement(window, Math.min(14, Math.max(2, window.length - 1)));
+  const minimumDirectionalMove = Math.max(0.02, atrPercent * 0.5);
+  const bullish = netMovePercent >= minimumDirectionalMove
+    && emaFast !== null
+    && emaSlow !== null
+    && emaFast > emaSlow
+    && dmi.plusDi !== null
+    && dmi.minusDi !== null
+    && dmi.plusDi > dmi.minusDi;
+  const bearish = netMovePercent <= -minimumDirectionalMove
+    && emaFast !== null
+    && emaSlow !== null
+    && emaFast < emaSlow
+    && dmi.plusDi !== null
+    && dmi.minusDi !== null
+    && dmi.minusDi > dmi.plusDi;
+  return {
+    minutes,
+    direction: bullish ? "bullish" : bearish ? "bearish" : "sideways",
+    netMovePercent: Number(netMovePercent.toFixed(4)),
+    atrPercent: Number(atrPercent.toFixed(4)),
+    emaFast,
+    emaSlow,
+    plusDi: dmi.plusDi,
+    minusDi: dmi.minusDi,
+  };
+}
+
+export function classifyScalpMarketRegime(points: PricePoint[]): ScalpMarketRegime {
+  const horizons = ([5, 15, 60] as const).map((minutes) => horizonRegime(points, minutes));
+  const bullishVotes = horizons.filter((horizon) => horizon.direction === "bullish").length;
+  const bearishVotes = horizons.filter((horizon) => horizon.direction === "bearish").length;
+  const bias: ScalpMarketRegime["bias"] = bullishVotes >= 2
+    ? "bullish"
+    : bearishVotes >= 2
+      ? "bearish"
+      : "sideways";
+  const exhaustionWindow = points.slice(-SCALP_EXHAUSTION_LOOKBACK_MINUTES);
+  const first = exhaustionWindow[0]?.v ?? 0;
+  const latest = exhaustionWindow.at(-1)?.v ?? 0;
+  const netMove145mPercent = first > 0 ? Math.abs(percent(latest - first, first)) : 0;
+  const high = exhaustionWindow.length > 0 ? Math.max(...exhaustionWindow.map(candleHigh)) : 0;
+  const low = exhaustionWindow.length > 0 ? Math.min(...exhaustionWindow.map(candleLow)) : 0;
+  const range145mPercent = first > 0 ? percent(high - low, first) : 0;
+  return {
+    bias,
+    trending: bias !== "sideways",
+    exhausted: netMove145mPercent > SCALP_MAX_145M_NET_OR_RANGE_PERCENT
+      || range145mPercent > SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
+    netMove145mPercent: Number(netMove145mPercent.toFixed(4)),
+    range145mPercent: Number(range145mPercent.toFixed(4)),
+    horizons,
+  };
+}
+
 function computeTrendBias(points: PricePoint[]) {
-  const first = points[0]?.v ?? 0;
-  const last = points[points.length - 1]?.v ?? 0;
-  const change = first > 0 ? percent(last - first, first) : 0;
-  return change >= 1 ? "bullish" : change <= -1 ? "bearish" : "sideways";
+  return classifyScalpMarketRegime(points).bias;
 }
 
 export function getScalpTrendBias(points: PricePoint[]) {
@@ -194,8 +374,18 @@ export function getScalpLearningProfile(profile: DecisionLearningProfile | null)
 }
 
 export function scalpProfileAllowsLiveEntries(profile: ScalpLearningProfile) {
+  const rollout = profile.policyRollout;
   return profile.policyVersion === SCALP_POLICY_VERSION
-    && (profile.validation.passed || profile.operatorActivation !== null);
+    && rollout?.status !== "paused"
+    && (
+      profile.validation.passed
+      || profile.operatorActivation !== null
+      || (
+        rollout?.status === "probation"
+        && rollout.liveTradingAuthorized
+        && rollout.authorization === "operator-approved-live-rollout"
+      )
+    );
 }
 
 export type ScalpTrendContinuationEvaluation = {
@@ -208,6 +398,15 @@ export type ScalpReversalSafetyEvaluation = {
   reasons: string[];
 };
 
+export type ScalpStructuredEntryEvaluation = {
+  qualified: boolean;
+  direction: Direction | null;
+  setupType: ScalpSetupType | null;
+  score: number;
+  tags: string[];
+  reasons: string[];
+};
+
 export function evaluateScalpReversalSafety(options: {
   priceAction: ScalpPriceAction;
   previousPriceAction: ScalpPriceAction;
@@ -217,6 +416,15 @@ export function evaluateScalpReversalSafety(options: {
   const { priceAction, previousPriceAction, indicators, profile } = options;
   const direction = priceAction.direction;
   const reasons: string[] = [];
+  const genuineDefinedLevelSweep = priceAction.setupType === "liquidity-sweep"
+    && priceAction.tags.includes("PRICE_LIQUIDITY_SWEEP_RECLAIM")
+    && priceAction.tags.includes("PRICE_RECLAIM")
+    && priceAction.tags.includes("PRICE_MOMENTUM_TURN")
+    && priceAction.sweepPercent >= profile.minimumSweepPercent
+    && priceAction.reclaimPercent >= profile.minimumReclaimPercent;
+  if (!genuineDefinedLevelSweep) {
+    reasons.push("Live reversal requires a defined-level liquidity sweep, reclaim, directional turn, and two reclaimed closes.");
+  }
   const persisted = direction !== null
     && priceAction.confirmed
     && previousPriceAction.direction === direction
@@ -249,19 +457,32 @@ export function evaluateScalpReversalSafety(options: {
 
 export function evaluateScalpTrendContinuation(options: {
   priceAction: ScalpPriceAction;
+  previousPriceAction?: ScalpPriceAction;
+  points?: PricePoint[];
   trendBias: "bullish" | "bearish" | "sideways";
   indicators: IndicatorSnapshot;
   profile: ScalpLearningProfile;
+  regime?: ScalpMarketRegime;
 }): ScalpTrendContinuationEvaluation {
-  const { priceAction, trendBias, indicators, profile } = options;
+  const { priceAction, previousPriceAction, points, trendBias, indicators, profile } = options;
+  const regime = options.regime ?? (points ? classifyScalpMarketRegime(points) : null);
   const direction = priceAction.direction;
   const bullish = direction === "bullish";
   const reasons: string[] = [];
-  if (priceAction.score < profile.minimumPriceActionScore) {
-    reasons.push(`Price-action score ${priceAction.score.toFixed(2)} is below ${profile.minimumPriceActionScore.toFixed(2)}.`);
+  const continuationFloor = Math.max(profile.minimumPriceActionScore, SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE);
+  if (priceAction.score < continuationFloor) {
+    reasons.push(`Price-action score ${priceAction.score.toFixed(2)} is below the live continuation floor ${continuationFloor.toFixed(2)}.`);
   }
   if (!direction || !priceAction.confirmed) reasons.push("Momentum and reclaim have not confirmed a direction.");
+  const persisted = direction !== null
+    && previousPriceAction?.direction === direction
+    && previousPriceAction.confirmed
+    && previousPriceAction.score >= continuationFloor;
+  if (!persisted) reasons.push("Continuation must persist in the same direction across two completed candles.");
   if (direction && trendBias !== direction) reasons.push(`The ${trendBias} trend does not align with the ${direction} setup.`);
+  if (regime?.exhausted) {
+    reasons.push(`The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`);
+  }
   if (indicators.adx === null
     || indicators.adx < SCALP_CONTINUATION_MIN_ADX
     || indicators.adx > SCALP_CONTINUATION_MAX_ADX) {
@@ -289,6 +510,27 @@ export function evaluateScalpTrendContinuation(options: {
     && indicators.minusDi !== null
     && (bullish ? indicators.plusDi > indicators.minusDi : indicators.minusDi > indicators.plusDi);
   if (!directionalMovementReady) reasons.push("Directional movement does not confirm the setup direction.");
+  const macdReady = direction !== null
+    && indicators.macdLine !== null
+    && indicators.macdSignal !== null
+    && indicators.macdHistogram !== null
+    && indicators.macdHistogramChange !== null
+    && (bullish
+      ? indicators.macdLine > indicators.macdSignal
+        && indicators.macdHistogram > 0
+        && indicators.macdHistogramChange > 0
+      : indicators.macdLine < indicators.macdSignal
+        && indicators.macdHistogram < 0
+        && indicators.macdHistogramChange < 0);
+  if (!macdReady) reasons.push("MACD direction and histogram change do not confirm the setup direction.");
+  const bollingerReady = direction !== null
+    && indicators.bollingerPosition !== null
+    && (bullish
+      ? indicators.bollingerPosition <= SCALP_CONTINUATION_LONG_BOLLINGER_MAXIMUM
+      : indicators.bollingerPosition >= SCALP_CONTINUATION_SHORT_BOLLINGER_MINIMUM);
+  if (!bollingerReady) {
+    reasons.push(`Bollinger position must be at or below ${SCALP_CONTINUATION_LONG_BOLLINGER_MAXIMUM.toFixed(2)} for longs or at or above ${SCALP_CONTINUATION_SHORT_BOLLINGER_MINIMUM.toFixed(2)} for shorts.`);
+  }
   if (indicators.volumeRatio === null || indicators.volumeRatio < SCALP_CONTINUATION_MIN_VOLUME_RATIO) {
     reasons.push(`Volume must reach ${SCALP_CONTINUATION_MIN_VOLUME_RATIO.toFixed(2)}× its recent average.`);
   }
@@ -300,7 +542,241 @@ export function evaluateScalpTrendContinuation(options: {
     || projectedRoePercent < SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT) {
     reasons.push(`Two ATRs must project at least ${SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT}% ROE at ${SCALP_TRADE_LEVERAGE}×.`);
   }
+  if (!points || !direction || !hasPullbackRetestResumption(points, direction, indicators)) {
+    reasons.push("A completed pullback, EMA retest, and directional resumption are required before continuation entry.");
+  }
   return { qualified: reasons.length === 0, reasons };
+}
+
+function hasPullbackRetestResumption(
+  points: PricePoint[],
+  direction: Direction,
+  indicators: IndicatorSnapshot,
+) {
+  if (points.length < 10 || indicators.emaFast === null) return false;
+  const recent = points.slice(-10);
+  const latest = recent.at(-1)!;
+  const previous = recent.at(-2)!;
+  const beforePrevious = recent.at(-3)!;
+  const structureWindow = recent.slice(0, -3);
+  const swingIndex = structureWindow.reduce((selected, point, index) => {
+    const candidate = direction === "bullish" ? candleHigh(point) : candleLow(point);
+    const current = direction === "bullish"
+      ? candleHigh(structureWindow[selected]!)
+      : candleLow(structureWindow[selected]!);
+    return direction === "bullish" ? candidate > current ? index : selected : candidate < current ? index : selected;
+  }, 0);
+  const pullbackWindow = structureWindow.slice(swingIndex + 1);
+  if (pullbackWindow.length < 2) return false;
+  const swingPrice = direction === "bullish"
+    ? candleHigh(structureWindow[swingIndex]!)
+    : candleLow(structureWindow[swingIndex]!);
+  const tolerancePercent = Math.max((indicators.atrPercent ?? 0) * 1.25, 0.08);
+  const tolerance = latest.v * tolerancePercent / 100;
+  const hadCounterCandle = pullbackWindow.some((point, index) => {
+    const prior = index === 0 ? structureWindow[swingIndex]! : pullbackWindow[index - 1]!;
+    return direction === "bullish" ? point.v < prior.v : point.v > prior.v;
+  });
+  const retestPrice = direction === "bullish"
+    ? Math.min(...pullbackWindow.map(candleLow))
+    : Math.max(...pullbackWindow.map(candleHigh));
+  const retestedEma = Math.abs(retestPrice - indicators.emaFast) <= tolerance * 2;
+  const pullbackPercent = swingPrice > 0
+    ? Math.abs(percent(retestPrice - swingPrice, swingPrice))
+    : 0;
+  const resumed = direction === "bullish"
+    ? latest.v > previous.v
+      && previous.v > beforePrevious.v
+      && latest.v > (latest.o ?? previous.v)
+      && latest.v > indicators.emaFast
+    : latest.v < previous.v
+      && previous.v < beforePrevious.v
+      && latest.v < (latest.o ?? previous.v)
+      && latest.v < indicators.emaFast;
+  return hadCounterCandle && retestedEma && pullbackPercent >= 0.03 && resumed;
+}
+
+function emptyStructuredEvaluation(reasons: string[]): ScalpStructuredEntryEvaluation {
+  return { qualified: false, direction: null, setupType: null, score: 0, tags: [], reasons };
+}
+
+function indicatorsAlign(indicators: IndicatorSnapshot, direction: Direction) {
+  const bullish = direction === "bullish";
+  return indicators.emaFast !== null
+    && indicators.emaSlow !== null
+    && (bullish ? indicators.emaFast > indicators.emaSlow : indicators.emaFast < indicators.emaSlow)
+    && indicators.emaSlopePercent !== null
+    && (bullish ? indicators.emaSlopePercent > 0 : indicators.emaSlopePercent < 0)
+    && indicators.plusDi !== null
+    && indicators.minusDi !== null
+    && (bullish ? indicators.plusDi > indicators.minusDi : indicators.minusDi > indicators.plusDi)
+    && indicators.macdLine !== null
+    && indicators.macdSignal !== null
+    && indicators.macdHistogram !== null
+    && indicators.macdHistogramChange !== null
+    && (bullish
+      ? indicators.macdLine > indicators.macdSignal
+        && indicators.macdHistogram > 0
+        && indicators.macdHistogramChange > 0
+      : indicators.macdLine < indicators.macdSignal
+        && indicators.macdHistogram < 0
+        && indicators.macdHistogramChange < 0);
+}
+
+export function evaluateScalpBreakoutRetest(options: {
+  points: PricePoint[];
+  indicators: IndicatorSnapshot;
+  regime?: ScalpMarketRegime;
+}): ScalpStructuredEntryEvaluation {
+  const { points, indicators } = options;
+  const regime = options.regime ?? classifyScalpMarketRegime(points);
+  if (points.length < 36) return emptyStructuredEvaluation(["At least 36 completed candles are required to validate a breakout and retest."]);
+  if (regime.exhausted) {
+    return emptyStructuredEvaluation([`The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`]);
+  }
+  if (indicators.atrPercent === null || indicators.atrPercent < SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT) {
+    return emptyStructuredEvaluation([`Breakout/retest ATR must reach ${SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT.toFixed(2)}% before live entry.`]);
+  }
+  const latestIndex = points.length - 1;
+  for (const direction of ["bullish", "bearish"] as const) {
+    if (regime.bias !== direction || !indicatorsAlign(indicators, direction)) continue;
+    for (let breakoutIndex = latestIndex - 8; breakoutIndex <= latestIndex - 3; breakoutIndex += 1) {
+      const reference = points.slice(Math.max(0, breakoutIndex - 20), breakoutIndex);
+      if (reference.length < 16) continue;
+      const level = direction === "bullish"
+        ? Math.max(...reference.map(candleHigh))
+        : Math.min(...reference.map(candleLow));
+      const breakout = points[breakoutIndex]!;
+      const breakoutDistance = level > 0 ? Math.abs(percent(breakout.v - level, level)) : 0;
+      const brokeLevel = direction === "bullish"
+        ? breakout.v > level && breakout.v > (breakout.o ?? level)
+        : breakout.v < level && breakout.v < (breakout.o ?? level);
+      if (!brokeLevel || breakoutDistance < 0.03) continue;
+      const breakoutIndicators = computeIndicatorSnapshot(points.slice(0, breakoutIndex + 1));
+      if (breakoutIndicators.volumeRatio === null || breakoutIndicators.volumeRatio < 1) continue;
+      const retestTolerance = level * Math.max(0.0006, (indicators.atrPercent ?? 0.08) / 100 * 0.8);
+      const retest = points.slice(breakoutIndex + 1, latestIndex).find((point) => direction === "bullish"
+        ? candleLow(point) <= level + retestTolerance && point.v >= level - retestTolerance * 0.25
+        : candleHigh(point) >= level - retestTolerance && point.v <= level + retestTolerance * 0.25);
+      if (!retest) continue;
+      const latest = points[latestIndex]!;
+      const previous = points[latestIndex - 1]!;
+      const resumed = direction === "bullish"
+        ? latest.v > previous.v && latest.v > (latest.o ?? previous.v) && latest.v > level
+        : latest.v < previous.v && latest.v < (latest.o ?? previous.v) && latest.v < level;
+      if (!resumed) continue;
+      const breakoutVolumeRatio = breakoutIndicators.volumeRatio;
+      const atrQuality = clamp(
+        (indicators.atrPercent - SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT) / 0.11,
+        0,
+        1
+      );
+      const distanceQuality = clamp((breakoutDistance - 0.03) / 0.15, 0, 1);
+      const volumeQuality = clamp((breakoutVolumeRatio - 0.75) / 0.75, 0, 1);
+      return {
+        qualified: true,
+        direction,
+        setupType: "v-reversal",
+        score: Number(clamp(
+          SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE
+            + atrQuality * 0.08
+            + distanceQuality * 0.04
+            + volumeQuality * 0.02,
+          SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
+          0.86
+        ).toFixed(3)),
+        tags: [
+          "PRICE_BREAKOUT",
+          "PRICE_BREAKOUT_RETEST",
+          "PRICE_BREAKOUT_RESUMPTION",
+          "INDICATORS_CONFIRMED_BREAKOUT_RETEST",
+          "BREAKOUT_ATR_CONFIRMED",
+        ],
+        reasons: [],
+      };
+    }
+  }
+  return emptyStructuredEvaluation(["Waiting for a completed breakout, retest of the broken level, and directional resumption."]);
+}
+
+export function evaluateScalpRangeReversal(options: {
+  points: PricePoint[];
+  indicators: IndicatorSnapshot;
+  profile: ScalpLearningProfile;
+  regime?: ScalpMarketRegime;
+}): ScalpStructuredEntryEvaluation {
+  const { points, indicators, profile } = options;
+  const regime = options.regime ?? classifyScalpMarketRegime(points);
+  if (points.length < 45) return emptyStructuredEvaluation(["At least 45 completed candles are required to validate a range reversal sequence."]);
+  if (regime.trending || regime.exhausted) {
+    return emptyStructuredEvaluation([regime.exhausted
+      ? `The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`
+      : `Multi-horizon EMA, ATR, and DMI classify the market as ${regime.bias}, not range-bound.`]);
+  }
+  const latestIndex = points.length - 1;
+  const latest = points[latestIndex]!;
+  const previous = points[latestIndex - 1]!;
+  for (const direction of ["bullish", "bearish"] as const) {
+    for (let extremeIndex = Math.max(35, latestIndex - 12); extremeIndex <= latestIndex - 3; extremeIndex += 1) {
+      const extremeIndicators = computeIndicatorSnapshot(points.slice(0, extremeIndex + 1));
+      const extremeReached = extremeIndicators.bollingerPosition !== null
+        && extremeIndicators.rsi !== null
+        && (direction === "bullish"
+          ? extremeIndicators.bollingerPosition <= profile.longBollingerMaximum
+            && extremeIndicators.rsi <= profile.longRsiMaximum
+          : extremeIndicators.bollingerPosition >= profile.shortBollingerMinimum
+            && extremeIndicators.rsi >= profile.shortRsiMinimum);
+      if (!extremeReached) continue;
+      const reentry = Array.from(
+        { length: latestIndex - extremeIndex - 1 },
+        (_, offset) => extremeIndex + offset + 1,
+      ).find((index) => {
+        const snapshot = computeIndicatorSnapshot(points.slice(0, index + 1));
+        return snapshot.bollingerPosition !== null && (direction === "bullish"
+          ? snapshot.bollingerPosition > profile.longBollingerMaximum + 0.03
+          : snapshot.bollingerPosition < profile.shortBollingerMinimum - 0.03);
+      });
+      if (reentry === undefined) continue;
+      const rsiTurned = indicators.rsi !== null && extremeIndicators.rsi !== null && (direction === "bullish"
+        ? indicators.rsi >= extremeIndicators.rsi + 3
+        : indicators.rsi <= extremeIndicators.rsi - 3);
+      const macdTurned = indicators.macdHistogram !== null
+        && indicators.macdHistogramChange !== null
+        && (direction === "bullish"
+          ? indicators.macdHistogram > 0 && indicators.macdHistogramChange > 0
+          : indicators.macdHistogram < 0 && indicators.macdHistogramChange < 0);
+      const confirmingCandle = direction === "bullish"
+        ? latest.v > previous.v && latest.v > (latest.o ?? previous.v)
+        : latest.v < previous.v && latest.v < (latest.o ?? previous.v);
+      const rangeIndicatorsReady = indicators.adx !== null
+        && indicators.adx <= profile.maximumAdx
+        && indicators.emaSpreadPercent !== null
+        && Math.abs(indicators.emaSpreadPercent) <= profile.maximumEmaSpreadPercent
+        && indicators.atrPercent !== null
+        && indicators.atrPercent >= profile.minimumAtrPercent
+        && indicators.bollingerBandwidthPercent !== null
+        && indicators.bollingerBandwidthPercent >= profile.minimumBandwidthPercent
+        && indicators.volumeRatio !== null
+        && indicators.volumeRatio >= profile.minimumVolumeRatio;
+      if (!rsiTurned || !macdTurned || !confirmingCandle || !rangeIndicatorsReady) continue;
+      return {
+        qualified: true,
+        direction,
+        setupType: "range-reversal",
+        score: 1,
+        tags: [
+          "SCALP_RANGE",
+          direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH",
+          "RANGE_EXTREME_OBSERVED",
+          "RANGE_BAND_REENTRY",
+          "RANGE_RSI_MACD_TURN",
+          "RANGE_CONFIRMING_CANDLE",
+        ],
+        reasons: [],
+      };
+    }
+  }
+  return emptyStructuredEvaluation(["Waiting for range extreme, band re-entry, RSI/MACD turn, and a confirming completed candle."]);
 }
 
 export function analyzeScalpPriceAction(
@@ -399,51 +875,55 @@ export function analyzeScalpPriceAction(
   };
 }
 
-export function detectAdaptiveScalpSignal(options: {
+export type AdaptiveScalpSignalOptions = {
   symbol: string;
   points: PricePoint[];
   indicators: IndicatorSnapshot;
   profile: ScalpLearningProfile;
   lastSignalAt?: number | null;
   recentClosedTrade?: RecentClosedScalpTrade | null;
-}): ScalpSignal | null {
+};
+
+export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptions): ScalpCandidateEvaluation {
   const { points, indicators, profile } = options;
   const latest = points[points.length - 1];
-  if (!latest || points.length < 3) return null;
+  const regime = classifyScalpMarketRegime(points);
+  if (!latest || points.length < 3) {
+    return {
+      signal: null,
+      candidate: {
+        path: "none",
+        direction: null,
+        score: 0,
+        accepted: false,
+        rejectionReasons: ["At least three completed candles are required to evaluate a scalp candidate."],
+        tags: [],
+        entryPrice: latest?.v ?? null,
+        timestamp: latest?.t ?? null,
+        regime,
+      },
+    };
+  }
 
   const priceAction = analyzeScalpPriceAction(points, profile);
   const previousPriceAction = analyzeScalpPriceAction(points.slice(0, -1), profile);
-  const trendBias = computeTrendBias(points);
-  const rangeLong = trendBias === "sideways"
-    && indicators.bollingerPosition !== null
-    && indicators.bollingerPosition <= profile.longBollingerMaximum
-    && indicators.rsi !== null
-    && indicators.rsi <= profile.longRsiMaximum;
-  const rangeShort = trendBias === "sideways"
-    && indicators.bollingerPosition !== null
-    && indicators.bollingerPosition >= profile.shortBollingerMinimum
-    && indicators.rsi !== null
-    && indicators.rsi >= profile.shortRsiMinimum;
-  const rangeDirection = rangeLong ? "bullish" as const : rangeShort ? "bearish" as const : null;
-  const rangeIndicatorsReady = indicators.adx !== null
-    && indicators.adx <= profile.maximumAdx
-    && indicators.emaSpreadPercent !== null
-    && Math.abs(indicators.emaSpreadPercent) <= profile.maximumEmaSpreadPercent
-    && indicators.atrPercent !== null
-    && indicators.atrPercent >= profile.minimumAtrPercent
-    && indicators.bollingerBandwidthPercent !== null
-    && indicators.bollingerBandwidthPercent >= profile.minimumBandwidthPercent
-    && (indicators.volumeRatio === null || indicators.volumeRatio >= profile.minimumVolumeRatio);
+  const trendBias = regime.bias;
+  const breakoutRetest = evaluateScalpBreakoutRetest({ points, indicators, regime });
+  const rangeReversal = evaluateScalpRangeReversal({ points, indicators, profile, regime });
 
   const exceptionalReversalCandidate = priceAction.direction !== null
     && priceAction.confirmed
     && priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE;
-  const trendContinuation = evaluateScalpTrendContinuation({
+  const continuationEvaluation = evaluateScalpTrendContinuation({
     priceAction,
+    previousPriceAction,
+    points,
     trendBias,
     indicators,
     profile,
-  }).qualified;
+    regime,
+  });
+  const trendContinuation = continuationEvaluation.qualified;
   const reversalSafety = evaluateScalpReversalSafety({
     priceAction,
     previousPriceAction,
@@ -452,10 +932,12 @@ export function detectAdaptiveScalpSignal(options: {
   });
   const exceptionalReversal = SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED
     && exceptionalReversalCandidate
+    && !regime.exhausted
     && reversalSafety.qualified;
   const reversalIndicatorsReady = priceAction.direction !== null
     && priceAction.confirmed
     && reversalSafety.qualified
+    && !regime.exhausted
     && indicators.adx !== null
     && indicators.adx <= SCALP_REVERSAL_MAX_ADX
     && indicators.emaSpreadPercent !== null
@@ -464,11 +946,75 @@ export function detectAdaptiveScalpSignal(options: {
     && (priceAction.direction === "bullish" ? indicators.rsi <= 62 : indicators.rsi >= 38);
   const strongReversal = !trendContinuation && priceAction.strong && reversalIndicatorsReady;
   const moderateReversal = !trendContinuation && !priceAction.strong && reversalIndicatorsReady;
-  const direction = exceptionalReversal || trendContinuation || strongReversal || moderateReversal
-    ? priceAction.direction
-    : rangeIndicatorsReady ? rangeDirection : null;
-  if (!direction) return null;
-  if (profile.preferredDirection !== "balanced" && direction !== profile.preferredDirection) return null;
+  const direction = breakoutRetest.qualified
+    ? breakoutRetest.direction
+    : exceptionalReversal || trendContinuation || strongReversal || moderateReversal
+      ? priceAction.direction
+      : rangeReversal.qualified ? rangeReversal.direction : null;
+  const inferredRangeDirection = indicators.bollingerPosition !== null
+    ? indicators.bollingerPosition <= profile.longBollingerMaximum
+      ? "bullish" as const
+      : indicators.bollingerPosition >= profile.shortBollingerMinimum
+        ? "bearish" as const
+        : null
+    : null;
+  const diagnosticDirection = direction ?? priceAction.direction ?? inferredRangeDirection;
+  const diagnosticPath: ScalpCandidatePath = breakoutRetest.qualified
+    ? "breakout-retest"
+    : trendContinuation
+      ? "continuation"
+      : exceptionalReversal || strongReversal || moderateReversal || priceAction.direction !== null
+        ? regime.bias === priceAction.direction ? "continuation" : "reversal"
+        : inferredRangeDirection !== null ? "range-reversal" : "none";
+  const diagnosticScore = breakoutRetest.qualified
+    ? breakoutRetest.score
+    : rangeReversal.qualified
+      ? rangeReversal.score
+      : priceAction.score;
+  const diagnosticTags = breakoutRetest.qualified
+    ? breakoutRetest.tags
+    : rangeReversal.qualified
+      ? rangeReversal.tags
+      : priceAction.tags;
+  const reject = (rejectionReasons: string[]): ScalpCandidateEvaluation => ({
+    signal: null,
+    candidate: {
+      path: diagnosticPath,
+      direction: diagnosticDirection,
+      score: diagnosticScore,
+      accepted: false,
+      rejectionReasons: [...new Set(rejectionReasons)].slice(0, 12),
+      tags: diagnosticTags,
+      entryPrice: latest.v,
+      timestamp: latest.t,
+      regime,
+    },
+  });
+  if (!direction) {
+    const rejectionReasons = diagnosticPath === "continuation"
+      ? continuationEvaluation.reasons
+      : diagnosticPath === "reversal"
+        ? reversalSafety.reasons
+        : diagnosticPath === "range-reversal"
+          ? rangeReversal.reasons
+          : [...breakoutRetest.reasons, ...rangeReversal.reasons];
+    return reject(rejectionReasons.length > 0 ? rejectionReasons : ["No complete scalp entry path qualified."]);
+  }
+  const qualifiedPath: ScalpCandidatePath = breakoutRetest.qualified
+    ? "breakout-retest"
+    : trendContinuation
+      ? "continuation"
+      : rangeReversal.qualified
+        ? "range-reversal"
+        : "reversal";
+  if (!scalpCandidatePathAllowsLiveSignal(qualifiedPath)) {
+    return reject([
+      `${qualifiedPath} is shadow-only until path-specific after-fee validation passes.`,
+    ]);
+  }
+  if (profile.preferredDirection !== "balanced" && direction !== profile.preferredDirection) {
+    return reject([`The learned profile currently permits ${profile.preferredDirection} entries only.`]);
+  }
 
   if (options.lastSignalAt && latest.t - options.lastSignalAt < profile.cooldownSeconds * 1_000) {
     const recentTrade = options.recentClosedTrade;
@@ -487,13 +1033,19 @@ export function detectAdaptiveScalpSignal(options: {
       && direction !== previousDirection
       && latest.t - recentTrade.closedAt >= SCALP_PROFIT_COOLDOWN_SECONDS * 1_000
     );
-    if (!profitableOppositeReversalReady) return null;
+    if (!profitableOppositeReversalReady) return reject(["The qualifying setup remains inside the independent scalp cooldown."]);
   }
 
-  const structuredPriceAction = exceptionalReversal || trendContinuation || strongReversal || moderateReversal;
-  const setupType = structuredPriceAction
-    ? priceAction.setupType!
-    : "range-reversal";
+  const structuredPriceAction = breakoutRetest.qualified
+    || exceptionalReversal
+    || trendContinuation
+    || strongReversal
+    || moderateReversal;
+  const setupType = breakoutRetest.qualified
+    ? breakoutRetest.setupType!
+    : exceptionalReversal || trendContinuation || strongReversal || moderateReversal
+      ? priceAction.setupType!
+      : "range-reversal";
   const setupAdjustment = setupType === "range-reversal"
     ? profile.setupConfidenceAdjustments.rangeReversal
     : setupType === "liquidity-sweep"
@@ -501,19 +1053,24 @@ export function detectAdaptiveScalpSignal(options: {
       : setupType === "v-reversal"
         ? profile.setupConfidenceAdjustments.vReversal
         : profile.setupConfidenceAdjustments.doubleReversal;
-  const requiredConfidence = clamp(profile.minimumConfidence + setupAdjustment, 0.55, 0.9);
-  const rangeExtremity = direction === "bullish"
-    ? clamp((profile.longBollingerMaximum - (indicators.bollingerPosition ?? profile.longBollingerMaximum)) / 0.3, 0, 1)
-    : clamp(((indicators.bollingerPosition ?? profile.shortBollingerMinimum) - profile.shortBollingerMinimum) / 0.3, 0, 1);
-  const rawConfidence = trendContinuation
-    ? 0.7 + priceAction.score * 0.25
-    : exceptionalReversal || strongReversal || moderateReversal
+  const requiredConfidence = breakoutRetest.qualified
+    ? SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE
+    : clamp(profile.minimumConfidence + setupAdjustment, 0.55, 0.9);
+  const rawConfidence = breakoutRetest.qualified
+    ? breakoutRetest.score
+    : trendContinuation
+      ? 0.72 + priceAction.score * 0.2
+      : exceptionalReversal || strongReversal || moderateReversal
       ? 0.55 + priceAction.score * 0.35
-      : 0.6 + rangeExtremity * 0.22;
-  if (rawConfidence < requiredConfidence) return null;
+      : 0.82;
+  if (rawConfidence < requiredConfidence) {
+    return reject([`Raw confidence ${rawConfidence.toFixed(3)} is below the required ${requiredConfidence.toFixed(3)}.`]);
+  }
   const confidence = clamp(rawConfidence, 0, structuredPriceAction ? 0.9 : 0.82);
-  const tags = structuredPriceAction
-    ? [
+  const tags = breakoutRetest.qualified
+    ? [...breakoutRetest.tags, "SCALP_EXHAUSTION_GUARD_PASSED"]
+    : structuredPriceAction
+      ? [
         ...priceAction.tags,
         exceptionalReversal
           ? "EXCEPTIONAL_CONFIRMED_PRICE_ACTION"
@@ -522,24 +1079,58 @@ export function detectAdaptiveScalpSignal(options: {
             : strongReversal
               ? "INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"
               : "INDICATORS_CONFIRMED_PRICE_ACTION",
+        ...(trendContinuation
+          ? [
+              "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+              "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
+              "CONTINUATION_MACD_CONFIRMED",
+            ]
+          : ["REVERSAL_TWO_CANDLE_CONFIRMATION"]),
+        "SCALP_EXHAUSTION_GUARD_PASSED",
       ]
-    : ["SCALP_RANGE", direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH"];
+      : [...rangeReversal.tags, "SCALP_EXHAUSTION_GUARD_PASSED"];
 
-  return {
+  const signal: ScalpSignal = {
     id: `${options.symbol}-scalp-${latest.t}`,
     symbol: options.symbol,
     type: "scalp",
     direction,
     confidence: Number(confidence.toFixed(3)),
     summary: setupType === "range-reversal"
-      ? `${direction === "bullish" ? "Range-low" : "Range-high"} scalp setup with adaptive indicator confirmation.`
-      : trendContinuation
+      ? `${direction === "bullish" ? "Range-low" : "Range-high"} scalp setup confirmed after band re-entry and momentum turn.`
+      : breakoutRetest.qualified
+        ? `${direction === "bullish" ? "Bullish" : "Bearish"} breakout retest resumed with multi-horizon trend confirmation.`
+        : trendContinuation
         ? `${direction === "bullish" ? "Bullish" : "Bearish"} momentum continuation confirmed by price action, trend, and volume.`
       : `${direction === "bullish" ? "Bullish" : "Bearish"} ${setupType.replace(/-/g, " ")} detected from real-time candle structure.`,
     timestamp: latest.t,
     setupType,
-    priceActionScore: setupType === "range-reversal" ? Number((0.55 + rangeExtremity * 0.2).toFixed(3)) : priceAction.score,
+    priceActionScore: breakoutRetest.qualified
+      ? breakoutRetest.score
+      : setupType === "range-reversal" ? rangeReversal.score : priceAction.score,
     priceActionTags: tags,
     indicatorBypass: exceptionalReversal,
   };
+  return {
+    signal,
+    candidate: {
+      path: breakoutRetest.qualified
+        ? "breakout-retest"
+        : trendContinuation
+          ? "continuation"
+          : setupType === "range-reversal" ? "range-reversal" : "reversal",
+      direction,
+      score: signal.priceActionScore,
+      accepted: true,
+      rejectionReasons: [],
+      tags,
+      entryPrice: latest.v,
+      timestamp: latest.t,
+      regime,
+    },
+  };
+}
+
+export function detectAdaptiveScalpSignal(options: AdaptiveScalpSignalOptions): ScalpSignal | null {
+  return evaluateAdaptiveScalpCandidate(options).signal;
 }
