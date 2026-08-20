@@ -237,9 +237,14 @@ type LivePerpsTradeResponse = {
 const JUPITER_PERPS_API_BASE = "https://perps-api.jup.ag/v1";
 const JUPITER_EXCHANGE_PLATFORM = "jupiter-exchange";
 const JUPITER_PERPS_PROGRAM_ID = new PublicKey("PERPHjGBqRHArX4DySjwM6UJHiR3sWAatqfdBS2qQJu");
-const POSITION_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0xa2, 0xbf, 0x9c, 0x22, 0x97, 0x83, 0x41, 0x8c]);
+// Anchor derives this from sha256("account:Position"). Jupiter Position PDAs
+// remain allocated after a full close and are reused for a later position, so
+// a valid zero-sized Position must be classified as closed rather than treated
+// as an unknown owner-scoped account.
+const POSITION_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0xaa, 0xbc, 0x8f, 0xe4, 0x7a, 0x40, 0xf7, 0xd0]);
 const INSTANT_TPSL_ACCOUNT_DISCRIMINATOR = Uint8Array.from([0x0c, 0x26, 0xfa, 0xc7, 0x2e, 0x9a, 0x20, 0xd8]);
 const USDC_DECIMALS = 6;
+const POSITION_ACCOUNT_BYTES = 216;
 const POSITION_REQUEST_MIN_BYTES = 8 + 32 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 8 + 8 + 8 + 1 + 1 + 1 + 8 + 1;
 const MIN_PLAUSIBLE_UNIX_SECONDS = 1577836800n;
 const MAX_PLAUSIBLE_UNIX_SECONDS = 4102444800n;
@@ -472,15 +477,28 @@ async function enrichPositionsWithLiveMetrics(positions: JupiterPerpsPosition[])
   });
 }
 
-function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPerpsPosition | null {
-  if (bytes.length < 8 + 32 + 32 + 32 + 32 + 8 + 8 + 1 + 8 + 8 + 8 + 8 + 16 + 8 + 1) {
-    throw new Error(`Jupiter Perps position account ${accountRef} is smaller than expected.`);
+type DecodedPositionAccount =
+  | { kind: "not-position" }
+  | { kind: "closed"; accountRef: string }
+  | { kind: "open"; position: JupiterPerpsPosition };
+
+function decodePositionAccount(
+  accountRef: string,
+  bytes: Uint8Array,
+  expectedOwner: PublicKey
+): DecodedPositionAccount {
+  if (!hasDiscriminator(bytes, POSITION_ACCOUNT_DISCRIMINATOR)) {
+    return { kind: "not-position" };
+  }
+  if (bytes.length !== POSITION_ACCOUNT_BYTES) {
+    throw new Error(
+      `Jupiter Perps position account ${accountRef} uses an unverified ${bytes.length}-byte layout; expected ${POSITION_ACCOUNT_BYTES}.`
+    );
   }
 
-  // This layout follows Jupiter's published Position account fields in order.
-  // We validate the documented field sequence directly instead of trusting a
-  // single account discriminator, because Jupiter's Perps account headers are
-  // still evolving and exact discriminator matching has not been reliable.
+  // This layout follows Jupiter's published Position fields in order. Require
+  // both the current account discriminator and the exact owner expected by the
+  // owner-scoped scan before treating the account as a known Position PDA.
 
   let offset = 8;
   const owner = readPublicKey(bytes, offset);
@@ -512,16 +530,27 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
   const bump = bytes[offset];
 
   if (
-    sideDiscriminant === 0 ||
-    sizeUsd === 0n ||
-    owner.equals(PublicKey.default) ||
+    (sideDiscriminant !== 1 && sideDiscriminant !== 2) ||
+    !owner.equals(expectedOwner) ||
     pool.equals(PublicKey.default) ||
     custody.equals(PublicKey.default) ||
     collateralCustody.equals(PublicKey.default) ||
+    price === 0n ||
     !isPlausibleUnixSeconds(openTime) ||
     !isPlausibleUnixSeconds(updateTime)
   ) {
-    return null;
+    throw new Error(`Jupiter Perps position account ${accountRef} failed documented layout validation.`);
+  }
+
+  if (sizeUsd === 0n) {
+    // Jupiter documents sizeUsd=0 as a closed Position and says realized PnL
+    // resets to zero on a full close. Require every verified closed-state field
+    // to be zero before this durable PDA counts as non-open. Any residual fails
+    // closed.
+    if (collateralUsd !== 0n || realisedPnlUsd !== 0n || lockedAmount !== 0n) {
+      throw new Error(`Closed Jupiter Perps position account ${accountRef} retains nonzero closed-state fields.`);
+    }
+    return { kind: "closed", accountRef };
   }
 
   const market = JUPITER_CUSTODY_MARKETS.get(custody.toBase58());
@@ -533,34 +562,37 @@ function decodePositionAccount(accountRef: string, bytes: Uint8Array): JupiterPe
   const positionSize = entryPrice > 0 ? positionValue / entryPrice : null;
 
   return {
-    id: accountRef,
-    source: "rpc-direct",
-    platformId: JUPITER_EXCHANGE_PLATFORM,
-    marketSymbol: market?.symbol ?? `${custody.toBase58().slice(0, 4)}...${custody.toBase58().slice(-4)}`,
-    marketName: market?.marketName ?? "Jupiter Perps position",
-    marketAddress: market?.marketAddress ?? custody.toBase58(),
-    custodyAddress: custody.toBase58(),
-    collateralCustodyAddress: collateralCustody.toBase58(),
-    collateralSymbol,
-    imageUri: null,
-    side: sideDiscriminant === 2 ? "short" : "long",
-    entryPrice,
-    markPrice: null,
-    positionSize,
-    positionValue,
-    collateralValue,
-    leverage,
-    unrealizedPnl: null,
-    realizedPnl: signedAtomicUsdToNumber(realisedPnlUsd),
-    liquidationPrice: null,
-    fundingSnapshot: null,
-    borrowSnapshot: `Interest snapshot ${cumulativeInterestSnapshot.toString()} via ${collateralSymbol}`,
-    takeProfit: null,
-    stopLoss: null,
-    markPriceIsLive: false,
-    liquidationPriceIsEstimated: false,
-    accountRef,
-    lastUpdated: Number(updateTime) * 1000,
+    kind: "open",
+    position: {
+      id: accountRef,
+      source: "rpc-direct",
+      platformId: JUPITER_EXCHANGE_PLATFORM,
+      marketSymbol: market?.symbol ?? `${custody.toBase58().slice(0, 4)}...${custody.toBase58().slice(-4)}`,
+      marketName: market?.marketName ?? "Jupiter Perps position",
+      marketAddress: market?.marketAddress ?? custody.toBase58(),
+      custodyAddress: custody.toBase58(),
+      collateralCustodyAddress: collateralCustody.toBase58(),
+      collateralSymbol,
+      imageUri: null,
+      side: sideDiscriminant === 2 ? "short" : "long",
+      entryPrice,
+      markPrice: null,
+      positionSize,
+      positionValue,
+      collateralValue,
+      leverage,
+      unrealizedPnl: null,
+      realizedPnl: signedAtomicUsdToNumber(realisedPnlUsd),
+      liquidationPrice: null,
+      fundingSnapshot: null,
+      borrowSnapshot: `Interest snapshot ${cumulativeInterestSnapshot.toString()} via ${collateralSymbol}`,
+      takeProfit: null,
+      stopLoss: null,
+      markPriceIsLive: false,
+      liquidationPriceIsEstimated: false,
+      accountRef,
+      lastUpdated: Number(updateTime) * 1000,
+    },
   };
 }
 
@@ -1148,6 +1180,89 @@ function applyPendingTriggersToPositions(
   });
 }
 
+export type JupiterRpcOwnerAccount = {
+  accountRef: string;
+  data: Uint8Array;
+};
+
+/**
+ * Classifies the complete owner-scoped Jupiter account inventory. Closed
+ * Position PDAs are retained as explicit classifications, while malformed or
+ * unknown accounts remain unclassified and therefore preserve fail-closed
+ * admission behavior.
+ */
+export function classifyJupiterRpcOwnerAccounts(
+  walletAddress: string,
+  ownerScopedAccounts: JupiterRpcOwnerAccount[]
+) {
+  const owner = new PublicKey(walletAddress);
+  const decodeFailureAccountRefs = new Set<string>();
+  const closedPositionAccountRefs = new Set<string>();
+  const decodedPositionAccounts = ownerScopedAccounts.map(({ accountRef, data }) => {
+    try {
+      const decoded = decodePositionAccount(accountRef, data, owner);
+      if (decoded.kind === "closed") closedPositionAccountRefs.add(accountRef);
+      return decoded;
+    } catch {
+      decodeFailureAccountRefs.add(accountRef);
+      return { kind: "not-position" } as const;
+    }
+  });
+  const positions = decodedPositionAccounts.flatMap((decoded) => (
+    decoded.kind === "open" ? [decoded.position] : []
+  ));
+
+  const positionsByAccountRef = new Map(
+    positions
+      .filter((position) => typeof position.accountRef === "string" && position.accountRef.length > 0)
+      .map((position) => [position.accountRef as string, position])
+  );
+
+  const pendingTriggers = ownerScopedAccounts
+    .map(({ accountRef, data }) => {
+      try {
+        return (
+          decodeInstantTpslAccount(accountRef, data, positionsByAccountRef) ??
+          decodePositionRequestAccount(accountRef, data)
+        );
+      } catch {
+        decodeFailureAccountRefs.add(accountRef);
+        return null;
+      }
+    })
+    .filter((trigger): trigger is JupiterPerpsPendingTrigger => trigger !== null);
+
+  const classifiedAccountRefs = new Set([
+    ...positions.flatMap((position) => position.accountRef ? [position.accountRef] : []),
+    ...closedPositionAccountRefs,
+    ...pendingTriggers.map((trigger) => trigger.accountRef),
+  ]);
+  const unclassifiedAccountCount = ownerScopedAccounts.filter(({ accountRef }) => (
+    !classifiedAccountRefs.has(accountRef)
+  )).length;
+
+  assertCompleteJupiterRpcOwnerAccountClassification({
+    ownerAccountCount: ownerScopedAccounts.length,
+    positionCount: positions.length,
+    pendingTriggerCount: pendingTriggers.length,
+    unclassifiedAccountCount,
+  });
+
+  return {
+    positions: applyPendingTriggersToPositions(positions, pendingTriggers),
+    pendingTriggers,
+    closedPositionAccountRefs: [...closedPositionAccountRefs],
+    decodeFailureCount: decodeFailureAccountRefs.size,
+    unclassifiedAccountCount,
+    authoritativePositionAbsence: isAuthoritativeJupiterRpcPositionAbsence({
+      positionCount: positions.length,
+      pendingTriggerCount: pendingTriggers.length,
+      decodeFailureCount: decodeFailureAccountRefs.size,
+      unclassifiedAccountCount,
+    }),
+  };
+}
+
 export async function fetchJupiterPerpsAccountSnapshot(
   walletAddress: string,
   options: { includeRecentTrades?: boolean } = {}
@@ -1234,67 +1349,22 @@ export async function fetchJupiterPerpsAccountSnapshotFromRpc(walletAddress: str
       },
     ],
   });
-
-  const decodeFailureAccountRefs = new Set<string>();
-  const positions = ownerScopedAccounts
-    .map(({ pubkey, account }) => {
-      try {
-        return decodePositionAccount(pubkey.toBase58(), account.data);
-      } catch {
-        decodeFailureAccountRefs.add(pubkey.toBase58());
-        return null;
-      }
-    })
-    .filter((position): position is JupiterPerpsPosition => position !== null);
-
-  const positionsByAccountRef = new Map(
-    positions
-      .filter((position) => typeof position.accountRef === "string" && position.accountRef.length > 0)
-      .map((position) => [position.accountRef as string, position])
+  const classified = classifyJupiterRpcOwnerAccounts(
+    walletAddress,
+    ownerScopedAccounts.map(({ pubkey, account }) => ({
+      accountRef: pubkey.toBase58(),
+      data: account.data,
+    }))
   );
 
-  const pendingTriggers = ownerScopedAccounts
-    .map(({ pubkey, account }) => {
-      try {
-        return (
-          decodeInstantTpslAccount(pubkey.toBase58(), account.data, positionsByAccountRef) ??
-          decodePositionRequestAccount(pubkey.toBase58(), account.data)
-        );
-      } catch {
-        decodeFailureAccountRefs.add(pubkey.toBase58());
-        return null;
-      }
-    })
-    .filter((trigger): trigger is JupiterPerpsPendingTrigger => trigger !== null);
-
-  const classifiedAccountRefs = new Set([
-    ...positions.flatMap((position) => position.accountRef ? [position.accountRef] : []),
-    ...pendingTriggers.map((trigger) => trigger.accountRef),
-  ]);
-  const unclassifiedAccountCount = ownerScopedAccounts.filter(({ pubkey }) => (
-    !classifiedAccountRefs.has(pubkey.toBase58())
-  )).length;
-
-  assertCompleteJupiterRpcOwnerAccountClassification({
-    ownerAccountCount: ownerScopedAccounts.length,
-    positionCount: positions.length,
-    pendingTriggerCount: pendingTriggers.length,
-    unclassifiedAccountCount,
-  });
-
   return {
-    positions: applyPendingTriggersToPositions(positions, pendingTriggers),
-    pendingTriggers,
+    positions: classified.positions,
+    pendingTriggers: classified.pendingTriggers,
     recentTrades: [],
     readEvidence: {
       liveApiSucceeded: false,
       rpcSucceeded: true,
-      authoritativePositionAbsence: isAuthoritativeJupiterRpcPositionAbsence({
-        positionCount: positions.length,
-        pendingTriggerCount: pendingTriggers.length,
-        decodeFailureCount: decodeFailureAccountRefs.size,
-        unclassifiedAccountCount,
-      }),
+      authoritativePositionAbsence: classified.authoritativePositionAbsence,
     },
   };
 }
