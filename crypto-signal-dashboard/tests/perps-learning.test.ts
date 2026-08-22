@@ -131,7 +131,7 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.deepEqual(refreshed.profile.assetAdjustments, legacyProfile.assetAdjustments);
   assert.equal(refreshed.profile.scalpProfile?.policyVersion, 8);
   assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.77);
-  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 2_550);
+  assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 1_200);
   assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.58);
   assert.equal(refreshed.profile.scalpProfile?.strongReversalScore, 0.856);
   assert.equal(refreshed.profile.scalpProfile?.longRsiMaximum, 40.62);
@@ -305,7 +305,7 @@ test("operator activation re-enables a conservative winner-derived scalp baselin
   assert.equal(profile.validation.passed, true);
   assert.equal(profile.operatorActivation?.historicalValidationPassed, true);
   assert.equal(profile.riskMultiplier, 0.5);
-  assert.equal(profile.cooldownSeconds, 3_600);
+  assert.equal(profile.cooldownSeconds, 1_200);
   assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(profile), true);
   assert.match(profile.validation.reasons[0] ?? "", /operator activated/i);
 });
@@ -564,7 +564,7 @@ test("scalp learning waits for five closed trades while Smart learning remains i
   assert.equal(afterScalpBatch.incremental, true);
   assert.ok((afterScalpBatch.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
   assert.ok((afterScalpBatch.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
-  assert.ok((afterScalpBatch.profile.scalpProfile?.cooldownSeconds ?? 0) >= 1_500);
+  assert.equal(afterScalpBatch.profile.scalpProfile?.cooldownSeconds, 1_200);
   assert.equal(afterScalpBatch.profile.scalpProfile?.learnedFromClosedTrades, 5);
 
   const scalpSnapshot = structuredClone(afterScalpBatch.profile.scalpProfile);

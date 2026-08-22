@@ -172,7 +172,7 @@ export function createProfitableScalpBaseline(
   baseline.policyOutcomeOffset = ordered.length;
   baseline.learnedFromClosedTrades = ordered.length;
   baseline.riskMultiplier = 0.5;
-  baseline.cooldownSeconds = 3_600;
+  baseline.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
   baseline.policyRollout = null;
 
   if (winners.length < MIN_PROFITABLE_BASELINE_TRADES) {
@@ -295,6 +295,7 @@ export function updateScalpLearningProfile(
     return createAuditedScalpBaseline(ordered);
   }
   const profile = structuredClone(current);
+  profile.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
   const rolloutStartedAt = profile.policyRollout
     ? Date.parse(profile.policyRollout.startedAt)
     : Number.NaN;
@@ -334,11 +335,6 @@ export function updateScalpLearningProfile(
       profile.minimumConfidence = clamp(profile.minimumConfidence - 0.002, 0.58, 0.78);
       profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore - 0.002, 0.52, 0.76);
       profile.riskMultiplier = clamp(profile.riskMultiplier + 0.01, 0.5, 1);
-      profile.cooldownSeconds = Math.round(clamp(
-        profile.cooldownSeconds - 15,
-        SCALP_STANDARD_COOLDOWN_SECONDS,
-        3_600
-      ));
       if (setupKey) {
         profile.setupConfidenceAdjustments[setupKey] = clamp(
           profile.setupConfidenceAdjustments[setupKey] - 0.004,
@@ -364,11 +360,6 @@ export function updateScalpLearningProfile(
       profile.minimumPriceActionScore = clamp(profile.minimumPriceActionScore + 0.01, 0.52, 0.8);
       profile.strongReversalScore = clamp(profile.strongReversalScore + 0.004, 0.68, 0.9);
       profile.riskMultiplier = clamp(profile.riskMultiplier - 0.05, 0.5, 1);
-      profile.cooldownSeconds = Math.round(clamp(
-        profile.cooldownSeconds + 60,
-        SCALP_STANDARD_COOLDOWN_SECONDS,
-        4_800
-      ));
       if (setupKey) {
         profile.setupConfidenceAdjustments[setupKey] = clamp(
           profile.setupConfidenceAdjustments[setupKey] + 0.015,

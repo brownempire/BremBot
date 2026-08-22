@@ -119,6 +119,11 @@ const PENDING_SCALP_REVERSAL_KEY = "brembot:perps:automation:pending-scalp-rever
 const MONITOR_LOCK_TTL_MS = 3 * 60_000;
 const PENDING_SCALP_REVERSAL_TTL_MS = 3 * 60_000;
 const MIN_PERPS_COLLATERAL_USD = 10;
+// Preserve the operator-established low-balance order: when the agent wallet
+// can fund one isolated Jupiter-compatible trade but percentage sizing would
+// fall below the venue minimum, route exactly $12 instead of silently idling.
+const LOW_BALANCE_TRADE_USD = 12;
+const LOW_BALANCE_TRADE_MAX_USDC = 50;
 const SCALP_CIRCUIT_OUTCOME_REPLAY_LIMIT = 1_000;
 const PROFIT_LOCK_STOP_CLAIM_TTL_MS = 7 * 24 * 60 * 60_000;
 const localProfitLockClaims = new Map<string, string>();
@@ -939,7 +944,14 @@ function getCollateralPercent(config: PerpsAutomationConfig, availableUsdc: numb
 }
 
 export function resolveAutonomousCollateralUsd(availableUsdc: number, collateralPercent: number) {
-  return Number((availableUsdc * collateralPercent / 100).toFixed(6));
+  const configuredCollateralUsd = Number((availableUsdc * collateralPercent / 100).toFixed(6));
+  if (availableUsdc < LOW_BALANCE_TRADE_USD) {
+    return Math.min(configuredCollateralUsd, MIN_PERPS_COLLATERAL_USD - 0.000001);
+  }
+  if (availableUsdc < LOW_BALANCE_TRADE_MAX_USDC) {
+    return LOW_BALANCE_TRADE_USD;
+  }
+  return configuredCollateralUsd;
 }
 
 function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: AutonomousSignal, availableUsdc: number) {
@@ -1942,7 +1954,6 @@ export async function runAutonomousPerpsMonitor(
           scalpCandidateRecord,
           `The learned risk allocation produced $${collateralUsd.toFixed(2)}, below Jupiter's $${MIN_PERPS_COLLATERAL_USD.toFixed(2)} minimum.`
         );
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(
           config,
           asset,

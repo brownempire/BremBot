@@ -12,7 +12,7 @@ import {
 // Policy v8 only routes completed, structurally confirmed entries. The lower
 // learned score remains useful for chart watching, while live continuations
 // require the independent 0.72 floor and the safeguards below.
-export const SCALP_STANDARD_COOLDOWN_SECONDS = 42.5 * 60;
+export const SCALP_STANDARD_COOLDOWN_SECONDS = 20 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
 export const SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED: boolean = false;
@@ -368,9 +368,14 @@ function doubleReversal(points: PricePoint[], direction: "bullish" | "bearish") 
 }
 
 export function getScalpLearningProfile(profile: DecisionLearningProfile | null): ScalpLearningProfile {
-  return profile?.scalpProfile
+  const scalpProfile = profile?.scalpProfile
     ? structuredClone(profile.scalpProfile)
     : structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  // The operator-selected live cooldown is fixed at 20 minutes. Normalize
+  // persisted pre-change v8 profiles immediately so deployment does not wait
+  // for another learning batch or policy migration to take effect.
+  scalpProfile.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
+  return scalpProfile;
 }
 
 export function scalpProfileAllowsLiveEntries(profile: ScalpLearningProfile) {

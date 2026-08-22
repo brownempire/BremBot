@@ -42,7 +42,7 @@ function continuationPayload(overrides: Partial<TradeDecisionPayload> = {}): Tra
       trendWindow: 145,
       trendThreshold: 0,
       breakoutPercent: 0,
-      cooldownSeconds: 2_550,
+      cooldownSeconds: 1_200,
       trendStrengthPercent: 0.4,
       breakoutStrengthPercent: 0.2,
       atrPercent: 0.15,

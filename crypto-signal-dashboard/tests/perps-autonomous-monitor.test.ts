@@ -252,12 +252,12 @@ test("scalp detection does not enter from a one-candle range edge without the fu
   assert.equal(signal, null);
 });
 
-test("scalp detection uses an independent 42.5-minute cooldown", () => {
+test("scalp detection uses an independent 20-minute cooldown", () => {
   const points = qualifyingRangePoints();
   const indicators = computeIndicatorSnapshot(points);
   const latestTimestamp = points[points.length - 1]!.t;
 
-  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 2_550);
+  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 1_200);
   assert.equal(detectScalpSignal({
     symbol: "SOL/USD",
     points,
@@ -550,12 +550,12 @@ test("scalp planning uses the configured 50 percent base allocation with a 20x s
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
-test("low-balance collateral preserves the learned allocation instead of forcing a $12 trade", () => {
+test("low-balance collateral restores the isolated $12 order from $12 up to but not including $50", () => {
   assert.equal(resolveAutonomousCollateralUsd(11.99, 20), 2.398);
-  assert.equal(resolveAutonomousCollateralUsd(11.99, 100), 11.99);
-  assert.equal(resolveAutonomousCollateralUsd(12, 20), 2.4);
-  assert.equal(resolveAutonomousCollateralUsd(25, 20), 5);
-  assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 9.998);
+  assert.equal(resolveAutonomousCollateralUsd(11.99, 100), 9.999999);
+  assert.equal(resolveAutonomousCollateralUsd(12, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(25, 20), 12);
+  assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 12);
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
 });
 
@@ -3050,7 +3050,7 @@ test("monitor fails closed before scanning when scalp protection recovery cannot
   assert.equal(snapshotReads, 0);
 });
 
-test("server monitor skips a low-balance allocation that is below Jupiter's minimum", async () => {
+test("server monitor routes the established $12 low-balance order", async () => {
   let routedSignal: PerpsAgentSignal | null = null;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
@@ -3076,9 +3076,9 @@ test("server monitor skips a low-balance allocation that is below Jupiter's mini
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "skipped");
-  assert.equal(result.results[0]?.code, "COLLATERAL_BELOW_MINIMUM");
-  assert.equal(routedSignal, null);
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.collateralUsd, 12);
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.marketContext?.availableUsdc, 20);
 });
 
 test("smart monitoring applies adaptive leverage and real 25% TP / 25% SL", async () => {
@@ -3637,7 +3637,7 @@ test("server monitor skips allocations below Jupiter's collateral minimum", asyn
 
   assert.equal(routeCalls, 0);
   assert.equal(result.results[0]?.code, "COLLATERAL_BELOW_MINIMUM");
-  assert.equal(savedCursor, points[points.length - 1]?.t);
+  assert.equal(savedCursor, 0, "an order that never routed must not consume the signal cooldown");
 });
 
 test("parameter candidates are skipped when the RSI indicator reaches the configured extreme", async () => {

@@ -67,7 +67,7 @@ function scalpOutcome(index: number, netPnlUsd: number) {
     trendWindow: 145,
     trendThreshold: 1.65,
     breakoutPercent: 0.35,
-    cooldownSeconds: 2_550,
+    cooldownSeconds: 1_200,
     trendStrengthPercent: 0.5,
     breakoutStrengthPercent: 0.2,
     volatilityPercent: 1,
