@@ -2238,9 +2238,6 @@ export async function runAutonomousPerpsMonitor(
       const updatedExperiment = routed.ok && invertDirection
         ? await deps.recordDirectionExperimentTrade(config.walletAddress)
         : null;
-      if (routed.ok && strategyClass === "smart" && config.settings.scalpModeEnabled) {
-        await deps.disableScalpMode(config.walletAddress);
-      }
       results.push({
         walletAddress: config.walletAddress,
         asset,

@@ -339,7 +339,7 @@ test("set-parameter execution remains authoritative when the decision layer is a
   assert.equal(result.execution.leverage, 8);
 });
 
-test("authoritative exceptional scalp reversal is blocked while the live bypass is paused", async () => {
+test("authoritative exceptional scalp reversal is not blocked by a paused bypass", async () => {
   process.env.PERPS_DECISION_SHADOW_MODE = "false";
   process.env.PERPS_MAX_LEVERAGE = "50";
   process.env.PERPS_MAX_TRADE_PCT = "1";
@@ -399,7 +399,7 @@ test("authoritative exceptional scalp reversal is blocked while the live bypass 
   assert.equal(result.execution?.collateralUsd, 50);
   assert.equal(result.execution?.leverage, 50);
   assert.equal(result.decision?.explanationTags.includes("scalp-detector-authoritative"), true);
-  assert.equal(result.decision?.explanationTags.includes("scalp-reversal-indicator-bypass-paused"), true);
+  assert.equal(result.decision?.explanationTags.includes("scalp-reversal-indicator-bypass-paused"), false);
   assert.equal(result.decision?.explanationTags.includes("very-high-leverage"), false);
   assert.equal(result.decision?.explanationTags.includes("heavy-wallet-allocation"), false);
   assert.equal(result.decision?.explanationTags.includes("recent-blocked-drag"), false);

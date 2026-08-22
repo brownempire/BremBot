@@ -363,7 +363,7 @@ function qualifyingRangeLearningProfile() {
   return profile;
 }
 
-test("exceptional confirmed liquidity-sweep reversal remains diagnostic while live bypass is paused", () => {
+test("enabled exceptional liquidity-sweep layer still requires prior-candle persistence", () => {
   const points = exceptionalBullishSweepPoints();
   const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
@@ -378,11 +378,11 @@ test("exceptional confirmed liquidity-sweep reversal remains diagnostic while li
   assert.equal(priceAction.strong, true);
   assert.equal(priceAction.confirmed, true);
   assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
-  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, false);
+  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, true);
   assert.equal(signal, null);
 });
 
-test("the paused bypass also blocks the symmetric bearish liquidity sweep", () => {
+test("enabled exceptional layer applies the same persistence rule to bearish sweeps", () => {
   const points = exceptionalBullishSweepPoints().map((point) => ({
     ...point,
     v: 200 - point.v,
@@ -462,7 +462,7 @@ test("a persisted reversal at the ADX 40 ceiling passes the new safety layer", (
   assert.deepEqual(safety.reasons, []);
 });
 
-test("a profitable scalp cannot reactivate the paused exceptional bypass", () => {
+test("a profitable opposite-side scalp cannot bypass missing structural persistence", () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const lastSignalAt = latestTimestamp - 12 * 60_000;
@@ -951,7 +951,7 @@ test("scalp admission requires a complete paginated Jupiter trade history", asyn
   assert.equal(routed, 0);
 });
 
-test("monitor does not revive the paused exceptional bypass after a profitable cooldown", async () => {
+test("monitor does not route an exceptional reversal missing structural persistence after a profitable cooldown", async () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const lastSignalAt = latestTimestamp - 12 * 60_000;
@@ -1184,7 +1184,7 @@ test("monitor pauses scalp entries while the winner-derived profile fails valida
   assert.match(result.results[0]?.message ?? "", /winner-derived profile/i);
 });
 
-test("a successfully taken smart trade turns Scalp Mode off after routing", async () => {
+test("a successfully taken smart trade leaves Scalp Mode enabled", async () => {
   let disabledWallet: string | null = null;
   let routedStrategy: PerpsAgentSignal["strategyClass"] = undefined;
   const baseTime = 1_784_174_800_000;
@@ -1218,7 +1218,7 @@ test("a successfully taken smart trade turns Scalp Mode off after routing", asyn
   });
 
   assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
-  assert.equal(disabledWallet, walletAddress);
+  assert.equal(disabledWallet, null);
   assert.equal(routedStrategy, "smart");
 });
 
@@ -1272,7 +1272,7 @@ test("a stale v8 direction experiment cannot suppress an otherwise eligible Smar
 
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(routeCalls, 1);
-  assert.equal(disableCalls, 1);
+  assert.equal(disableCalls, 0);
   assert.equal(cancelCalls, 1);
 });
 
@@ -3774,7 +3774,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
   assert.equal(routeCalls, 0);
 });
 
-test("paused exceptional reversal cannot close an existing position or create replacement intent", async () => {
+test("unconfirmed exceptional reversal cannot close an existing position or create replacement intent", async () => {
   const points = exceptionalBullishSweepPoints();
   const base = createConfig();
   const config = createConfig({
@@ -3828,7 +3828,7 @@ test("paused exceptional reversal cannot close an existing position or create re
   assert.deepEqual(savedIntents, []);
 });
 
-test("stale reversal replacement remains paused when the exceptional setup cannot execute", async () => {
+test("stale reversal replacement remains pending when the exceptional setup cannot execute", async () => {
   const points = exceptionalBullishSweepPoints();
   const base = createConfig();
   const config = createConfig({

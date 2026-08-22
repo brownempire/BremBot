@@ -127,7 +127,7 @@ test("independent scalp veto rejects raw indicators that contradict the directio
   assert.ok(result.explanationTags.includes("scalp-directional-indicator-veto"));
 });
 
-test("independent scalp veto rejects exhausted volatility and excessive leverage", () => {
+test("independent scalp veto keeps the leverage cap without blanket-rejecting a volatile regime", () => {
   const payload = continuationPayload({
     requestedTrade: {
       ...continuationPayload().requestedTrade,
@@ -143,7 +143,21 @@ test("independent scalp veto rejects exhausted volatility and excessive leverage
 
   assert.equal(result.shouldTrade, false);
   assert.ok(result.explanationTags.includes("scalp-leverage-cap-veto"));
-  assert.ok(result.explanationTags.includes("scalp-volatility-veto"));
+  assert.equal(result.explanationTags.includes("scalp-volatility-veto"), false);
+});
+
+test("independent scalp veto accepts a fully confirmed setup during a wide 145-minute range", () => {
+  const payload = continuationPayload({
+    marketContext: {
+      ...continuationPayload().marketContext,
+      volatilityPercent: 5.3,
+    },
+  });
+
+  const result = evaluateTradeDecision(payload);
+
+  assert.equal(result.shouldTrade, true);
+  assert.equal(result.explanationTags.includes("scalp-volatility-veto"), false);
 });
 
 test("independent scalp veto rejects exits with poor reward-to-risk after fees", () => {

@@ -29,7 +29,7 @@ export async function GET(request: Request) {
     const [profile, config, points, outcomes, redis] = await Promise.all([
       getActiveDecisionLearningProfile(walletAddress),
       getPerpsAutomationConfig(walletAddress),
-      fetchCoinbaseMinuteCandles(market.product, 180),
+      fetchCoinbaseMinuteCandles(market.product, 240),
       listTradeLearningOutcomes(walletAddress),
       getRedisClient().catch(() => null),
     ]);

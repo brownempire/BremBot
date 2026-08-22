@@ -19,6 +19,7 @@ import {
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
+  SCALP_EXHAUSTION_LOOKBACK_MINUTES,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
   SCALP_REVERSAL_MIN_VOLUME_RATIO,
   SCALP_REVERSAL_MAX_ADX,
@@ -154,7 +155,11 @@ function historicalMarkers(
 ) {
   const markers: ScalpOverlayMarker[] = [];
   let lastCandidateAt = 0;
-  const start = Math.max(24, points.length - 120);
+  // Historical markers must use the same complete 145-minute regime context as
+  // the live monitor. Starting earlier can manufacture an apparently eligible
+  // marker from a truncated window that live routing correctly evaluates with
+  // more history.
+  const start = Math.max(SCALP_EXHAUSTION_LOOKBACK_MINUTES - 1, points.length - 120);
   for (let index = start; index < points.length; index += 1) {
     const window = points.slice(0, index + 1);
     const indicators = computeIndicatorSnapshot(window, settings);

@@ -65,7 +65,7 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.match(snapshot.reasons[0] ?? "", /loss-history validation/i);
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
-  assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, false);
+  assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, true);
   assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.72);
   assert.equal(snapshot.thresholds.continuationLongBollingerMaximum, 0.72);
   assert.equal(snapshot.thresholds.continuationShortBollingerMinimum, 0.28);
@@ -110,6 +110,7 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   const chart = readFileSync(path.join(projectRoot, "app/components/TradingViewChart.tsx"), "utf8");
   const page = readFileSync(path.join(projectRoot, "app/signals-bot/page.tsx"), "utf8");
   const route = readFileSync(path.join(projectRoot, "app/api/perps/scalp-overlay/route.ts"), "utf8");
+  const overlay = readFileSync(path.join(projectRoot, "lib/chart/scalpAgentOverlay.ts"), "utf8");
 
   assert.match(page, /Scalp Agent <strong>\{scalpOverlayEnabled \? "On" : "Off"\}/);
   assert.match(chart, /scalpStudyIdsRef/);
@@ -134,7 +135,8 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(chart, /onPointerDown=\{beginScalpPanelDrag\}/);
   assert.match(chart, /aria-label=\{scalpPanelMinimized \? "Maximize scalp setup window" : "Minimize scalp setup window"\}/);
   assert.match(chart, /scalpPanelMinimized \? "Waiting"/);
-  assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 180\)/);
+  assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 240\)/);
+  assert.match(overlay, /Math\.max\(SCALP_EXHAUSTION_LOOKBACK_MINUTES - 1, points\.length - 120\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
   assert.match(route, /LAST_SIGNAL_KEY/);
 });

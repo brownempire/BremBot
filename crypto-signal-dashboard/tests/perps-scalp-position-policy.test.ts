@@ -70,12 +70,13 @@ test("a qualifying opposite scalp can coexist with one independently managed pos
   assert.equal(SCALP_MAX_CONCURRENT_POSITIONS, 2);
 });
 
-test("paused exceptional opposite scalp cannot close and replace the existing position", () => {
+test("exceptional opposite scalp reverses only when projected economics justify replacement", () => {
   const reversal = evaluateScalpPositionPolicy({
     openPositions: [position("short", -1.5)],
     ...exceptionalLong,
   });
-  assert.equal(reversal.action, "hold-concurrent");
+  assert.equal(reversal.action, "reverse");
+  if (reversal.action === "reverse") assert.ok(reversal.projectedSurplusUsd >= 1);
 
   const insufficientRecovery = evaluateScalpPositionPolicy({
     openPositions: [position("short", -4)],

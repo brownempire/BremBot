@@ -5,6 +5,7 @@ import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
   SCALP_CONTINUATION_LIVE_ENABLED,
+  SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_RANGE_REVERSAL_LIVE_ENABLED,
   SCALP_REVERSAL_LIVE_ENABLED,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
@@ -144,14 +145,15 @@ test("continuation execution uses a 0.72 floor and requires prior completed-cand
   assert.match(unconfirmedPriorCandle.reasons.join(" "), /two completed candles/);
 });
 
-test("a qualifying continuation remains shadow-only until after-fee validation authorizes it", () => {
-  assert.equal(SCALP_CONTINUATION_LIVE_ENABLED, false);
-  assert.equal(SCALP_RANGE_REVERSAL_LIVE_ENABLED, false);
-  assert.equal(SCALP_REVERSAL_LIVE_ENABLED, false);
-  assert.equal(scalpCandidatePathAllowsLiveSignal("continuation"), false);
+test("every independently confirmed scalp path is authorized for live routing", () => {
+  assert.equal(SCALP_CONTINUATION_LIVE_ENABLED, true);
+  assert.equal(SCALP_RANGE_REVERSAL_LIVE_ENABLED, true);
+  assert.equal(SCALP_REVERSAL_LIVE_ENABLED, true);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("continuation"), true);
   assert.equal(scalpCandidatePathAllowsLiveSignal("breakout-retest"), true);
-  assert.equal(scalpCandidatePathAllowsLiveSignal("reversal"), false);
-  assert.equal(scalpCandidatePathAllowsLiveSignal("range-reversal"), false);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("reversal"), true);
+  assert.equal(scalpCandidatePathAllowsLiveSignal("range-reversal"), true);
+  assert.equal(SCALP_EXHAUSTION_BLOCK_ENABLED, false);
 });
 
 test("a continuation requires EMA, DMI, MACD strengthening, a safe band position, and pullback/retest/resumption", () => {
@@ -166,13 +168,22 @@ test("a continuation requires EMA, DMI, MACD strengthening, a safe band position
   });
 
   assert.deepEqual(evaluate(confirmedBullishIndicators), { qualified: true, reasons: [] });
+  assert.deepEqual(evaluateScalpTrendContinuation({
+    priceAction: confirmedBullishPriceAction,
+    previousPriceAction: confirmedBullishPriceAction,
+    points: pullbackRetestCandles(),
+    trendBias: "bullish",
+    indicators: confirmedBullishIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: { ...bullishRegime, exhausted: true, range145mPercent: 5.3 },
+  }), { qualified: true, reasons: [] });
   assert.match(evaluate({ ...confirmedBullishIndicators, plusDi: 10, minusDi: 30 }).reasons.join(" "), /Directional movement/);
   assert.match(evaluate({ ...confirmedBullishIndicators, macdHistogramChange: -0.01 }).reasons.join(" "), /MACD/);
   assert.match(evaluate({ ...confirmedBullishIndicators, bollingerPosition: 0.721 }).reasons.join(" "), /Bollinger/);
   assert.match(evaluate(confirmedBullishIndicators, candlesFromCloses(Array.from({ length: 16 }, (_, index) => 100 + index * 0.03))).reasons.join(" "), /pullback/);
 });
 
-test("the two post-v7 losing continuations are blocked by the live floor, persistence, and 2% exhaustion guard", () => {
+test("the two post-v7 losing continuations remain blocked by the live floor and persistence", () => {
   for (const [score, netMove] of [[0.62, 5.7], [0.6, 3.44]] as const) {
     const points = trendingCandles(netMove);
     const regime = classifyScalpMarketRegime(points);
@@ -191,11 +202,11 @@ test("the two post-v7 losing continuations are blocked by the live floor, persis
     assert.equal(evaluation.qualified, false);
     assert.match(evaluation.reasons.join(" "), /0\.72/);
     assert.match(evaluation.reasons.join(" "), /two completed candles/);
-    assert.match(evaluation.reasons.join(" "), /exhaustion/);
+    assert.doesNotMatch(evaluation.reasons.join(" "), /exhaustion/);
   }
 });
 
-test("candidate diagnostics preserve the rejected path and exact gate reasons for journaling", () => {
+test("candidate diagnostics retain the high-volatility regime without using it as a blanket veto", () => {
   const points = trendingCandles(5.7);
   const evaluation = evaluateAdaptiveScalpCandidate({
     symbol: "SOL/USD",
@@ -209,7 +220,8 @@ test("candidate diagnostics preserve the rejected path and exact gate reasons fo
   assert.equal(evaluation.candidate.entryPrice, points.at(-1)!.v);
   assert.equal(evaluation.candidate.timestamp, points.at(-1)!.t);
   assert.equal(evaluation.candidate.regime.exhausted, true);
-  assert.ok(evaluation.candidate.rejectionReasons.some((reason) => /exhaustion|2%/.test(reason)));
+  assert.ok(evaluation.candidate.rejectionReasons.length > 0);
+  assert.ok(evaluation.candidate.rejectionReasons.every((reason) => !/exhaustion|2%/.test(reason)));
 });
 
 test("a genuine breakout, retest, and resumption emits an independently tagged scalp signal", () => {
@@ -222,6 +234,12 @@ test("a genuine breakout, retest, and resumption emits an independently tagged s
   assert.ok(structural.tags.includes("PRICE_BREAKOUT_RETEST"));
   assert.ok(structural.tags.includes("BREAKOUT_ATR_CONFIRMED"));
   assert.ok(structural.score >= 0.72 && structural.score <= 0.86);
+  const wideRangeStructural = evaluateScalpBreakoutRetest({
+    points,
+    indicators: confirmedBullishIndicators,
+    regime: { ...regime, exhausted: true, range145mPercent: 5.3 },
+  });
+  assert.equal(wideRangeStructural.qualified, true);
   const thinAtr = evaluateScalpBreakoutRetest({
     points,
     indicators: { ...confirmedBullishIndicators, atrPercent: 0.089 },
@@ -284,6 +302,14 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
   assert.ok(evaluation.tags.includes("RANGE_BAND_REENTRY"));
   assert.ok(evaluation.tags.includes("RANGE_RSI_MACD_TURN"));
   assert.ok(evaluation.tags.includes("RANGE_CONFIRMING_CANDLE"));
+
+  const wideRangeEvaluation = evaluateScalpRangeReversal({
+    points,
+    indicators: rangeIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: { ...sidewaysRegime, exhausted: true, range145mPercent: 5.3 },
+  });
+  assert.equal(wideRangeEvaluation.qualified, true);
 
   const missingVolume = evaluateScalpRangeReversal({
     points,

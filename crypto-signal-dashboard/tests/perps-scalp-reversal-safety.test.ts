@@ -41,8 +41,8 @@ const baseIndicators: IndicatorSnapshot = {
   bollingerPosition: 0.6,
 };
 
-test("the live exceptional-reversal bypass is explicitly paused", () => {
-  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, false);
+test("the live exceptional-reversal layer is enabled", () => {
+  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, true);
 });
 
 test("today's losing long is rejected by persistence, volume, and directional contradiction", () => {

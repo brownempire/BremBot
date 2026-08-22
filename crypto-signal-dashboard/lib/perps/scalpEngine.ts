@@ -15,7 +15,7 @@ import {
 export const SCALP_STANDARD_COOLDOWN_SECONDS = 20 * 60;
 export const SCALP_PROFIT_COOLDOWN_SECONDS = 5 * 60;
 export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
-export const SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED: boolean = false;
+export const SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED: boolean = true;
 export const SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX = 45;
 export const SCALP_REVERSAL_MIN_VOLUME_RATIO = 0.75;
 export const SCALP_REVERSAL_MAX_ADX = 40;
@@ -32,19 +32,20 @@ export const SCALP_CONTINUATION_LONG_RSI_MAX = 82;
 export const SCALP_CONTINUATION_SHORT_RSI_MIN = 18;
 export const SCALP_CONTINUATION_SHORT_RSI_MAX = 45;
 export const SCALP_CONTINUATION_MIN_PROJECTED_ROE_PERCENT = 10;
-// Continuation produced the two policy-v7 live losses and has not yet shown a
-// positive after-fee walk-forward sample. Keep evaluating it for the candidate
-// journal/chart, but do not emit a live signal until that path is explicitly
-// validated under the v8 gates.
-export const SCALP_CONTINUATION_LIVE_ENABLED = false;
-// The rewritten range and sweep-reversal paths are still collecting shadow
-// outcomes. The only v8 path with positive chronological after-fee evidence is
-// breakout/retest, so these paths cannot spend live risk during probation.
-export const SCALP_RANGE_REVERSAL_LIVE_ENABLED = false;
-export const SCALP_REVERSAL_LIVE_ENABLED = false;
+// Every independently confirmed scalp path is authorized for live routing.
+// Path-specific indicator, persistence, economics, circuit, and order-protection
+// checks still apply; these flags only prevent a qualified path from being
+// silently downgraded to diagnostics/shadow mode.
+export const SCALP_CONTINUATION_LIVE_ENABLED = true;
+export const SCALP_RANGE_REVERSAL_LIVE_ENABLED = true;
+export const SCALP_REVERSAL_LIVE_ENABLED = true;
 export const SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT = 0.09;
 export const SCALP_EXHAUSTION_LOOKBACK_MINUTES = 145;
 export const SCALP_MAX_145M_NET_OR_RANGE_PERCENT = 2;
+// Keep the 145-minute regime measurement for diagnostics and learning, but do
+// not use a wide historical range as a blanket live veto. Fresh path-specific
+// confirmation determines whether an entry is actionable.
+export const SCALP_EXHAUSTION_BLOCK_ENABLED = false;
 export const SCALP_TRADE_LEVERAGE = 20;
 export const SCALP_POLICY_VERSION = 8;
 
@@ -485,7 +486,7 @@ export function evaluateScalpTrendContinuation(options: {
     && previousPriceAction.score >= continuationFloor;
   if (!persisted) reasons.push("Continuation must persist in the same direction across two completed candles.");
   if (direction && trendBias !== direction) reasons.push(`The ${trendBias} trend does not align with the ${direction} setup.`);
-  if (regime?.exhausted) {
+  if (SCALP_EXHAUSTION_BLOCK_ENABLED && regime?.exhausted) {
     reasons.push(`The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`);
   }
   if (indicators.adx === null
@@ -636,7 +637,7 @@ export function evaluateScalpBreakoutRetest(options: {
   const { points, indicators } = options;
   const regime = options.regime ?? classifyScalpMarketRegime(points);
   if (points.length < 36) return emptyStructuredEvaluation(["At least 36 completed candles are required to validate a breakout and retest."]);
-  if (regime.exhausted) {
+  if (SCALP_EXHAUSTION_BLOCK_ENABLED && regime.exhausted) {
     return emptyStructuredEvaluation([`The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`]);
   }
   if (indicators.atrPercent === null || indicators.atrPercent < SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT) {
@@ -713,8 +714,8 @@ export function evaluateScalpRangeReversal(options: {
   const { points, indicators, profile } = options;
   const regime = options.regime ?? classifyScalpMarketRegime(points);
   if (points.length < 45) return emptyStructuredEvaluation(["At least 45 completed candles are required to validate a range reversal sequence."]);
-  if (regime.trending || regime.exhausted) {
-    return emptyStructuredEvaluation([regime.exhausted
+  if (regime.trending || (SCALP_EXHAUSTION_BLOCK_ENABLED && regime.exhausted)) {
+    return emptyStructuredEvaluation([SCALP_EXHAUSTION_BLOCK_ENABLED && regime.exhausted
       ? `The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`
       : `Multi-horizon EMA, ATR, and DMI classify the market as ${regime.bias}, not range-bound.`]);
   }
@@ -937,12 +938,12 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
   });
   const exceptionalReversal = SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED
     && exceptionalReversalCandidate
-    && !regime.exhausted
+    && (!SCALP_EXHAUSTION_BLOCK_ENABLED || !regime.exhausted)
     && reversalSafety.qualified;
   const reversalIndicatorsReady = priceAction.direction !== null
     && priceAction.confirmed
     && reversalSafety.qualified
-    && !regime.exhausted
+    && (!SCALP_EXHAUSTION_BLOCK_ENABLED || !regime.exhausted)
     && indicators.adx !== null
     && indicators.adx <= SCALP_REVERSAL_MAX_ADX
     && indicators.emaSpreadPercent !== null

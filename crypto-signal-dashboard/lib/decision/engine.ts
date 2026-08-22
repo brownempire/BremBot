@@ -11,6 +11,7 @@ import {
   SCALP_BREAKOUT_RETEST_MIN_ATR_PERCENT,
   SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
+  SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
 } from "@/lib/perps/scalpEngine";
 import {
@@ -297,9 +298,11 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       learningProfile?.volatilityCeilingPercent ?? SCALP_MAX_145M_NET_OR_RANGE_PERCENT
     );
     const volatility = payload.marketContext.volatilityPercent;
-    const volatilityQualified = typeof volatility === "number"
+    const volatilityQualified = !SCALP_EXHAUSTION_BLOCK_ENABLED || (
+      typeof volatility === "number"
       && Number.isFinite(volatility)
-      && volatility <= volatilityCeiling;
+      && volatility <= volatilityCeiling
+    );
     const netRewardRisk = computeScalpNetRewardRisk(payload);
     const economicsQualified = netRewardRisk !== null
       && netRewardRisk >= SCALP_MINIMUM_NET_REWARD_RISK_RATIO - SCALP_REWARD_RISK_ROUNDING_TOLERANCE;
