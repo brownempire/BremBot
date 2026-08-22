@@ -5476,6 +5476,8 @@ function DashboardPage() {
                 onModifyGuide={handleChartGuideModify}
                 scalpOverlayEnabled={scalpOverlayEnabled}
                 scalpOverlayAuthToken={remoteAuthToken}
+                unrealizedPnlUsd={selectedChartUnrealizedPnl}
+                unrealizedPnlPercent={selectedChartUnrealizedPnlPercent}
               />
             </ChartErrorBoundary>
           </div>

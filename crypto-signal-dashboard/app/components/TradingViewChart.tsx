@@ -78,6 +78,8 @@ type TradingViewChartProps = {
   onModifyGuide?: (guide: PositionOverlayGuide, price: number) => Promise<void>;
   scalpOverlayEnabled?: boolean;
   scalpOverlayAuthToken?: string | null;
+  unrealizedPnlUsd?: number | null;
+  unrealizedPnlPercent?: number | null;
 };
 
 type GuideEditorState = {
@@ -90,6 +92,14 @@ type GuideEditorState = {
 
 function editablePriceValue(price: number) {
   return Number(price.toFixed(6)).toString();
+}
+
+function signedUsd(value: number) {
+  const amount = Math.abs(value).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return `${value >= 0 ? "+" : "-"}$${amount}`;
 }
 
 const SCRIPT_ID = "tradingview-advanced-charts-script";
@@ -170,6 +180,8 @@ export function TradingViewChart({
   onModifyGuide,
   scalpOverlayEnabled = false,
   scalpOverlayAuthToken = null,
+  unrealizedPnlUsd = null,
+  unrealizedPnlPercent = null,
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_advanced_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
@@ -210,6 +222,13 @@ export function TradingViewChart({
   const guideSignature = validOverlayGuides(guides)
     .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}:${guide.editable ? 1 : 0}:${guide.estimatedNetPnlUsd ?? ""}:${guide.pnlPerPriceUnit ?? ""}`)
     .join("|");
+  const hasUnrealizedPnl = typeof unrealizedPnlUsd === "number" && Number.isFinite(unrealizedPnlUsd);
+  const hasUnrealizedPnlPercent = typeof unrealizedPnlPercent === "number" && Number.isFinite(unrealizedPnlPercent);
+  const unrealizedPnlTone = !hasUnrealizedPnl
+    ? ""
+    : unrealizedPnlUsd >= 0
+      ? " pnl-positive"
+      : " pnl-negative";
 
   function setIndicatorPanesCollapsedState(collapsed: boolean) {
     const chart = widgetRef.current?.activeChart?.();
@@ -851,6 +870,23 @@ export function TradingViewChart({
       data-app-fullscreen={isAppFullscreen ? "true" : "false"}
     >
       <div id={containerId} className="tradingview-container" />
+      <div
+        className={`tradingview-toolbar-pnl${unrealizedPnlTone}`}
+        data-testid="tradingview-toolbar-pnl"
+        role="status"
+        aria-live="polite"
+        aria-label={hasUnrealizedPnl
+          ? `Unrealized PnL ${signedUsd(unrealizedPnlUsd)}${hasUnrealizedPnlPercent ? `, ${unrealizedPnlPercent >= 0 ? "+" : ""}${unrealizedPnlPercent.toFixed(2)} percent` : ""}`
+          : "Unrealized PnL unavailable"}
+      >
+        <span className="tradingview-toolbar-pnl-label">Unrealized PnL</span>
+        <strong>{hasUnrealizedPnl ? signedUsd(unrealizedPnlUsd) : "--"}</strong>
+        {hasUnrealizedPnl && hasUnrealizedPnlPercent ? (
+          <small>
+            ({unrealizedPnlPercent >= 0 ? "+" : ""}{unrealizedPnlPercent.toFixed(2)}%)
+          </small>
+        ) : null}
+      </div>
       {isChartLoading && !loadError ? (
         <div className="tradingview-loading" role="status" aria-label="Loading TradingView chart">
           <span className="tradingview-loading-spinner" aria-hidden="true" />

@@ -52,3 +52,18 @@ test("app fullscreen covers the viewport with a dark surface and a dedicated clo
     /body\.chart-app-fullscreen \.bottom-tabs\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none;/s
   );
 });
+
+test("the live unrealized PnL remains in the chart toolbar in regular and app fullscreen layouts", () => {
+  const chart = read("app/components/TradingViewChart.tsx");
+  const page = read("app/signals-bot/page.tsx");
+  const css = read("app/globals.css");
+
+  assert.match(chart, /data-testid="tradingview-toolbar-pnl"/);
+  assert.match(chart, /Unrealized PnL/);
+  assert.match(chart, /signedUsd\(unrealizedPnlUsd\)/);
+  assert.match(chart, /unrealizedPnlPercent\.toFixed\(2\)/);
+  assert.match(page, /unrealizedPnlUsd=\{selectedChartUnrealizedPnl\}/);
+  assert.match(page, /unrealizedPnlPercent=\{selectedChartUnrealizedPnlPercent\}/);
+  assert.match(css, /\.tradingview-toolbar-pnl\s*\{[^}]*position:\s*absolute;[^}]*top:\s*8px;/s);
+  assert.doesNotMatch(css, /\.tradingview-frame--app-fullscreen[^}]*\.tradingview-toolbar-pnl[^}]*display:\s*none/s);
+});

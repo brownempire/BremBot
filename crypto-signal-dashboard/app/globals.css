@@ -1688,6 +1688,67 @@ button:disabled {
   overscroll-behavior: contain;
 }
 
+.tradingview-toolbar-pnl {
+  position: absolute;
+  top: 8px;
+  left: clamp(230px, 61.5%, calc(100% - 210px));
+  z-index: 19;
+  min-height: 36px;
+  max-width: min(260px, calc(100% - 430px));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid rgba(159, 176, 202, 0.2);
+  border-radius: 7px;
+  color: #9fb0ca;
+  background: rgba(12, 17, 25, 0.9);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+  backdrop-filter: blur(8px);
+}
+
+.tradingview-toolbar-pnl strong {
+  color: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tradingview-toolbar-pnl small {
+  color: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tradingview-toolbar-pnl.pnl-positive {
+  color: #42dfa1;
+  border-color: rgba(66, 223, 161, 0.28);
+}
+
+.tradingview-toolbar-pnl.pnl-negative {
+  color: #ff687e;
+  border-color: rgba(255, 104, 126, 0.28);
+}
+
+@media (max-width: 700px) {
+  .tradingview-toolbar-pnl {
+    right: 52px;
+    left: auto;
+    max-width: 150px;
+    padding-inline: 8px;
+    transform: none;
+  }
+
+  .tradingview-toolbar-pnl-label {
+    display: none;
+  }
+}
+
 .tradingview-loading {
   position: absolute;
   inset: 0;
