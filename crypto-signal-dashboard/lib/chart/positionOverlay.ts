@@ -1,3 +1,5 @@
+import { DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE } from "@/lib/perps/scalpExit";
+
 export type PositionOverlayGuide = {
   editable?: boolean;
   estimatedNetPnlUsd?: number | null;
@@ -12,10 +14,14 @@ export type PositionOverlayGuide = {
 
 export type PositionGuideSource = {
   id: string;
+  accountRef?: string | null;
   collateralValue?: number | null;
   entryPrice: number | null;
+  marketSymbol?: string | null;
   markPrice?: number | null;
   positionSize?: number | null;
+  positionValue?: number | null;
+  source?: string | null;
   takeProfit: number | null;
   stopLoss: number | null;
   liquidationPrice: number | null;
@@ -23,8 +29,185 @@ export type PositionGuideSource = {
   unrealizedPnl?: number | null;
 };
 
+export type PositionEntryMarker = {
+  id: string;
+  label: string;
+  positionId: string;
+  price: number;
+  side: "long" | "short";
+  time: number;
+};
+
+type PositionEntryTradeSource = {
+  action?: string | null;
+  createdAt?: number | null;
+  lastUpdated?: number | null;
+  marketSymbol?: string | null;
+  orderType?: string | null;
+  positionPubkey?: string | null;
+  side?: "long" | "short" | null;
+};
+
+type PositionEntryExecutionSource = {
+  asset?: string | null;
+  createdAt?: string | null;
+  positionPubkey?: string | null;
+  side?: "long" | "short" | null;
+  status?: string | null;
+};
+
+export type EstimatedPositionNetPnl = {
+  estimatedExitCostsUsd: number;
+  estimatedNetPnlUsd: number;
+};
+
+const JUPITER_OPEN_FEE_RATE = 0.0006;
+const ESTIMATED_SOLANA_EXIT_TRANSACTION_USD = 0.01;
+
 function finite(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function marketAsset(value: string | null | undefined) {
+  const normalized = (value ?? "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+  if (normalized.includes("BTC")) return "BTC";
+  if (normalized.includes("ETH")) return "ETH";
+  if (normalized.includes("SOL")) return "SOL";
+  return normalized;
+}
+
+function timestampSeconds(value: number | string | null | undefined) {
+  const numeric = typeof value === "string" ? Date.parse(value) : value;
+  if (typeof numeric !== "number" || !Number.isFinite(numeric) || numeric <= 0) return null;
+  return Math.round(numeric > 10_000_000_000 ? numeric / 1_000 : numeric);
+}
+
+function isOpeningTrade(trade: PositionEntryTradeSource) {
+  return /increase|open/i.test(`${trade.action ?? ""} ${trade.orderType ?? ""}`);
+}
+
+function isFullCloseTrade(trade: PositionEntryTradeSource) {
+  return /close|liquidat/i.test(`${trade.action ?? ""} ${trade.orderType ?? ""}`);
+}
+
+function positionReference(position: PositionGuideSource) {
+  return position.accountRef?.trim() || position.id;
+}
+
+/**
+ * Jupiter's live `pnlAfterFeesUsd` is the best baseline because it retains the
+ * actual open fee and accrued borrow costs. The close has not happened yet, so
+ * reserve the unconsumed part of the conservative observed round-trip rate plus
+ * a small transaction allowance. RPC-direct PnL is gross mark-to-market and
+ * therefore receives the complete round-trip reserve.
+ */
+export function estimatePositionNetExitPnl(
+  position: PositionGuideSource
+): EstimatedPositionNetPnl | null {
+  const pnl = finite(position.unrealizedPnl);
+  const entryPrice = finite(position.entryPrice);
+  const positionValue = finite(position.positionValue)
+    ?? (
+      entryPrice !== null && finite(position.positionSize) !== null
+        ? Math.abs(entryPrice * finite(position.positionSize)!)
+        : null
+    );
+  if (pnl === null || positionValue === null || positionValue <= 0) return null;
+
+  const remainingRate = position.source === "live-api"
+    ? Math.max(0, DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE - JUPITER_OPEN_FEE_RATE)
+    : DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE;
+  const estimatedExitCostsUsd = positionValue * remainingRate + ESTIMATED_SOLANA_EXIT_TRANSACTION_USD;
+
+  return {
+    estimatedExitCostsUsd: Number(estimatedExitCostsUsd.toFixed(2)),
+    estimatedNetPnlUsd: Number((pnl - estimatedExitCostsUsd).toFixed(2)),
+  };
+}
+
+export function summarizePositionOverlayEstimatedNetPnl(
+  positions: readonly PositionGuideSource[]
+) {
+  if (positions.length === 0) return null;
+  const estimates = positions.map(estimatePositionNetExitPnl);
+  if (estimates.some((estimate) => estimate === null)) return null;
+  return Number(estimates.reduce((sum, estimate) => sum + estimate!.estimatedNetPnlUsd, 0).toFixed(2));
+}
+
+export function summarizePositionOverlayEstimatedNetPnlPercent(
+  positions: readonly PositionGuideSource[]
+) {
+  const estimatedPnl = summarizePositionOverlayEstimatedNetPnl(positions);
+  if (estimatedPnl === null || positions.some(
+    (position) => finite(position.collateralValue) === null || finite(position.collateralValue)! <= 0
+  )) return null;
+  const totalCollateral = positions.reduce((sum, position) => sum + finite(position.collateralValue)!, 0);
+  return Number(((estimatedPnl / totalCollateral) * 100).toFixed(2));
+}
+
+export function buildPositionEntryMarkers(options: {
+  positions: readonly PositionGuideSource[];
+  trades?: readonly PositionEntryTradeSource[];
+  executions?: readonly PositionEntryExecutionSource[];
+}): PositionEntryMarker[] {
+  const trades = options.trades ?? [];
+  const executions = options.executions ?? [];
+
+  return options.positions.flatMap((position, index) => {
+    const entryPrice = finite(position.entryPrice);
+    const reference = positionReference(position);
+    if (entryPrice === null || entryPrice <= 0 || !position.side || !reference) return [];
+
+    const directTrades = trades
+      .filter((trade) => trade.positionPubkey?.trim() === reference && trade.side === position.side)
+      .filter((trade) => timestampSeconds(trade.createdAt ?? trade.lastUpdated) !== null)
+      .sort((left, right) => (
+        timestampSeconds(left.createdAt ?? left.lastUpdated)! - timestampSeconds(right.createdAt ?? right.lastUpdated)!
+      ));
+    const lastFullCloseIndex = directTrades.reduce(
+      (lastIndex, trade, tradeIndex) => isFullCloseTrade(trade) ? tradeIndex : lastIndex,
+      -1
+    );
+
+    const activeStatuses = new Set(["submitted", "confirmed"]);
+    const directExecutions = executions
+      .filter((execution) => (
+        execution.positionPubkey?.trim() === reference
+        && execution.side === position.side
+          && activeStatuses.has(execution.status ?? "")
+      ));
+    const positionAsset = marketAsset(position.marketSymbol);
+    const fallbackExecutions = directExecutions.length > 0
+      ? directExecutions
+      : executions.filter((execution) => (
+          positionAsset.length > 0
+          && marketAsset(execution.asset) === positionAsset
+          && execution.side === position.side
+          && activeStatuses.has(execution.status ?? "")
+        ));
+    const execution = fallbackExecutions
+      .filter((candidate) => timestampSeconds(candidate.createdAt) !== null)
+      .sort((left, right) => timestampSeconds(right.createdAt)! - timestampSeconds(left.createdAt)!)[0]
+      ?? null;
+    const executionTime = timestampSeconds(execution?.createdAt);
+    const openingTrade = directTrades.slice(lastFullCloseIndex + 1).find((trade) => {
+      if (!isOpeningTrade(trade)) return false;
+      const tradeTime = timestampSeconds(trade.createdAt ?? trade.lastUpdated);
+      return tradeTime !== null && (executionTime === null || tradeTime >= executionTime - 5 * 60);
+    }) ?? null;
+    const time = timestampSeconds(openingTrade?.createdAt ?? openingTrade?.lastUpdated)
+      ?? executionTime;
+    if (time === null) return [];
+
+    return [{
+      id: `${position.id}:entry:${time}`,
+      label: options.positions.length > 1 ? `${index + 1} Entry` : "Entry",
+      positionId: position.id,
+      price: entryPrice,
+      side: position.side,
+      time,
+    }];
+  });
 }
 
 function projectedNetPnl(position: PositionGuideSource, targetPrice: number) {

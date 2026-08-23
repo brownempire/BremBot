@@ -8,6 +8,7 @@ import type { ScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
 import {
   projectOverlayGuideNetPnl,
   validOverlayGuides,
+  type PositionEntryMarker,
   type PositionOverlayGuide,
 } from "@/lib/chart/positionOverlay";
 
@@ -75,11 +76,12 @@ type WidgetApi = {
 type TradingViewChartProps = {
   symbol?: string;
   guides?: PositionOverlayGuide[];
+  entryMarkers?: PositionEntryMarker[];
   onModifyGuide?: (guide: PositionOverlayGuide, price: number) => Promise<void>;
   scalpOverlayEnabled?: boolean;
   scalpOverlayAuthToken?: string | null;
-  unrealizedPnlUsd?: number | null;
-  unrealizedPnlPercent?: number | null;
+  estimatedNetPnlUsd?: number | null;
+  estimatedNetPnlPercent?: number | null;
 };
 
 type GuideEditorState = {
@@ -177,16 +179,18 @@ function shouldLockPageScrollForChartHover() {
 export function TradingViewChart({
   symbol = "COINBASE:BTCUSD",
   guides = [],
+  entryMarkers = [],
   onModifyGuide,
   scalpOverlayEnabled = false,
   scalpOverlayAuthToken = null,
-  unrealizedPnlUsd = null,
-  unrealizedPnlPercent = null,
+  estimatedNetPnlUsd = null,
+  estimatedNetPnlPercent = null,
 }: TradingViewChartProps) {
   const containerId = useMemo(() => "tradingview_advanced_chart", []);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const widgetRef = useRef<WidgetApi | null>(null);
   const shapeIdsRef = useRef<string[]>([]);
+  const entryMarkerIdsRef = useRef<string[]>([]);
   const scalpMarkerIdsRef = useRef<string[]>([]);
   const scalpStudyIdsRef = useRef<string[]>([]);
   const scalpPanelRef = useRef<HTMLDivElement | null>(null);
@@ -204,6 +208,7 @@ export function TradingViewChart({
   const drawingEventCallbackRef = useRef<((id: string, type: string) => void) | null>(null);
   const drawingEventHandlerRef = useRef<(id: string, type: string) => void>(() => undefined);
   const guidesRef = useRef(guides);
+  const entryMarkersRef = useRef(entryMarkers);
   const [chartReadyVersion, setChartReadyVersion] = useState(0);
   const [isChartLoading, setIsChartLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -218,15 +223,19 @@ export function TradingViewChart({
   const [scalpPanelPosition, setScalpPanelPosition] = useState<FloatingPanelPosition | null>(null);
   scalpOverlayEnabledRef.current = scalpOverlayEnabled;
   guidesRef.current = guides;
+  entryMarkersRef.current = entryMarkers;
 
   const guideSignature = validOverlayGuides(guides)
     .map((guide) => `${guide.id}:${guide.price}:${guide.label}:${guide.tone}:${guide.editable ? 1 : 0}:${guide.estimatedNetPnlUsd ?? ""}:${guide.pnlPerPriceUnit ?? ""}`)
     .join("|");
-  const hasUnrealizedPnl = typeof unrealizedPnlUsd === "number" && Number.isFinite(unrealizedPnlUsd);
-  const hasUnrealizedPnlPercent = typeof unrealizedPnlPercent === "number" && Number.isFinite(unrealizedPnlPercent);
-  const unrealizedPnlTone = !hasUnrealizedPnl
+  const entryMarkerSignature = entryMarkers
+    .map((marker) => `${marker.id}:${marker.time}:${marker.price}:${marker.side}:${marker.label}`)
+    .join("|");
+  const hasEstimatedNetPnl = typeof estimatedNetPnlUsd === "number" && Number.isFinite(estimatedNetPnlUsd);
+  const hasEstimatedNetPnlPercent = typeof estimatedNetPnlPercent === "number" && Number.isFinite(estimatedNetPnlPercent);
+  const estimatedNetPnlTone = !hasEstimatedNetPnl
     ? ""
-    : unrealizedPnlUsd >= 0
+    : estimatedNetPnlUsd >= 0
       ? " pnl-positive"
       : " pnl-negative";
 
@@ -477,6 +486,7 @@ export function TradingViewChart({
     return () => {
       cancelled = true;
       shapeIdsRef.current = [];
+      entryMarkerIdsRef.current = [];
       scalpMarkerIdsRef.current = [];
       scalpStudyIdsRef.current = [];
       shapeGuideById.clear();
@@ -677,6 +687,55 @@ export function TradingViewChart({
   }, [chartReadyVersion, scalpOverlayEnabled, scalpSnapshot]);
 
   useEffect(() => {
+    const chart = widgetRef.current?.activeChart?.();
+    const removeEntryMarkers = () => {
+      entryMarkerIdsRef.current.forEach((id) => safelyRemoveEntity(chart, id));
+      entryMarkerIdsRef.current = [];
+    };
+    removeEntryMarkers();
+    const currentEntryMarkers = entryMarkersRef.current;
+    if (!chart?.createShape || currentEntryMarkers.length === 0) return removeEntryMarkers;
+
+    let cancelled = false;
+    const created: string[] = [];
+    const addEntryMarkers = async () => {
+      for (const marker of currentEntryMarkers) {
+        try {
+          const id = await chart.createShape?.(
+            { time: marker.time, price: marker.price },
+            {
+              shape: "icon",
+              icon: 0xf111,
+              lock: true,
+              disableSelection: true,
+              disableSave: true,
+              disableUndo: true,
+              showInObjectsTree: false,
+              zOrder: "top",
+              overrides: {
+                color: "#65d9ff",
+                size: 18,
+              },
+            }
+          );
+          if (!id) continue;
+          if (cancelled) safelyRemoveEntity(chart, String(id));
+          else created.push(String(id));
+        } catch {
+          // The horizontal entry line remains available if a historical candle is not loaded yet.
+        }
+      }
+      if (!cancelled) entryMarkerIdsRef.current = created;
+    };
+    void addEntryMarkers();
+    return () => {
+      cancelled = true;
+      created.forEach((id) => safelyRemoveEntity(chart, id));
+      removeEntryMarkers();
+    };
+  }, [chartReadyVersion, entryMarkerSignature]);
+
+  useEffect(() => {
     let cancelled = false;
     const chart = widgetRef.current?.activeChart?.();
 
@@ -871,19 +930,20 @@ export function TradingViewChart({
     >
       <div id={containerId} className="tradingview-container" />
       <div
-        className={`tradingview-toolbar-pnl${unrealizedPnlTone}`}
+        className={`tradingview-toolbar-pnl${estimatedNetPnlTone}`}
         data-testid="tradingview-toolbar-pnl"
         role="status"
         aria-live="polite"
-        aria-label={hasUnrealizedPnl
-          ? `Unrealized PnL ${signedUsd(unrealizedPnlUsd)}${hasUnrealizedPnlPercent ? `, ${unrealizedPnlPercent >= 0 ? "+" : ""}${unrealizedPnlPercent.toFixed(2)} percent` : ""}`
-          : "Unrealized PnL unavailable"}
+        aria-label={hasEstimatedNetPnl
+          ? `Estimated net PnL ${signedUsd(estimatedNetPnlUsd)}${hasEstimatedNetPnlPercent ? `, ${estimatedNetPnlPercent >= 0 ? "+" : ""}${estimatedNetPnlPercent.toFixed(2)} percent` : ""}`
+          : "Estimated net PnL unavailable"}
+        title="Estimated net exit PnL includes Jupiter's live after-fee PnL plus a conservative allowance for remaining close costs, price impact, slippage, borrow drift, and transaction fees."
       >
-        <span className="tradingview-toolbar-pnl-label">Unrealized PnL</span>
-        <strong>{hasUnrealizedPnl ? signedUsd(unrealizedPnlUsd) : "--"}</strong>
-        {hasUnrealizedPnl && hasUnrealizedPnlPercent ? (
+        <span className="tradingview-toolbar-pnl-label">Est. net PnL</span>
+        <strong>{hasEstimatedNetPnl ? signedUsd(estimatedNetPnlUsd) : "--"}</strong>
+        {hasEstimatedNetPnl && hasEstimatedNetPnlPercent ? (
           <small>
-            ({unrealizedPnlPercent >= 0 ? "+" : ""}{unrealizedPnlPercent.toFixed(2)}%)
+            ({estimatedNetPnlPercent >= 0 ? "+" : ""}{estimatedNetPnlPercent.toFixed(2)}%)
           </small>
         ) : null}
       </div>

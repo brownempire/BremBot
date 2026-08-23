@@ -53,17 +53,30 @@ test("app fullscreen covers the viewport with a dark surface and a dedicated clo
   );
 });
 
-test("the live unrealized PnL remains in the chart toolbar in regular and app fullscreen layouts", () => {
+test("the estimated net PnL remains in the chart toolbar in regular and app fullscreen layouts", () => {
   const chart = read("app/components/TradingViewChart.tsx");
   const page = read("app/signals-bot/page.tsx");
   const css = read("app/globals.css");
 
   assert.match(chart, /data-testid="tradingview-toolbar-pnl"/);
-  assert.match(chart, /Unrealized PnL/);
-  assert.match(chart, /signedUsd\(unrealizedPnlUsd\)/);
-  assert.match(chart, /unrealizedPnlPercent\.toFixed\(2\)/);
-  assert.match(page, /unrealizedPnlUsd=\{selectedChartUnrealizedPnl\}/);
-  assert.match(page, /unrealizedPnlPercent=\{selectedChartUnrealizedPnlPercent\}/);
+  assert.match(chart, /Est\. net PnL/);
+  assert.match(chart, /signedUsd\(estimatedNetPnlUsd\)/);
+  assert.match(chart, /estimatedNetPnlPercent\.toFixed\(2\)/);
+  assert.match(page, /estimatedNetPnlUsd=\{selectedChartEstimatedNetPnl\}/);
+  assert.match(page, /estimatedNetPnlPercent=\{selectedChartEstimatedNetPnlPercent\}/);
   assert.match(css, /\.tradingview-toolbar-pnl\s*\{[^}]*position:\s*absolute;[^}]*top:\s*8px;/s);
   assert.doesNotMatch(css, /\.tradingview-frame--app-fullscreen[^}]*\.tradingview-toolbar-pnl[^}]*display:\s*none/s);
+});
+
+test("the widget-style entry marker is a persistent time-and-price chart drawing", () => {
+  const chart = read("app/components/TradingViewChart.tsx");
+  const page = read("app/signals-bot/page.tsx");
+
+  assert.match(page, /buildPositionEntryMarkers/);
+  assert.match(page, /entryMarkers=\{positionOverlayEnabled \? selectedChartEntryMarkers : \[\]\}/);
+  assert.match(chart, /\{ time: marker\.time, price: marker\.price \}/);
+  assert.match(chart, /shape: "icon"/);
+  assert.match(chart, /icon: 0xf111/);
+  assert.match(chart, /lock: true/);
+  assert.match(chart, /entryMarkerSignature/);
 });

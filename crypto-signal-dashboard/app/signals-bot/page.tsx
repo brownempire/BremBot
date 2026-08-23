@@ -35,9 +35,10 @@ import type {
 import { TradingViewChart } from "@/app/components/TradingViewChart";
 import { ChartErrorBoundary } from "@/app/components/ChartErrorBoundary";
 import {
+  buildPositionEntryMarkers,
   buildPositionOverlayGuides,
-  summarizePositionOverlayPnl,
-  summarizePositionOverlayPnlPercent,
+  summarizePositionOverlayEstimatedNetPnl,
+  summarizePositionOverlayEstimatedNetPnlPercent,
   type PositionOverlayGuide,
 } from "@/lib/chart/positionOverlay";
 import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
@@ -333,6 +334,8 @@ type PerpsExecutionSummary = {
   errorMessage?: string | null;
   createdAt: string;
   txid?: string | null;
+  asset?: "SOL" | "ETH" | "BTC";
+  positionPubkey?: string | null;
   strategyClass?: "smart" | "scalp";
 };
 
@@ -4625,13 +4628,21 @@ function DashboardPage() {
     () => buildPositionOverlayGuides(selectedChartPerpsPositions),
     [selectedChartPerpsPositions]
   );
-  const selectedChartUnrealizedPnl = useMemo(
-    () => summarizePositionOverlayPnl(selectedChartPerpsPositions),
+  const selectedChartEstimatedNetPnl = useMemo(
+    () => summarizePositionOverlayEstimatedNetPnl(selectedChartPerpsPositions),
     [selectedChartPerpsPositions]
   );
-  const selectedChartUnrealizedPnlPercent = useMemo(
-    () => summarizePositionOverlayPnlPercent(selectedChartPerpsPositions),
+  const selectedChartEstimatedNetPnlPercent = useMemo(
+    () => summarizePositionOverlayEstimatedNetPnlPercent(selectedChartPerpsPositions),
     [selectedChartPerpsPositions]
+  );
+  const selectedChartEntryMarkers = useMemo(
+    () => buildPositionEntryMarkers({
+      positions: selectedChartPerpsPositions,
+      trades: readOnlyPerpsSnapshot.recentTrades,
+      executions: perpsAgentExecutions,
+    }),
+    [perpsAgentExecutions, readOnlyPerpsSnapshot.recentTrades, selectedChartPerpsPositions]
   );
 
   const cards = trackedMarkets.map((market) => {
@@ -5473,11 +5484,12 @@ function DashboardPage() {
               <TradingViewChart
                 symbol={selectedChartMarket?.tvSymbol ?? "COINBASE:SOLUSD"}
                 guides={positionOverlayEnabled ? selectedChartGuides : []}
+                entryMarkers={positionOverlayEnabled ? selectedChartEntryMarkers : []}
                 onModifyGuide={handleChartGuideModify}
                 scalpOverlayEnabled={scalpOverlayEnabled}
                 scalpOverlayAuthToken={remoteAuthToken}
-                unrealizedPnlUsd={selectedChartUnrealizedPnl}
-                unrealizedPnlPercent={selectedChartUnrealizedPnlPercent}
+                estimatedNetPnlUsd={selectedChartEstimatedNetPnl}
+                estimatedNetPnlPercent={selectedChartEstimatedNetPnlPercent}
               />
             </ChartErrorBoundary>
           </div>
@@ -6087,18 +6099,19 @@ function DashboardPage() {
                   {selectedChartCard.change24h.toFixed(2)}%
                 </span>
                 <span
-                  className={`chart-unrealized-pnl${selectedChartUnrealizedPnl === null
+                  className={`chart-unrealized-pnl${selectedChartEstimatedNetPnl === null
                     ? ""
-                    : selectedChartUnrealizedPnl >= 0
+                    : selectedChartEstimatedNetPnl >= 0
                       ? " pnl-positive"
                       : " pnl-negative"}`}
+                  title="Estimated net exit PnL includes Jupiter's live after-fee PnL plus a conservative allowance for remaining close costs, price impact, slippage, borrow drift, and transaction fees."
                 >
-                  Unrealized PnL {selectedChartUnrealizedPnl === null
+                  Est. net PnL {selectedChartEstimatedNetPnl === null
                     ? "--"
-                    : `${selectedChartUnrealizedPnl >= 0 ? "+" : ""}${formatUsd(selectedChartUnrealizedPnl)}`}
-                  {selectedChartUnrealizedPnl !== null && selectedChartUnrealizedPnlPercent !== null ? (
+                    : `${selectedChartEstimatedNetPnl >= 0 ? "+" : ""}${formatUsd(selectedChartEstimatedNetPnl)}`}
+                  {selectedChartEstimatedNetPnl !== null && selectedChartEstimatedNetPnlPercent !== null ? (
                     <small className="chart-unrealized-pnl-percent">
-                      ({selectedChartUnrealizedPnlPercent >= 0 ? "+" : ""}{selectedChartUnrealizedPnlPercent.toFixed(2)}%)
+                      ({selectedChartEstimatedNetPnlPercent >= 0 ? "+" : ""}{selectedChartEstimatedNetPnlPercent.toFixed(2)}%)
                     </small>
                   ) : null}
                 </span>

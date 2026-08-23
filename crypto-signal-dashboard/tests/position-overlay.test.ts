@@ -2,13 +2,96 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildPositionEntryMarkers,
   buildPositionOverlayGuides,
+  estimatePositionNetExitPnl,
   projectOverlayGuideNetPnl,
+  summarizePositionOverlayEstimatedNetPnl,
+  summarizePositionOverlayEstimatedNetPnlPercent,
   summarizePositionOverlayPnl,
   summarizePositionOverlayPnlPercent,
   validOverlayGuides,
   type PositionOverlayGuide,
 } from "../lib/chart/positionOverlay";
+
+test("chart PnL reserves realistic remaining costs without double-counting Jupiter's open fee", () => {
+  const live = {
+    id: "live",
+    collateralValue: 20,
+    entryPrice: 100,
+    liquidationPrice: null,
+    positionValue: 500,
+    source: "live-api",
+    stopLoss: null,
+    takeProfit: null,
+    unrealizedPnl: 2,
+  };
+  const rpc = { ...live, id: "rpc", source: "rpc-direct" };
+
+  assert.deepEqual(estimatePositionNetExitPnl(live), {
+    estimatedExitCostsUsd: 0.74,
+    estimatedNetPnlUsd: 1.26,
+  });
+  assert.deepEqual(estimatePositionNetExitPnl(rpc), {
+    estimatedExitCostsUsd: 1.04,
+    estimatedNetPnlUsd: 0.96,
+  });
+  assert.equal(summarizePositionOverlayEstimatedNetPnl([live]), 1.26);
+  assert.equal(summarizePositionOverlayEstimatedNetPnlPercent([live]), 6.3);
+});
+
+test("entry markers bind to the current open episode and persist at its original candle", () => {
+  const positions = [{
+    id: "position-sol",
+    accountRef: "position-pubkey",
+    entryPrice: 93.81,
+    marketSymbol: "SOL",
+    side: "long" as const,
+    takeProfit: null,
+    stopLoss: null,
+    liquidationPrice: null,
+  }];
+  const markers = buildPositionEntryMarkers({
+    positions,
+    trades: [
+      { action: "Increase", createdAt: 1_780_000_000_000, positionPubkey: "position-pubkey", side: "long" },
+      { action: "Close", createdAt: 1_780_000_600_000, positionPubkey: "position-pubkey", side: "long" },
+      { action: "Increase", createdAt: 1_780_001_200_000, positionPubkey: "position-pubkey", side: "long" },
+    ],
+  });
+
+  assert.deepEqual(markers, [{
+    id: "position-sol:entry:1780001200",
+    label: "Entry",
+    positionId: "position-sol",
+    price: 93.81,
+    side: "long",
+    time: 1_780_001_200,
+  }]);
+  assert.deepEqual(buildPositionEntryMarkers({ positions: [] }), []);
+});
+
+test("entry markers fall back to the latest active matching execution", () => {
+  const markers = buildPositionEntryMarkers({
+    positions: [{
+      id: "position-sol",
+      accountRef: "position-pubkey",
+      entryPrice: 74.2,
+      marketSymbol: "SOL",
+      side: "short",
+      takeProfit: null,
+      stopLoss: null,
+      liquidationPrice: null,
+    }],
+    executions: [
+      { createdAt: "2026-08-22T12:00:00.000Z", positionPubkey: "position-pubkey", side: "short", status: "closed" },
+      { createdAt: "2026-08-23T14:15:30.000Z", positionPubkey: "position-pubkey", side: "short", status: "confirmed" },
+    ],
+  });
+
+  assert.equal(markers[0]?.time, Date.parse("2026-08-23T14:15:30.000Z") / 1_000);
+  assert.equal(markers[0]?.price, 74.2);
+});
 
 test("chart overlay PnL summarizes the same visible positions", () => {
   assert.equal(summarizePositionOverlayPnl([]), null);
