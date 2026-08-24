@@ -45,7 +45,6 @@ import type { PerpsAutomationConfig } from "@/lib/perps/automationConfig";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { calculatePnlSince, type PerpsPnlPoint } from "@/lib/perps/pnl";
 import { pnlPointsForRange } from "@/lib/perps/pnlChart";
-import { SCALP_TRADE_LEVERAGE } from "@/lib/perps/scalpEngine";
 import {
   DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT,
   SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
@@ -5665,8 +5664,6 @@ function DashboardPage() {
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
             onViewLog={() => { void openDecisionLog(); }}
             scalpModeEnabled={autoTradeSettings.scalpModeEnabled}
-            scalpLeverage={SCALP_TRADE_LEVERAGE}
-            scalpTakeProfitRoePercent={autoTradeSettings.scalpTakeProfitRoePercent}
             onToggleScalpMode={(enabled) => persistAutoTradeSettings({
               ...autoTradeSettings,
               scalpModeEnabled: enabled,
