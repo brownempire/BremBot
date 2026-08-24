@@ -1,4 +1,5 @@
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
+import { isIsolatedLowBalanceMinimumTrade } from "@/lib/perps/scalpAllocation";
 
 export function evaluateUserScopedPerpsRisk(input: {
   session: PerpsAutomationSession;
@@ -17,10 +18,12 @@ export function evaluateUserScopedPerpsRisk(input: {
     .reduce((sum, entry) => sum + entry.collateralUsd, 0);
   const maxTradeCollateralUsd = availableCapitalUsd * input.maxTradePct;
   const maxExposureCollateralUsd = availableCapitalUsd * input.maxExposurePct;
-  const lowBalanceMinimumTrade = availableCapitalUsd >= 12
-    && availableCapitalUsd < 50
-    && Math.abs(input.signal.collateralUsd - 12) < 0.000001
-    && currentCommittedCollateral === 0;
+  const lowBalanceMinimumTrade = isIsolatedLowBalanceMinimumTrade({
+    availableUsdc: availableCapitalUsd,
+    collateralUsd: input.signal.collateralUsd,
+    hasOpenPosition: input.signal.marketContext?.hasOpenPosition,
+    committedCollateralUsd: currentCommittedCollateral,
+  });
   const roundUsd = (value: number) => Number(value.toFixed(2));
 
   if (input.session.killSwitch) {

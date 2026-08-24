@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { AutonomousMonitorLeaseLostError, classifyProfitLockSideEffectFailure, computeTriggerPrices, detectScalpSignal, evaluateScalpAdverseEntryDrift, getScalpTradePlanningConfig, hasMatchingEntirePositionProfitLockStop, mergeCompleteJupiterTradeHistoryForLearning, ProfitLockSideEffectError, resolveAutonomousCollateralUsd, resolveProfitLockPositionProvenance, runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl, runWithRenewingAutonomousMonitorLease, SCALP_SIGNAL_COOLDOWN_SECONDS, type AutonomousMonitorLeaseGuard, type AutonomousMonitorLeaseStore, type ProfitLockClaimSettlement, type ProfitLockSideEffectClaim } from "../lib/perps/autonomousMonitor";
+import { AutonomousMonitorLeaseLostError, classifyProfitLockSideEffectFailure, computeTriggerPrices, detectScalpSignal, evaluateScalpAdverseEntryDrift, getScalpTradePlanningConfig, hasMatchingEntirePositionProfitLockStop, mergeCompleteJupiterTradeHistoryForLearning, ProfitLockSideEffectError, resolveAutonomousCollateralUsd, resolveProfitLockPositionProvenance, resolveRevalidatedScalpEntryPath, resolveScalpProbationCollateralPercent, runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl, runWithRenewingAutonomousMonitorLease, SCALP_SIGNAL_COOLDOWN_SECONDS, type AutonomousMonitorLeaseGuard, type AutonomousMonitorLeaseStore, type ProfitLockClaimSettlement, type ProfitLockSideEffectClaim } from "../lib/perps/autonomousMonitor";
 import { SCALP_STOP_LOSS_ROE_PERCENT } from "../lib/perps/scalpExit";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
-  SCALP_PROFIT_COOLDOWN_SECONDS,
   SCALP_REVERSAL_MAX_ADX,
   SCALP_TRADE_LEVERAGE,
   analyzeScalpPriceAction,
@@ -252,26 +251,42 @@ test("scalp detection does not enter from a one-candle range edge without the fu
   assert.equal(signal, null);
 });
 
-test("scalp detection uses an independent 20-minute cooldown", () => {
+test("scalp detection uses a seven-minute cooldown only after a recorded trade close", () => {
   const points = qualifyingRangePoints();
   const indicators = computeIndicatorSnapshot(points);
   const latestTimestamp = points[points.length - 1]!.t;
 
-  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 1_200);
+  assert.equal(SCALP_SIGNAL_COOLDOWN_SECONDS, 420);
   assert.equal(detectScalpSignal({
     symbol: "SOL/USD",
     points,
     indicators,
     cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
-    lastSignalAt: latestTimestamp - (SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000 - 1),
+    recentClosedTrade: {
+      openedAt: latestTimestamp - 10 * 60_000,
+      closedAt: latestTimestamp - (SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000 - 1),
+      side: "long",
+      netPnlUsd: 1,
+    },
   }), null);
   assert.equal(detectScalpSignal({
     symbol: "SOL/USD",
     points,
     indicators,
     cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
-    lastSignalAt: latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000,
+    recentClosedTrade: {
+      openedAt: latestTimestamp - 10 * 60_000,
+      closedAt: latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000,
+      side: "long",
+      netPnlUsd: 1,
+    },
   })?.type, "scalp");
+  assert.equal(detectScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators,
+    cooldownSeconds: SCALP_SIGNAL_COOLDOWN_SECONDS,
+  })?.type, "scalp", "a rejected candidate cannot start the post-close cooldown");
 });
 
 function reversalIndicators(overrides: Record<string, number | null> = {}) {
@@ -465,46 +480,41 @@ test("a persisted reversal at the ADX 40 ceiling passes the new safety layer", (
 test("a profitable opposite-side scalp cannot bypass missing structural persistence", () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
-  const lastSignalAt = latestTimestamp - 12 * 60_000;
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points,
     indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 20 }),
     profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
-    lastSignalAt,
     recentClosedTrade: {
-      openedAt: lastSignalAt + 30_000,
-      closedAt: latestTimestamp - SCALP_PROFIT_COOLDOWN_SECONDS * 1_000,
+      openedAt: latestTimestamp - 12 * 60_000,
+      closedAt: latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000,
       side: "short",
       netPnlUsd: 3.5,
     },
   });
 
-  assert.equal(SCALP_PROFIT_COOLDOWN_SECONDS, 300);
   assert.equal(signal, null);
 });
 
-test("the shortened cooldown does not apply to losses, same-direction entries, or early reversals", () => {
-  const points = exceptionalBullishSweepPoints();
+test("the seven-minute post-close cooldown applies regardless of the prior trade outcome or side", () => {
+  const points = qualifyingRangePoints();
   const latestTimestamp = points.at(-1)!.t;
-  const lastSignalAt = latestTimestamp - 12 * 60_000;
   const detect = (side: "long" | "short", netPnlUsd: number, closedMinutesAgo: number) => detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
     points,
-    indicators: reversalIndicators({ adx: SCALP_REVERSAL_MAX_ADX + 20 }),
+    indicators: computeIndicatorSnapshot(points),
     profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
-    lastSignalAt,
     recentClosedTrade: {
-      openedAt: lastSignalAt,
+      openedAt: latestTimestamp - 12 * 60_000,
       closedAt: latestTimestamp - closedMinutesAgo * 60_000,
       side,
       netPnlUsd,
     },
   });
 
-  assert.equal(detect("short", -1, 6), null);
-  assert.equal(detect("long", 3.5, 6), null);
-  assert.equal(detect("short", 3.5, 4), null);
+  assert.equal(detect("short", -1, 6.99), null);
+  assert.equal(detect("long", 3.5, 6.99), null);
+  assert.equal(detect("short", 3.5, 7)?.type, "scalp");
 });
 
 test("raw scalp confidence must clear the learned threshold instead of being raised to it", () => {
@@ -557,6 +567,53 @@ test("low-balance collateral restores the isolated $12 order from $12 up to but 
   assert.equal(resolveAutonomousCollateralUsd(25, 20), 12);
   assert.equal(resolveAutonomousCollateralUsd(49.99, 20), 12);
   assert.equal(resolveAutonomousCollateralUsd(50, 20), 10);
+});
+
+test("probation sizing never suppresses the $12 low-balance order or creates a sub-minimum order", () => {
+  assert.equal(resolveScalpProbationCollateralPercent(20, 50, true), 50);
+  assert.equal(resolveAutonomousCollateralUsd(20, resolveScalpProbationCollateralPercent(20, 50, true)), 12);
+  assert.equal(resolveScalpProbationCollateralPercent(50, 30, true), 30);
+  assert.equal(resolveScalpProbationCollateralPercent(100, 50, true), 25);
+  assert.equal(resolveScalpProbationCollateralPercent(100, 50, false), 50);
+});
+
+test("pre-submit revalidation accepts a same-direction path transition but rejects a direction change", () => {
+  const points = qualifyingRangePoints();
+  const breakout = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: computeIndicatorSnapshot(points),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+  });
+  assert.ok(breakout);
+  const continuationEvaluation = {
+    signal: {
+      ...breakout!,
+      priceActionTags: [
+        "INDICATORS_CONFIRMED_TREND_CONTINUATION",
+        "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+        "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
+        "CONTINUATION_CONFIRMATION_CONSENSUS",
+      ],
+    },
+    candidate: {
+      path: "continuation" as const,
+      direction: breakout!.direction,
+      score: breakout!.priceActionScore,
+      accepted: true,
+      rejectionReasons: [],
+      tags: breakout!.priceActionTags,
+      entryPrice: points.at(-1)!.v,
+      timestamp: points.at(-1)!.t,
+      regime: { bias: breakout!.direction, trending: true, exhausted: false, netMove145mPercent: 0.8, range145mPercent: 1.2, horizons: [] },
+    },
+  };
+
+  assert.equal(resolveRevalidatedScalpEntryPath(breakout!.direction, continuationEvaluation), "continuation");
+  assert.equal(resolveRevalidatedScalpEntryPath(
+    breakout!.direction === "bullish" ? "bearish" : "bullish",
+    continuationEvaluation
+  ), null);
 });
 
 test("pre-submit scalp drift uses a bounded ATR-relative adverse tolerance", () => {
@@ -623,6 +680,7 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(result.results[0]?.status, "executed");
   assert.equal(routed?.strategyContext?.scalpEntryPath, "breakout-retest");
+  assert.equal(routed?.strategyContext?.scalpPolicyVersion, 8);
   assert.equal(routed?.strategyContext?.indicatorScore, 5.5);
   assert.equal(routed?.strategyContext?.indicatorQualified, false);
   assert.equal(routed?.strategyContext?.estimatedRoundTripFeeRate, 0.00205);
@@ -633,6 +691,40 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   assert.equal(candidates.at(-1)?.disposition, "accepted");
   assert.equal(candidates.at(-1)?.entryPath, "breakout-retest");
   assert.equal(candidates.at(-1)?.executionId, "execution-v8");
+});
+
+test("a rejected scalp route does not write a cooldown cursor", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routeCalls = 0;
+  let cursorWrites = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: false, code: "DECISION_LAYER_SKIP", message: "Rejected before execution." };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    readLastSignal: async () => null,
+    writeLastSignal: async () => { cursorWrites += 1; },
+  });
+
+  assert.equal(routeCalls, 1);
+  assert.equal(result.results[0]?.code, "DECISION_LAYER_SKIP");
+  assert.equal(cursorWrites, 0);
 });
 
 test("an adverse live tick vetoes a scalp even when the completed-candle recheck is unchanged", async () => {
@@ -686,12 +778,12 @@ test("scalp circuit ingests only positions opened after the v8 rollout and block
   const profile = qualifyingRangeLearningProfile();
   profile.scalpProfile!.policyRollout = {
     ...profile.scalpProfile!.policyRollout!,
-    startedAt: "2026-08-19T12:00:00.000Z",
+    startedAt: "2026-07-16T03:00:00.000Z",
   };
   const outcome = (outcomeId: string, openedAt: string): TradeLearningOutcome => ({
     outcomeId,
     openedAt,
-    closedAt: "2026-08-19T13:30:00.000Z",
+    closedAt: new Date(points.at(-1)!.t - 8 * 60_000).toISOString(),
     signalType: "scalp",
     scalpSetupType: "v-reversal",
     scalpEntryPath: "breakout-retest",
@@ -719,8 +811,8 @@ test("scalp circuit ingests only positions opened after the v8 rollout and block
     isWalletAllowed: () => true,
     getLearningProfile: async () => profile,
     getClosedScalpOutcomes: async () => [
-      outcome("legacy-v7", "2026-08-19T11:59:00.000Z"),
-      outcome("policy-v8", "2026-08-19T12:01:00.000Z"),
+      outcome("legacy-v7", "2026-07-16T02:59:00.000Z"),
+      outcome("policy-v8", "2026-07-16T03:01:00.000Z"),
     ],
     recordScalpCircuitOutcomes: (async (input: { outcomes: Array<{ outcomeId: string }> }) => {
       recorded.push(...input.outcomes.map((outcome) => outcome.outcomeId));
@@ -986,7 +1078,7 @@ test("monitor does not route an exceptional reversal missing structural persiste
     isWalletAllowed: () => true,
     getLatestClosedScalpOutcome: async () => ({
       openedAt: new Date(lastSignalAt + 30_000).toISOString(),
-      closedAt: new Date(latestTimestamp - SCALP_PROFIT_COOLDOWN_SECONDS * 1_000).toISOString(),
+      closedAt: new Date(latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000).toISOString(),
       side: "short",
       netPnlUsd: 3.5,
     }) as never,

@@ -5,11 +5,9 @@ import { getScalpLearningProfile } from "@/lib/perps/scalpEngine";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
-import { getRedisClient } from "@/lib/server/redis";
 
 export const dynamic = "force-dynamic";
 
-const LAST_SIGNAL_KEY = "brembot:perps:automation:last-signal";
 const MARKETS = {
   "COINBASE:SOLUSD": { asset: "SOL", product: "SOL-USD" },
   "COINBASE:ETHUSD": { asset: "ETH", product: "ETH-USD" },
@@ -26,21 +24,16 @@ export async function GET(request: Request) {
   if (!market) return Response.json({ error: "Unsupported scalp overlay market" }, { status: 400 });
 
   try {
-    const [profile, config, points, outcomes, redis] = await Promise.all([
+    const [profile, config, points, outcomes] = await Promise.all([
       getActiveDecisionLearningProfile(walletAddress),
       getPerpsAutomationConfig(walletAddress),
       fetchCoinbaseMinuteCandles(market.product, 240),
       listTradeLearningOutcomes(walletAddress),
-      getRedisClient().catch(() => null),
     ]);
     const scalpProfile = getScalpLearningProfile(profile);
     const latestClosed = [...outcomes].reverse().find((outcome) => (
       outcome.signalType === "scalp" || outcome.scalpSetupType !== null
     )) ?? null;
-    const rawLastSignal = redis
-      ? await redis.hGet(LAST_SIGNAL_KEY, `${walletAddress}:${market.asset}:scalp`).catch(() => null)
-      : null;
-    const parsedLastSignal = Number(rawLastSignal);
     const activeSlot = config?.settings.slots.find((slot) => slot.id === config.settings.perpsActiveSlotId) ?? null;
     const snapshot = buildScalpAgentOverlaySnapshot({
       symbol,
@@ -52,7 +45,6 @@ export async function GET(request: Request) {
       },
       scalpModeEnabled: config?.settings.scalpModeEnabled === true,
       isActiveAsset: activeSlot?.token === market.asset,
-      lastSignalAt: Number.isFinite(parsedLastSignal) && parsedLastSignal > 0 ? parsedLastSignal : null,
       recentClosedTrade: latestClosed
         ? {
             openedAt: Date.parse(latestClosed.openedAt),

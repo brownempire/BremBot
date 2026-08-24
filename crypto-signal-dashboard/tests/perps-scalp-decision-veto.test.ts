@@ -42,17 +42,18 @@ function continuationPayload(overrides: Partial<TradeDecisionPayload> = {}): Tra
       trendWindow: 145,
       trendThreshold: 0,
       breakoutPercent: 0,
-      cooldownSeconds: 1_200,
+      cooldownSeconds: 420,
       trendStrengthPercent: 0.4,
       breakoutStrengthPercent: 0.2,
       atrPercent: 0.15,
+      scalpPolicyVersion: 8,
       scalpSetupType: "v-reversal",
       priceActionScore: 0.78,
       priceActionTags: [
         "INDICATORS_CONFIRMED_TREND_CONTINUATION",
         "CONTINUATION_TWO_CANDLE_CONFIRMATION",
         "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
-        "CONTINUATION_MACD_CONFIRMED",
+        "CONTINUATION_CONFIRMATION_CONSENSUS",
         "SCALP_EXHAUSTION_GUARD_PASSED",
       ],
       indicatorBypass: false,
@@ -109,7 +110,7 @@ test("independent scalp veto rejects continuation without two-candle persistence
   assert.ok(result.explanationTags.includes("scalp-setup-confirmation-required"));
 });
 
-test("independent scalp veto rejects raw indicators that contradict the direction", () => {
+test("authoritative scalp metadata is not re-vetoed by a duplicate indicator pass", () => {
   const payload = continuationPayload();
   payload.strategyContext!.indicators = {
     ...payload.strategyContext!.indicators!,
@@ -123,8 +124,18 @@ test("independent scalp veto rejects raw indicators that contradict the directio
 
   const result = evaluateTradeDecision(payload);
 
+  assert.equal(result.shouldTrade, true);
+  assert.equal(result.explanationTags.includes("scalp-directional-indicator-veto"), false);
+});
+
+test("independent scalp veto requires the current detector policy version", () => {
+  const payload = continuationPayload();
+  delete payload.strategyContext!.scalpPolicyVersion;
+
+  const result = evaluateTradeDecision(payload);
+
   assert.equal(result.shouldTrade, false);
-  assert.ok(result.explanationTags.includes("scalp-directional-indicator-veto"));
+  assert.ok(result.explanationTags.includes("scalp-detector-context-required"));
 });
 
 test("independent scalp veto keeps the leverage cap without blanket-rejecting a volatile regime", () => {
@@ -211,7 +222,7 @@ test("independent scalp veto accepts a statefully confirmed range reversal", () 
   assert.ok(result.explanationTags.includes("scalp-path-range-reversal"));
 });
 
-test("independent scalp veto mirrors the breakout/retest ATR floor", () => {
+test("authoritative breakout/retest metadata is not re-vetoed by a duplicate ATR pass", () => {
   const payload = continuationPayload();
   payload.strategyContext = {
     ...payload.strategyContext!,
@@ -233,6 +244,25 @@ test("independent scalp veto mirrors the breakout/retest ATR floor", () => {
 
   const result = evaluateTradeDecision(payload);
 
-  assert.equal(result.shouldTrade, false);
-  assert.ok(result.explanationTags.includes("scalp-directional-indicator-veto"));
+  assert.equal(result.shouldTrade, true);
+  assert.equal(result.explanationTags.includes("scalp-directional-indicator-veto"), false);
+});
+
+test("the isolated $12 low-balance order bypasses the 50% decision allocation veto", () => {
+  const payload = continuationPayload({
+    requestedTrade: {
+      ...continuationPayload().requestedTrade,
+      collateralUsd: 12,
+    },
+    marketContext: {
+      ...continuationPayload().marketContext,
+      availableUsdc: 20,
+    },
+  });
+
+  const result = evaluateTradeDecision(payload);
+
+  assert.equal(result.shouldTrade, true);
+  assert.ok(result.explanationTags.includes("scalp-low-balance-minimum-trade"));
+  assert.equal(result.explanationTags.includes("scalp-allocation-veto"), false);
 });

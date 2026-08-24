@@ -154,7 +154,6 @@ function historicalMarkers(
   settings: IndicatorSettings
 ) {
   const markers: ScalpOverlayMarker[] = [];
-  let lastCandidateAt = 0;
   // Historical markers must use the same complete 145-minute regime context as
   // the live monitor. Starting earlier can manufacture an apparently eligible
   // marker from a truncated window that live routing correctly evaluates with
@@ -168,7 +167,6 @@ function historicalMarkers(
       points: window,
       indicators,
       profile,
-      lastSignalAt: lastCandidateAt || null,
     });
     if (!signal) continue;
     const latest = window[window.length - 1]!;
@@ -181,7 +179,6 @@ function historicalMarkers(
       confidence: signal.confidence,
       tags: signal.priceActionTags,
     });
-    lastCandidateAt = signal.timestamp;
   }
   return markers.slice(-20);
 }
@@ -193,7 +190,6 @@ export function buildScalpAgentOverlaySnapshot(input: {
   indicatorSettings: IndicatorSettings;
   scalpModeEnabled: boolean;
   isActiveAsset: boolean;
-  lastSignalAt?: number | null;
   recentClosedTrade?: RecentClosedScalpTrade | null;
   now?: Date;
 }): ScalpAgentOverlaySnapshot {
@@ -210,7 +206,6 @@ export function buildScalpAgentOverlaySnapshot(input: {
     points: input.points,
     indicators,
     profile: input.profile,
-    lastSignalAt: input.lastSignalAt,
     recentClosedTrade: input.recentClosedTrade,
   });
   const profilePassed = scalpProfileAllowsLiveEntries(input.profile);
@@ -233,12 +228,14 @@ export function buildScalpAgentOverlaySnapshot(input: {
   } else if (liveSignal) {
     state = "ready";
     headline = `${liveSignal.direction === "bullish" ? "Bullish" : "Bearish"} ${liveSignal.setupType.replace(/-/g, " ")} ready`;
-  } else if (rawSignal && input.lastSignalAt) {
+  } else if (rawSignal && input.recentClosedTrade) {
     state = "blocked";
     headline = "Qualifying setup is in cooldown";
     const secondsRemaining = Math.max(
       0,
-      input.profile.cooldownSeconds - Math.floor(((input.now ?? new Date()).getTime() - input.lastSignalAt) / 1_000),
+      input.profile.cooldownSeconds - Math.floor(
+        ((input.now ?? new Date()).getTime() - input.recentClosedTrade.closedAt) / 1_000
+      ),
     );
     reasons.push(`${Math.ceil(secondsRemaining / 60)} minute${Math.ceil(secondsRemaining / 60) === 1 ? "" : "s"} remain in the learned cooldown.`);
   } else {

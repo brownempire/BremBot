@@ -61,6 +61,7 @@ export const perpsAgentSignalSchema = z.object({
     indicatorScore: z.number().finite().min(0).optional(),
     indicatorQualified: z.boolean().optional(),
     indicatorTags: z.array(z.string().trim().min(1)).optional(),
+    scalpPolicyVersion: z.number().int().positive().optional(),
     scalpSetupType: z.enum(["range-reversal", "liquidity-sweep", "v-reversal", "double-reversal"]).optional(),
     scalpEntryPath: z.enum(["range-reversal", "reversal", "continuation", "breakout-retest", "unknown"]).optional(),
     priceActionScore: z.number().finite().min(0).max(1).optional(),

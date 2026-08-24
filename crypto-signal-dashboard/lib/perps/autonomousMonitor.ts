@@ -90,13 +90,20 @@ import {
   SCALP_POLICY_VERSION,
   SCALP_STANDARD_COOLDOWN_SECONDS,
   SCALP_TRADE_LEVERAGE,
+  scalpCandidatePathAllowsLiveSignal,
   scalpProfileAllowsLiveEntries,
   detectAdaptiveScalpSignal,
   evaluateAdaptiveScalpCandidate,
   getScalpLearningProfile,
+  type RecentClosedScalpTrade,
   type ScalpCandidateEvaluation,
   type ScalpSignal,
 } from "@/lib/perps/scalpEngine";
+import {
+  LOW_BALANCE_TRADE_MAX_USDC,
+  LOW_BALANCE_TRADE_USD,
+  MIN_PERPS_COLLATERAL_USD,
+} from "@/lib/perps/scalpAllocation";
 import {
   computePercentageScalpExitPlan,
   ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
@@ -118,12 +125,6 @@ const PENDING_SCALP_REVERSAL_KEY = "brembot:perps:automation:pending-scalp-rever
 // cannot overlap a still-active routing cycle; successful runs release it early.
 const MONITOR_LOCK_TTL_MS = 3 * 60_000;
 const PENDING_SCALP_REVERSAL_TTL_MS = 3 * 60_000;
-const MIN_PERPS_COLLATERAL_USD = 10;
-// Preserve the operator-established low-balance order: when the agent wallet
-// can fund one isolated Jupiter-compatible trade but percentage sizing would
-// fall below the venue minimum, route exactly $12 instead of silently idling.
-const LOW_BALANCE_TRADE_USD = 12;
-const LOW_BALANCE_TRADE_MAX_USDC = 50;
 const SCALP_CIRCUIT_OUTCOME_REPLAY_LIMIT = 1_000;
 const PROFIT_LOCK_STOP_CLAIM_TTL_MS = 7 * 24 * 60 * 60_000;
 const localProfitLockClaims = new Map<string, string>();
@@ -765,6 +766,19 @@ function toScalpEntryPath(path: ScalpCandidateEvaluation["candidate"]["path"]): 
   return path === "none" ? "unknown" : path;
 }
 
+export function resolveRevalidatedScalpEntryPath(
+  originalDirection: "bullish" | "bearish",
+  freshEvaluation: ScalpCandidateEvaluation
+): ScalpEntryPath | null {
+  const freshPath = toScalpEntryPath(freshEvaluation.candidate.path);
+  return freshEvaluation.signal
+    && freshEvaluation.signal.direction === originalDirection
+    && freshPath !== "unknown"
+    && scalpCandidatePathAllowsLiveSignal(freshEvaluation.candidate.path)
+    ? freshPath
+    : null;
+}
+
 function scalpCandidateMetrics(
   evaluation: ScalpCandidateEvaluation,
   indicators: IndicatorSnapshot,
@@ -914,7 +928,7 @@ export function detectScalpSignal(options: {
   points: PricePoint[];
   indicators: IndicatorSnapshot;
   cooldownSeconds: number;
-  lastSignalAt?: number | null;
+  recentClosedTrade?: RecentClosedScalpTrade | null;
 }): AutonomousSignal | null {
   return detectAdaptiveScalpSignal({
     symbol: options.symbol,
@@ -924,7 +938,7 @@ export function detectScalpSignal(options: {
       ...structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
       cooldownSeconds: options.cooldownSeconds,
     },
-    lastSignalAt: options.lastSignalAt,
+    recentClosedTrade: options.recentClosedTrade,
   });
 }
 
@@ -952,6 +966,22 @@ export function resolveAutonomousCollateralUsd(availableUsdc: number, collateral
     return LOW_BALANCE_TRADE_USD;
   }
   return configuredCollateralUsd;
+}
+
+export function resolveScalpProbationCollateralPercent(
+  availableUsdc: number,
+  standardCollateralPercent: number,
+  probation: boolean
+) {
+  if (!probation || availableUsdc < LOW_BALANCE_TRADE_MAX_USDC) return standardCollateralPercent;
+  const probationPercent = Number((standardCollateralPercent * 0.5).toFixed(2));
+  const probationCollateralUsd = availableUsdc * probationPercent / 100;
+  // A qualified live setup must not disappear merely because half sizing would
+  // fall below the venue minimum. Keep normal sizing until the wallet can fund
+  // a genuinely smaller Jupiter-compatible probation order.
+  return probationCollateralUsd >= MIN_PERPS_COLLATERAL_USD
+    ? probationPercent
+    : standardCollateralPercent;
 }
 
 function deriveTradePlan(config: PerpsAutomationConfig, points: PricePoint[], signal: AutonomousSignal, availableUsdc: number) {
@@ -1657,11 +1687,8 @@ export async function runAutonomousPerpsMonitor(
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
         continue;
       }
-      const [lastSmartSignalAt, lastScalpSignalAt] = await Promise.all([
-        deps.readLastSignal(config.walletAddress, asset, "smart"),
-        deps.readLastSignal(config.walletAddress, asset, "scalp"),
-      ]);
-      const latestClosedScalpOutcome = config.settings.scalpModeEnabled && lastScalpSignalAt
+      const lastSmartSignalAt = await deps.readLastSignal(config.walletAddress, asset, "smart");
+      const latestClosedScalpOutcome = config.settings.scalpModeEnabled
         ? closedScalpOutcomes.at(-1)
           ?? await deps.getLatestClosedScalpOutcome(config.walletAddress).catch(() => null)
         : null;
@@ -1724,7 +1751,6 @@ export async function runAutonomousPerpsMonitor(
             points: scalpPoints,
             indicators,
             profile: scalpProfile,
-            lastSignalAt: lastScalpSignalAt,
             recentClosedTrade: latestClosedScalpOutcome
               ? {
                   openedAt: Date.parse(latestClosedScalpOutcome.openedAt),
@@ -1845,7 +1871,7 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       const scalpMetadata = strategyClass === "scalp" ? signal as ScalpSignal : null;
-      const scalpEntryPath = strategyClass === "scalp" && scalpEvaluation
+      let scalpEntryPath = strategyClass === "scalp" && scalpEvaluation
         ? toScalpEntryPath(scalpEvaluation.candidate.path)
         : null;
       if (
@@ -1889,7 +1915,9 @@ export async function runAutonomousPerpsMonitor(
           scalpCandidateRecord,
           "Buy-only mode rejected the bearish scalp candidate."
         );
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+        if (strategyClass === "smart") {
+          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+        }
         results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
         continue;
       }
@@ -1903,7 +1931,6 @@ export async function runAutonomousPerpsMonitor(
         if (!circuit.allowed) {
           const reason = circuit.reasons.join(" ");
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "SCALP_CIRCUIT_OPEN", reason));
           continue;
         }
@@ -1926,10 +1953,19 @@ export async function runAutonomousPerpsMonitor(
       const learnedPlan = strategyClass === "scalp"
         ? { ...learnedPlanBase, stopLossPercent: SCALP_STOP_LOSS_ROE_PERCENT }
         : learnedPlanBase;
+      const probationContinuation = strategyClass === "scalp"
+        && scalpMetadata?.priceActionTags.includes("CONTINUATION_PROBATION") === true;
+      const standardScalpCollateralPercent = Number(
+        (learnedPlan.collateralPercent * scalpProfile.riskMultiplier).toFixed(2)
+      );
       const plan = strategyClass === "scalp"
         ? {
             ...learnedPlan,
-            collateralPercent: Number((learnedPlan.collateralPercent * scalpProfile.riskMultiplier).toFixed(2)),
+            collateralPercent: resolveScalpProbationCollateralPercent(
+              availableUsdc,
+              standardScalpCollateralPercent,
+              probationContinuation
+            ),
             leverage: Number(Math.min(
               learnedPlan.leverage,
               learningProfile?.leverageCap ?? SCALP_TRADE_LEVERAGE,
@@ -1938,7 +1974,7 @@ export async function runAutonomousPerpsMonitor(
             profileId: learningProfile?.profileId ?? null,
           }
         : learnedPlan;
-      const collateralUsd = resolveAutonomousCollateralUsd(availableUsdc, plan.collateralPercent);
+      let collateralUsd = resolveAutonomousCollateralUsd(availableUsdc, plan.collateralPercent);
       if (!Number.isFinite(collateralUsd) || collateralUsd <= 0) {
         scalpCandidateRecord = await rejectPersistedScalpCandidate(
           deps,
@@ -1976,6 +2012,7 @@ export async function runAutonomousPerpsMonitor(
       const side = executionDirection === "bullish" ? "long" : "short";
       let entryPrice = (strategyClass === "scalp" ? scalpPoints : windowPoints).at(-1)?.v ?? 0;
       let executionScalpMetadata = scalpMetadata;
+      let executionSignalConfidence = signal.confidence;
       if (strategyClass === "scalp" && scalpEntryPath) {
         let freshPoints: PricePoint[];
         try {
@@ -1986,7 +2023,6 @@ export async function runAutonomousPerpsMonitor(
         } catch {
           const reason = "Fresh completed-candle data was unavailable for the required pre-submit scalp revalidation.";
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "SCALP_REVALIDATION_UNAVAILABLE", reason));
           continue;
         }
@@ -1997,7 +2033,6 @@ export async function runAutonomousPerpsMonitor(
           points: freshScalpPoints,
           indicators: freshIndicators,
           profile: scalpProfile,
-          lastSignalAt: lastScalpSignalAt,
           recentClosedTrade: latestClosedScalpOutcome
             ? {
                 openedAt: Date.parse(latestClosedScalpOutcome.openedAt),
@@ -2007,20 +2042,52 @@ export async function runAutonomousPerpsMonitor(
               }
             : null,
         });
-        const freshPath = toScalpEntryPath(freshEvaluation.candidate.path);
-        const setupRemainsQualified = Boolean(
-          freshEvaluation.signal
-          && freshEvaluation.signal.direction === signal.direction
-          && freshPath === scalpEntryPath
-        );
-        if (!setupRemainsQualified) {
+        const freshPath = resolveRevalidatedScalpEntryPath(signal.direction, freshEvaluation);
+        if (!freshPath) {
           const reason = freshEvaluation.candidate.rejectionReasons[0]
             ?? "The scalp setup changed direction or entry path before submission.";
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "SCALP_REVALIDATION_FAILED", reason));
           continue;
         }
+        if (freshPath !== scalpEntryPath) {
+          const freshCircuit = await deps.getScalpCircuitDecision({
+            walletAddress: config.walletAddress,
+            policyVersion: SCALP_POLICY_VERSION,
+            entryPath: freshPath,
+            requireAuthoritative: true,
+          });
+          if (!freshCircuit.allowed) {
+            const reason = freshCircuit.reasons.join(" ");
+            scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
+            results.push(skip(config, asset, "SCALP_CIRCUIT_OPEN", reason));
+            continue;
+          }
+          scalpCandidateRecord = await rejectPersistedScalpCandidate(
+            deps,
+            scalpCandidateRecord,
+            `The same-direction setup transitioned from ${scalpEntryPath} to ${freshPath} during pre-submit revalidation.`
+          );
+          scalpCandidateRecord = await persistScalpCandidate({
+            deps,
+            walletAddress: config.walletAddress,
+            asset,
+            evaluation: freshEvaluation,
+            indicators: freshIndicators,
+            volatilityPercent: computeVolatilityPercent(freshScalpPoints),
+          });
+          scalpEntryPath = freshPath;
+        }
+        const freshProbationContinuation = freshEvaluation.signal!.priceActionTags
+          .includes("CONTINUATION_PROBATION");
+        collateralUsd = resolveAutonomousCollateralUsd(
+          availableUsdc,
+          resolveScalpProbationCollateralPercent(
+            availableUsdc,
+            standardScalpCollateralPercent,
+            freshProbationContinuation
+          )
+        );
         let livePrice: number | null;
         try {
           livePrice = await deps.fetchLivePrice(`${asset}-USD`);
@@ -2030,7 +2097,6 @@ export async function runAutonomousPerpsMonitor(
         if (livePrice === null) {
           const reason = "The live Coinbase ticker was unavailable for the required pre-submit scalp price check.";
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "SCALP_LIVE_PRICE_UNAVAILABLE", reason));
           continue;
         }
@@ -2043,7 +2109,6 @@ export async function runAutonomousPerpsMonitor(
         if (!drift.allowed) {
           const reason = `The live Coinbase price moved ${drift.adverseMovePercent.toFixed(3)}% adversely beyond the completed-candle entry reference, exceeding the ${drift.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`;
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
           results.push(skip(config, asset, "SCALP_ADVERSE_ENTRY_DRIFT", reason));
           continue;
         }
@@ -2051,6 +2116,7 @@ export async function runAutonomousPerpsMonitor(
         routingIndicators = freshIndicators;
         routingIndicatorScore = scoreIndicatorSnapshot(freshIndicators, signal.direction, indicatorSettings);
         executionScalpMetadata = freshEvaluation.signal;
+        executionSignalConfidence = freshEvaluation.signal!.confidence;
       }
       const scalpExitPlan = strategyClass === "scalp"
         ? computePercentageScalpExitPlan({
@@ -2066,7 +2132,7 @@ export async function runAutonomousPerpsMonitor(
             openPositions,
             candidateSide: side,
             setupType: executionScalpMetadata.setupType,
-            confidence: signal.confidence,
+            confidence: executionSignalConfidence,
             priceActionScore: executionScalpMetadata.priceActionScore,
             indicatorBypass: !invertDirection && executionScalpMetadata.indicatorBypass === true,
             projectedNetProfitUsd: scalpExitPlan.netProfitTargetUsd,
@@ -2078,7 +2144,6 @@ export async function runAutonomousPerpsMonitor(
           scalpCandidateRecord,
           scalpPositionPolicy.message
         );
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
         results.push(skip(config, asset, scalpPositionPolicy.code, scalpPositionPolicy.message));
         continue;
       }
@@ -2144,7 +2209,7 @@ export async function runAutonomousPerpsMonitor(
           ? `Opposite-direction scalp experiment ${experimentTradeNumber}/${directionExperiment?.maxTrades}: detector selected ${detectedDirection === "bullish" ? "long" : "short"}; executing ${side}. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
           : `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
         direction: executionDirection,
-        signalConfidence: signal.confidence,
+        signalConfidence: executionSignalConfidence,
         asset,
         collateralUsd,
         leverage: plan.leverage,
@@ -2168,6 +2233,7 @@ export async function runAutonomousPerpsMonitor(
           indicatorScore: routingIndicatorScore.score,
           indicatorQualified: indicatorsReady ? routingIndicatorScore.qualified : false,
           indicatorTags: indicatorsReady ? routingIndicatorScore.tags : ["INDICATOR_HISTORY_INCOMPLETE"],
+          scalpPolicyVersion: strategyClass === "scalp" ? SCALP_POLICY_VERSION : undefined,
           scalpSetupType: executionScalpMetadata?.setupType,
           scalpEntryPath: scalpEntryPath ?? undefined,
           priceActionScore: executionScalpMetadata?.priceActionScore,
@@ -2231,7 +2297,9 @@ export async function runAutonomousPerpsMonitor(
           );
         }
       }
-      await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+      if (strategyClass === "smart" || routed.ok) {
+        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
+      }
       if (routed.ok && pendingScalpReversal) {
         await deps.clearPendingScalpReversal(config.walletAddress);
       }

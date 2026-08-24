@@ -66,7 +66,7 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
   assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, true);
-  assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.72);
+  assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.64);
   assert.equal(snapshot.thresholds.continuationLongBollingerMaximum, 0.72);
   assert.equal(snapshot.thresholds.continuationShortBollingerMinimum, 0.28);
   assert.equal(snapshot.thresholds.maximum145mNetOrRangePercent, 2);
@@ -138,7 +138,9 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 240\)/);
   assert.match(overlay, /Math\.max\(SCALP_EXHAUSTION_LOOKBACK_MINUTES - 1, points\.length - 120\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
-  assert.match(route, /LAST_SIGNAL_KEY/);
+  assert.match(route, /listTradeLearningOutcomes\(walletAddress\)/);
+  assert.match(route, /recentClosedTrade: latestClosed/);
+  assert.doesNotMatch(route, /LAST_SIGNAL_KEY/);
 });
 
 test("native widget navigation keeps the mounted chart and provides a contained loading recovery", () => {
