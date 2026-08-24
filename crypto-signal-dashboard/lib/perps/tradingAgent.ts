@@ -35,6 +35,7 @@ import {
   scalpCandidatePathAllowsLiveSignal,
   scalpProfileAllowsLiveEntries,
 } from "@/lib/perps/scalpEngine";
+import { SCALP_MINIMUM_LEVERAGE } from "@/lib/perps/scalpLeverage";
 import {
   fetchJupiterPerpsAccountSnapshot,
   fetchJupiterPerpsTransactionStatus,
@@ -861,6 +862,7 @@ async function routePerpsSignal(
 
       const submitEntry = () => executePerpsEntryWithRetries({
         signal: executionSignal,
+        minimumLeverage: isScalp ? SCALP_MINIMUM_LEVERAGE : undefined,
         build: (attemptSignal) => buildPerpsTransactionForSignal(
           attemptSignal,
           agentWalletAddress,
