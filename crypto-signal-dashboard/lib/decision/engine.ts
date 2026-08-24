@@ -15,6 +15,10 @@ import {
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
   SCALP_POLICY_VERSION,
 } from "@/lib/perps/scalpEngine";
+import {
+  SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE,
+  SCALP_MINIMUM_LEVERAGE,
+} from "@/lib/perps/scalpLeverage";
 import { isIsolatedLowBalanceMinimumTrade } from "@/lib/perps/scalpAllocation";
 import {
   ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
@@ -23,7 +27,6 @@ import {
 import type { PerpsAutomationSession, PerpsAgentSignal, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 
 const DECISION_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1_000;
-const SCALP_FALLBACK_LEVERAGE_CAP = 20;
 const SCALP_REWARD_RISK_ROUNDING_TOLERANCE = 0.02;
 
 type ScalpDecisionPath = "continuation" | "breakout-retest" | "range-reversal" | "reversal" | "unknown";
@@ -256,11 +259,10 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
         ? SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE
         : Math.max(0.58, learningProfile?.scalpProfile?.minimumPriceActionScore ?? 0.58);
     const scoreQualified = (context?.priceActionScore ?? 0) >= minimumPathScore;
-    const leverageCap = Math.min(
-      SCALP_FALLBACK_LEVERAGE_CAP,
-      learningProfile?.leverageCap ?? SCALP_FALLBACK_LEVERAGE_CAP
-    );
-    const leverageQualified = payload.requestedTrade.leverage <= leverageCap;
+    // Scalp leverage is an execution policy, independent from legacy Smart
+    // learning-profile ranges that may still be persisted as 2-20x.
+    const leverageQualified = payload.requestedTrade.leverage >= SCALP_MINIMUM_LEVERAGE
+      && payload.requestedTrade.leverage <= SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE;
     const volatilityCeiling = Math.min(
       SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
       learningProfile?.volatilityCeilingPercent ?? SCALP_MAX_145M_NET_OR_RANGE_PERCENT
@@ -336,7 +338,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
             : !scoreQualified
                 ? `The ${entryPath} price-action score did not reach its ${minimumPathScore.toFixed(2)} execution threshold.`
                 : !leverageQualified
-                  ? `The requested ${payload.requestedTrade.leverage.toFixed(1)}x leverage exceeds the independent ${leverageCap.toFixed(1)}x scalp cap.`
+                  ? `The requested ${payload.requestedTrade.leverage.toFixed(1)}x leverage is outside the independent ${SCALP_MINIMUM_LEVERAGE.toFixed(0)}-${SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE.toFixed(0)}x scalp range.`
                   : !volatilityQualified
                     ? `The current ${typeof volatility === "number" ? volatility.toFixed(2) : "unknown"}% range exceeds the independent ${volatilityCeiling.toFixed(2)}% scalp regime ceiling.`
                     : !economicsQualified
@@ -345,7 +347,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
                         ? "The requested collateral exceeds the learned wallet allocation limit."
                         : "An existing position prevents this scalp entry from opening concurrently.";
 
-    const lowRisk = payload.requestedTrade.leverage <= 10
+    const lowRisk = payload.requestedTrade.leverage <= 30
       && (volatility ?? Number.POSITIVE_INFINITY) <= 1
       && (netRewardRisk ?? 0) >= SCALP_MINIMUM_NET_REWARD_RISK_RATIO;
 
