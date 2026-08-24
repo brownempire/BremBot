@@ -6,12 +6,19 @@
 export const DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE = 0.00205;
 export const ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE = DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE;
 export const SCALP_ATR_PROFIT_TARGET_MULTIPLIER = 2;
+export const SCALP_REVERSAL_ATR_PROFIT_TARGET_MULTIPLIER = 1.5;
+export const SCALP_MINIMUM_PRICE_TARGET_PERCENT = 0.5;
+export const SCALP_MAXIMUM_PRICE_TARGET_PERCENT = 1;
 export const DEFAULT_SCALP_TAKE_PROFIT_ROE_PERCENT = 25;
 export const SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT = 25;
-export const SCALP_STOP_LOSS_ROE_PERCENT = 23;
-export const SCALP_MINIMUM_NET_REWARD_RISK_RATIO = 1.25;
+export const SCALP_STOP_LOSS_ROE_PERCENT = 15;
+export const SCALP_MINIMUM_NET_REWARD_RISK_RATIO = 1;
 export const SCALP_MINIMUM_NET_PROFIT_USD = 1;
 export const MIN_TPSL_EXPECTED_PNL_USD = 1;
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
 
 type ScalpFeeOutcome = {
   feesUsd: number;
@@ -50,6 +57,7 @@ export type PercentageScalpExitPlan = {
   estimatedFeesUsd: number;
   estimatedStopLossNetUsd: number;
   minimumRewardRiskNetProfitUsd: number;
+  targetPriceMovePercent: number;
   volatilityTargetRoePercent: number | null;
   targetRoePercent: number;
   grossProfitTargetUsd: number;
@@ -61,6 +69,7 @@ export function computePercentageScalpExitPlan(options: {
   leverage: number;
   atrPercent: number | null;
   configuredTakeProfitRoePercent: number;
+  entryPath?: "continuation" | "breakout-retest" | "range-reversal" | "reversal" | "unknown" | null;
   estimatedRoundTripFeeRate?: number;
 }): PercentageScalpExitPlan {
   const positionSizeUsd = Math.max(0, options.positionSizeUsd);
@@ -73,19 +82,28 @@ export function computePercentageScalpExitPlan(options: {
   const estimatedFeesUsd = positionSizeUsd * feeRate;
   const estimatedStopLossNetUsd = collateralUsd * SCALP_STOP_LOSS_ROE_PERCENT / 100 + estimatedFeesUsd;
   const minimumRewardRiskNetProfitUsd = estimatedStopLossNetUsd * SCALP_MINIMUM_NET_REWARD_RISK_RATIO;
-  const configuredTargetRoePercent = Math.max(
-    SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT,
-    options.configuredTakeProfitRoePercent
+  const configuredPriceTargetPercent = clamp(
+    Math.max(SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT, options.configuredTakeProfitRoePercent) / leverage,
+    SCALP_MINIMUM_PRICE_TARGET_PERCENT,
+    SCALP_MAXIMUM_PRICE_TARGET_PERCENT
   );
-  const volatilityTargetRoePercent = typeof options.atrPercent === "number"
+  const atrMultiplier = options.entryPath === "reversal" || options.entryPath === "range-reversal"
+    ? SCALP_REVERSAL_ATR_PROFIT_TARGET_MULTIPLIER
+    : SCALP_ATR_PROFIT_TARGET_MULTIPLIER;
+  const volatilityTargetPricePercent = typeof options.atrPercent === "number"
     && Number.isFinite(options.atrPercent)
     && options.atrPercent > 0
-      ? options.atrPercent * SCALP_ATR_PROFIT_TARGET_MULTIPLIER * leverage
+      ? clamp(
+          options.atrPercent * atrMultiplier,
+          SCALP_MINIMUM_PRICE_TARGET_PERCENT,
+          SCALP_MAXIMUM_PRICE_TARGET_PERCENT
+        )
       : null;
-  const baseTargetRoePercent = volatilityTargetRoePercent === null
-    ? configuredTargetRoePercent
-    : Math.min(100, Math.max(configuredTargetRoePercent, volatilityTargetRoePercent));
-  const percentageGrossProfitUsd = collateralUsd * baseTargetRoePercent / 100;
+  const baseTargetPricePercent = volatilityTargetPricePercent ?? configuredPriceTargetPercent;
+  const volatilityTargetRoePercent = volatilityTargetPricePercent === null
+    ? null
+    : volatilityTargetPricePercent * leverage;
+  const percentageGrossProfitUsd = positionSizeUsd * baseTargetPricePercent / 100;
   const grossProfitTargetUsd = Math.max(
     MIN_TPSL_EXPECTED_PNL_USD,
     estimatedFeesUsd + SCALP_MINIMUM_NET_PROFIT_USD,
@@ -94,12 +112,16 @@ export function computePercentageScalpExitPlan(options: {
   );
   const targetRoePercent = collateralUsd > 0
     ? grossProfitTargetUsd / collateralUsd * 100
-    : baseTargetRoePercent;
+    : baseTargetPricePercent * leverage;
+  const targetPriceMovePercent = positionSizeUsd > 0
+    ? grossProfitTargetUsd / positionSizeUsd * 100
+    : baseTargetPricePercent;
 
   return {
     estimatedFeesUsd: Number(estimatedFeesUsd.toFixed(6)),
     estimatedStopLossNetUsd: Number(estimatedStopLossNetUsd.toFixed(6)),
     minimumRewardRiskNetProfitUsd: Number(minimumRewardRiskNetProfitUsd.toFixed(6)),
+    targetPriceMovePercent: Number(targetPriceMovePercent.toFixed(6)),
     volatilityTargetRoePercent: volatilityTargetRoePercent === null
       ? null
       : Number(volatilityTargetRoePercent.toFixed(6)),
