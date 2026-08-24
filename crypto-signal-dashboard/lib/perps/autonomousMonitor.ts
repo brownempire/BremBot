@@ -100,6 +100,10 @@ import {
   type ScalpSignal,
 } from "@/lib/perps/scalpEngine";
 import {
+  isExceptionalScalpLeverageSetup,
+  resolveScalpTradeLeverage,
+} from "@/lib/perps/scalpLeverage";
+import {
   LOW_BALANCE_TRADE_MAX_USDC,
   LOW_BALANCE_TRADE_USD,
   MIN_PERPS_COLLATERAL_USD,
@@ -1953,6 +1957,17 @@ export async function runAutonomousPerpsMonitor(
       const learnedPlan = strategyClass === "scalp"
         ? { ...learnedPlanBase, stopLossPercent: SCALP_STOP_LOSS_ROE_PERCENT }
         : learnedPlanBase;
+      const exceptionalScalpLeverage = strategyClass === "scalp" && scalpMetadata
+        ? isExceptionalScalpLeverageSetup({
+            entryPath: scalpEntryPath,
+            confidence: signal.confidence,
+            priceActionScore: scalpMetadata.priceActionScore,
+            indicatorScore: indicatorScore.score,
+            indicatorBypass: scalpMetadata.indicatorBypass,
+            adx: indicators.adx,
+            volumeRatio: indicators.volumeRatio,
+          })
+        : false;
       const probationContinuation = strategyClass === "scalp"
         && scalpMetadata?.priceActionTags.includes("CONTINUATION_PROBATION") === true;
       const standardScalpCollateralPercent = Number(
@@ -1966,11 +1981,12 @@ export async function runAutonomousPerpsMonitor(
               standardScalpCollateralPercent,
               probationContinuation
             ),
-            leverage: Number(Math.min(
-              learnedPlan.leverage,
-              learningProfile?.leverageCap ?? SCALP_TRADE_LEVERAGE,
-              SCALP_TRADE_LEVERAGE
-            ).toFixed(2)),
+            leverage: resolveScalpTradeLeverage({
+              learnedLeverage: learnedPlan.leverage,
+              learnedFloor: learningProfile?.leverageFloor,
+              learnedCap: learningProfile?.leverageCap,
+              exceptional: exceptionalScalpLeverage,
+            }),
             profileId: learningProfile?.profileId ?? null,
           }
         : learnedPlan;
@@ -2124,6 +2140,7 @@ export async function runAutonomousPerpsMonitor(
             leverage: plan.leverage,
             atrPercent: plan.atrPercent,
             configuredTakeProfitRoePercent: config.settings.scalpTakeProfitRoePercent,
+            entryPath: scalpEntryPath,
             estimatedRoundTripFeeRate: estimatedScalpFeeRate,
           })
         : null;
