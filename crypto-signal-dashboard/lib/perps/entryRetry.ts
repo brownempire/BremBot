@@ -18,8 +18,18 @@ function round(value: number, fractionDigits: number) {
   return Number(value.toFixed(fractionDigits));
 }
 
-export function createPerpsEntryRetrySignals(signal: PerpsSignalPayload) {
-  return RETRY_MULTIPLIERS.map((multiplier, index) => {
+export function createPerpsEntryRetrySignals(
+  signal: PerpsSignalPayload,
+  options: { minimumLeverage?: number } = {}
+) {
+  const minimumLeverage = typeof options.minimumLeverage === "number"
+    && Number.isFinite(options.minimumLeverage)
+    ? Math.max(1, options.minimumLeverage)
+    : 1;
+  const multipliers = RETRY_MULTIPLIERS.filter((multiplier) => (
+    round(signal.leverage * multiplier, 2) >= minimumLeverage
+  ));
+  return multipliers.map((multiplier, index) => {
     const collateralUsd = signal.collateralUsd === 12
       ? 12
       : Math.max(0.000001, round(signal.collateralUsd * multiplier, 6));
@@ -30,7 +40,9 @@ export function createPerpsEntryRetrySignals(signal: PerpsSignalPayload) {
       leverage,
       sizeUsd: round(collateralUsd * leverage, 2),
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      reason: index === 0 ? signal.reason : `${signal.reason} Parameter retry ${index + 1} of 3.`,
+      reason: index === 0
+        ? signal.reason
+        : `${signal.reason} Parameter retry ${index + 1} of ${multipliers.length}.`,
     } satisfies PerpsSignalPayload;
   });
 }
@@ -53,12 +65,23 @@ function isRetryableBuildFailure(error: unknown) {
 
 export async function executePerpsEntryWithRetries(input: {
   signal: PerpsSignalPayload;
+  minimumLeverage?: number;
   build: (signal: PerpsSignalPayload) => Promise<BuiltEntry>;
   sign: (serializedTxBase64: string) => string;
   submit: (signedSerializedTxBase64: string) => Promise<SubmittedEntry>;
 }) {
-  const attempts = createPerpsEntryRetrySignals(input.signal);
+  const attempts = createPerpsEntryRetrySignals(input.signal, {
+    minimumLeverage: input.minimumLeverage,
+  });
   const failures: string[] = [];
+
+  if (attempts.length === 0) {
+    throw new PerpsExecutionError(
+      "ENTRY_LEVERAGE_BELOW_MINIMUM",
+      `The requested ${input.signal.leverage.toFixed(2)}x leverage is below the required ${(input.minimumLeverage ?? 1).toFixed(2)}x execution floor.`,
+      422
+    );
+  }
 
   for (let index = 0; index < attempts.length; index += 1) {
     const attemptSignal = attempts[index]!;
@@ -94,5 +117,9 @@ export async function executePerpsEntryWithRetries(input: {
     }
   }
 
-  throw new PerpsExecutionError("ENTRY_RETRIES_EXHAUSTED", "Jupiter rejected all three parameter attempts.", 422);
+  throw new PerpsExecutionError(
+    "ENTRY_RETRIES_EXHAUSTED",
+    `Jupiter rejected all ${attempts.length} floor-compliant parameter attempt${attempts.length === 1 ? "" : "s"}.`,
+    422
+  );
 }
