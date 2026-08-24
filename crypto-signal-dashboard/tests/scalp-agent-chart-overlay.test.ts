@@ -86,6 +86,31 @@ test("a stale scalp policy remains visibly blocked until winner-baseline migrati
   assert.equal(scalpProfileAllowsLiveEntries(resolved), false);
 });
 
+test("scalp chart visibly blocks execution after repeated monitor failures", () => {
+  const snapshot = buildScalpAgentOverlaySnapshot({
+    symbol: "COINBASE:SOLUSD",
+    points: candleWindow(),
+    profile: structuredClone(DEFAULT_SCALP_LEARNING_PROFILE),
+    indicatorSettings: BASE_INDICATOR_SETTINGS,
+    scalpModeEnabled: true,
+    isActiveAsset: true,
+    monitorHealth: {
+      healthy: false,
+      stale: false,
+      lastRunAt: "2026-08-24T18:52:41.303Z",
+      consecutiveFailureCount: 3,
+      code: "SCALP_CIRCUIT_RECONCILIATION_FAILED",
+      message: "Circuit reconciliation failed; no scalp entry was submitted.",
+    },
+    now: new Date("2026-08-24T18:53:00.000Z"),
+  });
+
+  assert.equal(snapshot.state, "blocked");
+  assert.match(snapshot.headline, /blocked for 3 cycles/i);
+  assert.match(snapshot.reasons[0] ?? "", /circuit reconciliation failed/i);
+  assert.equal(snapshot.monitorHealth?.code, "SCALP_CIRCUIT_RECONCILIATION_FAILED");
+});
+
 test("floating scalp setup panel remains inside the chart after dragging or resizing", () => {
   assert.deepEqual(clampFloatingPanelPosition({
     left: -30,
@@ -139,6 +164,9 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(overlay, /Math\.max\(SCALP_EXHAUSTION_LOOKBACK_MINUTES - 1, points\.length - 120\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
   assert.match(route, /listTradeLearningOutcomes\(walletAddress\)/);
+  assert.match(route, /getLastAutonomousMonitorRun\(\)/);
+  assert.match(route, /walletFailureStreaks/);
+  assert.match(route, /monitorHealth:/);
   assert.match(route, /recentClosedTrade: latestClosed/);
   assert.doesNotMatch(route, /LAST_SIGNAL_KEY/);
 });

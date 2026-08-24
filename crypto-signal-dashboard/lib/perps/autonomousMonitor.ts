@@ -350,6 +350,8 @@ export type AutonomousMonitorResult = {
   locked: boolean;
   startedAt: string;
   completedAt: string;
+  consecutiveFailureCount?: number;
+  walletFailureStreaks?: Record<string, number>;
   configuredWallets: number;
   eligibleWallets: number;
   results: MonitorExecutionResult[];
@@ -862,6 +864,9 @@ async function rejectPersistedScalpCandidate(
     ...candidate,
     disposition: "rejected",
     rejectionReasons: [...new Set([...candidate.rejectionReasons, reason])],
+    tags: reason.startsWith("SYSTEM_HEALTH_BLOCKED:")
+      ? [...new Set([...candidate.tags, "SYSTEM_HEALTH_BLOCKED"])]
+      : candidate.tags,
     executionId: route?.executionId ?? candidate.executionId ?? null,
     decisionId: route?.decisionId ?? candidate.decisionId ?? null,
   });
@@ -889,6 +894,9 @@ async function recordPolicyScalpOutcomes(input: {
     policyVersion: SCALP_POLICY_VERSION,
     outcomes: policyOutcomes.map((outcome) => ({
       outcomeId: outcome.outcomeId,
+      episodeId: outcome.episodeId ?? null,
+      reconciliationVersion: outcome.reconciliationVersion ?? null,
+      reconciledAt: outcome.createdAt,
       entryPath: deriveScalpEntryPath(outcome),
       netPnlUsd: outcome.netPnlUsd,
       closedAt: outcome.closedAt,
@@ -1652,13 +1660,23 @@ export async function runAutonomousPerpsMonitor(
         ? await deps.getClosedScalpOutcomes(config.walletAddress)
         : prefetchedClosedScalpOutcomes
           ?? await deps.getClosedScalpOutcomes(config.walletAddress).catch(() => []);
+      let scalpCircuitReconciliationError: string | null = null;
       if (config.settings.scalpModeEnabled && scalpProfile.policyVersion === SCALP_POLICY_VERSION) {
-        await recordPolicyScalpOutcomes({
-          deps,
-          walletAddress: config.walletAddress,
-          outcomes: closedScalpOutcomes,
-          policyStartedAt: scalpProfile.policyRollout?.startedAt ?? null,
-        });
+        try {
+          await recordPolicyScalpOutcomes({
+            deps,
+            walletAddress: config.walletAddress,
+            outcomes: closedScalpOutcomes,
+            policyStartedAt: scalpProfile.policyRollout?.startedAt ?? null,
+          });
+        } catch (error) {
+          // Keep market diagnostics alive so a circuit-storage incident cannot
+          // make missed candidates invisible. Execution remains fail-closed
+          // until the authoritative circuit projection is healthy again.
+          scalpCircuitReconciliationError = error instanceof Error
+            ? error.message
+            : "Authoritative scalp-circuit reconciliation failed.";
+        }
       }
       const estimatedScalpFeeRate = resolveConservativeScalpFeeRate(closedScalpOutcomes);
       const effectiveParams = getLearnedSignalParams(config, asset, executionProfile);
@@ -1810,6 +1828,22 @@ export async function runAutonomousPerpsMonitor(
           "A qualifying Smart Trade took priority over this simultaneous scalp candidate."
         );
       }
+      if (strategyClass === "scalp" && scalpCircuitReconciliationError) {
+        const reason = `SYSTEM_HEALTH_BLOCKED: ${scalpCircuitReconciliationError}`;
+        scalpCandidateRecord = await rejectPersistedScalpCandidate(
+          deps,
+          scalpCandidateRecord,
+          reason
+        );
+        results.push({
+          walletAddress: config.walletAddress,
+          asset,
+          status: "failed",
+          code: "SCALP_CIRCUIT_RECONCILIATION_FAILED",
+          message: `${reason} Candidate diagnostics completed, but no scalp entry was submitted.`,
+        });
+        continue;
+      }
       if (!signal) {
         if (pendingScalpReversal) {
           results.push(skip(
@@ -1926,12 +1960,26 @@ export async function runAutonomousPerpsMonitor(
         continue;
       }
       if (strategyClass === "scalp" && scalpEntryPath) {
-        const circuit = await deps.getScalpCircuitDecision({
-          walletAddress: config.walletAddress,
-          policyVersion: SCALP_POLICY_VERSION,
-          entryPath: scalpEntryPath,
-          requireAuthoritative: true,
-        });
+        let circuit: Awaited<ReturnType<typeof getScalpCircuitDecision>>;
+        try {
+          circuit = await deps.getScalpCircuitDecision({
+            walletAddress: config.walletAddress,
+            policyVersion: SCALP_POLICY_VERSION,
+            entryPath: scalpEntryPath,
+            requireAuthoritative: true,
+          });
+        } catch (error) {
+          const reason = `SYSTEM_HEALTH_BLOCKED: ${error instanceof Error ? error.message : "Authoritative scalp-circuit state is unavailable."}`;
+          scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
+          results.push({
+            walletAddress: config.walletAddress,
+            asset,
+            status: "failed",
+            code: "SCALP_CIRCUIT_STATE_UNAVAILABLE",
+            message: `${reason} Candidate diagnostics completed, but no scalp entry was submitted.`,
+          });
+          continue;
+        }
         if (!circuit.allowed) {
           const reason = circuit.reasons.join(" ");
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
@@ -2451,8 +2499,33 @@ export async function runLockedAutonomousPerpsMonitor() {
     leaseStore,
     task: async (leaseGuard) => {
       const result = await runAutonomousPerpsMonitor({}, leaseGuard);
-      await redis.set(LAST_RUN_KEY, JSON.stringify(result));
-      return result;
+      const previousRaw = await redis.get(LAST_RUN_KEY);
+      let previous: AutonomousMonitorResult | null = null;
+      try {
+        previous = previousRaw ? JSON.parse(previousRaw) as AutonomousMonitorResult : null;
+      } catch {
+        previous = null;
+      }
+      const walletFailureStreaks: Record<string, number> = {};
+      const walletAddresses = new Set([
+        ...Object.keys(previous?.walletFailureStreaks ?? {}),
+        ...result.results.map((item) => item.walletAddress),
+      ]);
+      walletAddresses.forEach((walletAddress) => {
+        const walletResults = result.results.filter((item) => item.walletAddress === walletAddress);
+        walletFailureStreaks[walletAddress] = walletResults.some((item) => item.status === "failed")
+          ? (previous?.walletFailureStreaks?.[walletAddress] ?? 0) + 1
+          : 0;
+      });
+      const persisted = {
+        ...result,
+        consecutiveFailureCount: result.ok
+          ? 0
+          : (previous?.ok === false ? previous.consecutiveFailureCount ?? 1 : 0) + 1,
+        walletFailureStreaks,
+      } satisfies AutonomousMonitorResult;
+      await redis.set(LAST_RUN_KEY, JSON.stringify(persisted));
+      return persisted;
     },
   });
   if (!leased.acquired) {

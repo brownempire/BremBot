@@ -14,6 +14,22 @@ export const SCALP_GLOBAL_LOSS_LIMIT = 3;
 
 const CIRCUIT_FILE = process.env.PERPS_SCALP_CIRCUIT_FILE || "/tmp/brembot-perps-scalp-circuit-events.json";
 const CIRCUIT_EVENTS_KEY_PREFIX = "brembot:perps:scalp:circuit-events:v2";
+const CIRCUIT_BATCH_COMPARE_AND_SET_LUA = [
+  "for index = 1, #ARGV, 3 do",
+  "  local current = redis.call('HGET', KEYS[1], ARGV[index])",
+  "  local expected = ARGV[index + 1]",
+  "  if expected == '' then",
+  "    if current then return 0 end",
+  "  elseif current ~= expected then",
+  "    return 0",
+  "  end",
+  "end",
+  "for index = 1, #ARGV, 3 do",
+  "  redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 2])",
+  "end",
+  "return 1",
+].join("\n");
+const CIRCUIT_BATCH_MAX_CAS_ATTEMPTS = 3;
 
 const scalpCircuitEventSchema = z.object({
   eventId: z.string().trim().min(1),
@@ -22,6 +38,9 @@ const scalpCircuitEventSchema = z.object({
   eventType: z.enum(["outcome", "reset-all", "reset-path"]),
   entryPath: scalpEntryPathSchema.nullable(),
   outcomeId: z.string().trim().min(1).nullable(),
+  episodeId: z.string().trim().min(1).nullable().default(null),
+  reconciliationVersion: z.number().int().positive().nullable().default(null),
+  reconciledAt: z.string().datetime().nullable().default(null),
   netPnlUsd: z.number().finite().nullable(),
   occurredAt: z.string().datetime(),
   reason: z.string().trim().min(1).nullable(),
@@ -73,6 +92,70 @@ function writeJsonFile(filePath: string, value: unknown) {
 function parseEvent(value: unknown) {
   const parsed = scalpCircuitEventSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+function sameOutcomeIdentity(existing: ScalpCircuitEvent, incoming: ScalpCircuitEvent) {
+  return existing.eventType === "outcome"
+    && incoming.eventType === "outcome"
+    && existing.eventId === incoming.eventId
+    && existing.walletAddress === incoming.walletAddress
+    && existing.policyVersion === incoming.policyVersion
+    && existing.outcomeId === incoming.outcomeId
+    && existing.entryPath === incoming.entryPath
+    && existing.reason === incoming.reason
+    // Legacy circuit events predate episode IDs. Backfill that identity once,
+    // but never permit two known episodes to share one outcome event.
+    && (!existing.episodeId || !incoming.episodeId || existing.episodeId === incoming.episodeId);
+}
+
+function sourceOrder(event: ScalpCircuitEvent) {
+  return {
+    version: event.reconciliationVersion ?? 0,
+    reconciledAt: event.reconciledAt ? Date.parse(event.reconciledAt) : 0,
+  };
+}
+
+/**
+ * Circuit state is a canonical projection of authoritative trade outcomes.
+ * Trade identity remains immutable, while late Jupiter fees may revise the
+ * financial result for that one episode. Returning the existing event means
+ * an incoming replay is identical or older; returning incoming applies a
+ * newer correction without double-counting the trade.
+ */
+export function resolveCanonicalScalpCircuitOutcome(
+  existing: ScalpCircuitEvent,
+  incoming: ScalpCircuitEvent
+) {
+  if (!sameOutcomeIdentity(existing, incoming)) {
+    throw new Error(`Scalp circuit event ${incoming.eventId} cannot change trade identity.`);
+  }
+
+  const canonicalIncoming = scalpCircuitEventSchema.parse({
+    ...incoming,
+    episodeId: incoming.episodeId ?? existing.episodeId,
+  });
+  const existingOrder = sourceOrder(existing);
+  const incomingOrder = sourceOrder(canonicalIncoming);
+  const sameFinancialResult = existing.netPnlUsd === canonicalIncoming.netPnlUsd;
+  const sameCanonicalProjection = sameFinancialResult
+    && existing.episodeId === canonicalIncoming.episodeId
+    && existing.reconciliationVersion === canonicalIncoming.reconciliationVersion
+    && existing.occurredAt === canonicalIncoming.occurredAt;
+  // Reconciliation rebuilds receive a fresh createdAt timestamp even when the
+  // authoritative result is unchanged. Avoid rewriting that stable projection.
+  if (sameCanonicalProjection) return existing;
+  if (incomingOrder.version < existingOrder.version) return existing;
+  if (
+    incomingOrder.version === existingOrder.version
+    && incomingOrder.reconciledAt < existingOrder.reconciledAt
+  ) return existing;
+  if (
+    incomingOrder.version === existingOrder.version
+    && incomingOrder.reconciledAt === existingOrder.reconciledAt
+  ) {
+    throw new Error(`Scalp circuit event ${incoming.eventId} has conflicting results at the same reconciliation revision.`);
+  }
+  return canonicalIncoming;
 }
 
 function emptyPathState(): ScalpPathCircuitState {
@@ -290,6 +373,9 @@ export async function getScalpCircuitDecision(input: {
 export async function recordScalpCircuitOutcome(input: {
   walletAddress: string;
   outcomeId: string;
+  episodeId?: string | null;
+  reconciliationVersion?: number | null;
+  reconciledAt?: string | null;
   policyVersion: number;
   entryPath: ScalpEntryPath;
   netPnlUsd: number;
@@ -314,6 +400,9 @@ export async function recordScalpCircuitOutcomes(input: {
   policyVersion: number;
   outcomes: Array<{
     outcomeId: string;
+    episodeId?: string | null;
+    reconciliationVersion?: number | null;
+    reconciledAt?: string | null;
     entryPath: ScalpEntryPath;
     netPnlUsd: number;
     closedAt: string;
@@ -327,6 +416,9 @@ export async function recordScalpCircuitOutcomes(input: {
     eventType: "outcome",
     entryPath: outcome.entryPath,
     outcomeId: outcome.outcomeId,
+    episodeId: outcome.episodeId ?? null,
+    reconciliationVersion: outcome.reconciliationVersion ?? null,
+    reconciledAt: outcome.reconciledAt ?? null,
     netPnlUsd: outcome.netPnlUsd,
     occurredAt: outcome.closedAt,
     reason: null,
@@ -344,45 +436,65 @@ export async function recordScalpCircuitOutcomes(input: {
   if (redis) {
     try {
       const key = circuitEventsKey(input.walletAddress, input.policyVersion);
-      const existingRaw = await redis.hGetAll(key);
-      const merged = new Map<string, ScalpCircuitEvent>();
-      Object.entries(existingRaw).forEach(([field, raw]) => {
-        let decoded: unknown;
-        try {
-          decoded = JSON.parse(raw);
-        } catch {
-          throw new Error(`Scalp circuit event ${field} contains malformed JSON.`);
+      for (let attempt = 0; attempt < CIRCUIT_BATCH_MAX_CAS_ATTEMPTS; attempt += 1) {
+        const existingRaw = await redis.hGetAll(key);
+        const merged = new Map<string, ScalpCircuitEvent>();
+        Object.entries(existingRaw).forEach(([field, raw]) => {
+          let decoded: unknown;
+          try {
+            decoded = JSON.parse(raw);
+          } catch {
+            throw new Error(`Scalp circuit event ${field} contains malformed JSON.`);
+          }
+          const existing = parseEvent(decoded);
+          if (!existing) throw new Error(`Scalp circuit event ${field} is malformed.`);
+          if (
+            existing.walletAddress !== input.walletAddress
+            || existing.policyVersion !== input.policyVersion
+            || existing.eventId !== field
+          ) {
+            throw new Error(`Scalp circuit event ${field} does not match its authoritative wallet, policy, or field key.`);
+          }
+          merged.set(existing.eventId, existing);
+        });
+        const writes: Array<{ event: ScalpCircuitEvent; expectedRaw: string }> = [];
+        parsed.forEach((event) => {
+          const existing = merged.get(event.eventId);
+          if (!existing) {
+            writes.push({ event, expectedRaw: "" });
+            merged.set(event.eventId, event);
+            return;
+          }
+          const canonical = resolveCanonicalScalpCircuitOutcome(existing, event);
+          if (JSON.stringify(canonical) !== JSON.stringify(existing)) {
+            writes.push({ event: canonical, expectedRaw: existingRaw[event.eventId] ?? "" });
+          }
+          merged.set(event.eventId, canonical);
+        });
+        if (writes.length === 0) {
+          return reduceScalpCircuitEvents(
+            input.walletAddress,
+            input.policyVersion,
+            [...merged.values()]
+          );
         }
-        const existing = parseEvent(decoded);
-        if (!existing) throw new Error(`Scalp circuit event ${field} is malformed.`);
-        if (
-          existing.walletAddress !== input.walletAddress
-          || existing.policyVersion !== input.policyVersion
-          || existing.eventId !== field
-        ) {
-          throw new Error(`Scalp circuit event ${field} does not match its authoritative wallet, policy, or field key.`);
+        const committed = Number(await redis.eval(CIRCUIT_BATCH_COMPARE_AND_SET_LUA, {
+          keys: [key],
+          arguments: writes.flatMap(({ event, expectedRaw }) => [
+            event.eventId,
+            expectedRaw,
+            JSON.stringify(event),
+          ]),
+        })) === 1;
+        if (committed) {
+          return reduceScalpCircuitEvents(
+            input.walletAddress,
+            input.policyVersion,
+            [...merged.values()]
+          );
         }
-        merged.set(existing.eventId, existing);
-      });
-      const missing = parsed.filter((event) => {
-        const existing = merged.get(event.eventId);
-        if (!existing) return true;
-        if (JSON.stringify(existing) !== JSON.stringify(event)) {
-          throw new Error(`Scalp circuit event ${event.eventId} cannot be overwritten with different data.`);
-        }
-        return false;
-      });
-      if (missing.length > 0) {
-        const multi = redis.multi();
-        missing.forEach((event) => multi.hSet(key, event.eventId, JSON.stringify(event)));
-        await multi.exec();
       }
-      parsed.forEach((event) => merged.set(event.eventId, event));
-      return reduceScalpCircuitEvents(
-        input.walletAddress,
-        input.policyVersion,
-        [...merged.values()]
-      );
+      throw new Error("Scalp circuit outcomes changed concurrently during three correction attempts.");
     } catch (error) {
       if (input.requireAuthoritative) {
         throw new Error(
@@ -392,7 +504,15 @@ export async function recordScalpCircuitOutcomes(input: {
     }
   }
 
-  for (const event of parsed) await saveCircuitEvent(event);
+  for (const event of parsed) {
+    const disk = readJsonFile(CIRCUIT_FILE);
+    const existing = parseEvent(disk[event.eventId]);
+    const canonical = existing
+      ? resolveCanonicalScalpCircuitOutcome(existing, event)
+      : event;
+    disk[event.eventId] = canonical;
+    writeJsonFile(CIRCUIT_FILE, disk);
+  }
   return getScalpCircuitState(input.walletAddress, input.policyVersion);
 }
 
@@ -411,6 +531,9 @@ export async function resetScalpCircuit(input: {
     eventType: input.entryPath ? "reset-path" : "reset-all",
     entryPath: input.entryPath ?? null,
     outcomeId: null,
+    episodeId: null,
+    reconciliationVersion: null,
+    reconciledAt: null,
     netPnlUsd: null,
     occurredAt: resetAt,
     reason: input.reason,

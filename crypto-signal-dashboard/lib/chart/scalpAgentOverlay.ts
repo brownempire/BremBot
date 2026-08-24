@@ -43,6 +43,15 @@ export type ScalpOverlayMarker = {
   tags: string[];
 };
 
+export type ScalpMonitorHealth = {
+  healthy: boolean;
+  stale: boolean;
+  lastRunAt: string | null;
+  consecutiveFailureCount: number;
+  code: string | null;
+  message: string | null;
+};
+
 export type ScalpAgentOverlaySnapshot = {
   generatedAt: string;
   timeframe: "1";
@@ -59,6 +68,7 @@ export type ScalpAgentOverlaySnapshot = {
   profilePassed: boolean;
   scalpModeEnabled: boolean;
   isActiveAsset: boolean;
+  monitorHealth: ScalpMonitorHealth | null;
   indicators: IndicatorSnapshot;
   thresholds: {
     minimumConfidence: number;
@@ -190,6 +200,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
   indicatorSettings: IndicatorSettings;
   scalpModeEnabled: boolean;
   isActiveAsset: boolean;
+  monitorHealth?: ScalpMonitorHealth | null;
   recentClosedTrade?: RecentClosedScalpTrade | null;
   now?: Date;
 }): ScalpAgentOverlaySnapshot {
@@ -221,6 +232,17 @@ export function buildScalpAgentOverlaySnapshot(input: {
     state = "blocked";
     headline = "Chart is not the active scalp asset";
     reasons.push("Select the configured Perps asset to mirror the live scalp decision.");
+  } else if (input.monitorHealth?.healthy === false) {
+    state = "blocked";
+    headline = input.monitorHealth.consecutiveFailureCount >= 2
+      ? `Scalp monitor blocked for ${input.monitorHealth.consecutiveFailureCount} cycles`
+      : "Scalp monitor is blocked";
+    reasons.push(
+      input.monitorHealth.message
+      ?? (input.monitorHealth.stale
+        ? "The autonomous monitor heartbeat is stale; no new entry can be submitted."
+        : "The autonomous monitor failed its latest safety check.")
+    );
   } else if (!profilePassed) {
     state = "blocked";
     headline = "Scalp profile validation paused";
@@ -266,6 +288,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
     profilePassed,
     scalpModeEnabled: input.scalpModeEnabled,
     isActiveAsset: input.isActiveAsset,
+    monitorHealth: input.monitorHealth ?? null,
     indicators: {
       ...indicators,
       emaFast: round(indicators.emaFast),

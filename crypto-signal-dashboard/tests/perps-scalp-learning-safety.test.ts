@@ -235,6 +235,120 @@ test("circuit breakers disable a path after two losses and pause all scalp entri
   assert.equal(reset.paths.continuation.disabled, false);
 });
 
+test("late fee corrections replace one circuit outcome without double-counting the trade", async () => {
+  const base = {
+    walletAddress: "fee-correction-wallet",
+    policyVersion: 8,
+    entryPath: "breakout-retest" as const,
+    outcomeId: "fee-correction-outcome",
+    episodeId: "fee-correction-episode",
+    closedAt: "2026-08-24T11:08:47.000Z",
+  };
+  await circuitStore.recordScalpCircuitOutcome({
+    ...base,
+    reconciliationVersion: 1,
+    reconciledAt: "2026-08-24T11:09:00.000Z",
+    netPnlUsd: 0.22,
+  });
+  const corrected = await circuitStore.recordScalpCircuitOutcome({
+    ...base,
+    reconciliationVersion: 2,
+    reconciledAt: "2026-08-24T18:43:41.671Z",
+    netPnlUsd: 0.15,
+  });
+
+  assert.equal(corrected.processedOutcomeCount, 1);
+  assert.equal(corrected.consecutivePostFeeLosses, 0);
+  assert.equal(corrected.globallyPaused, false);
+  assert.equal(corrected.paths["breakout-retest"].disabled, false);
+});
+
+test("a corrected win-to-loss result is recomputed once and can legitimately trip the path circuit", async () => {
+  const walletAddress = "sign-correction-wallet";
+  await circuitStore.recordScalpCircuitOutcome({
+    walletAddress,
+    policyVersion: 8,
+    entryPath: "continuation",
+    outcomeId: "corrected-outcome",
+    episodeId: "corrected-episode",
+    reconciliationVersion: 1,
+    reconciledAt: "2026-08-24T12:01:00.000Z",
+    netPnlUsd: 0.02,
+    closedAt: "2026-08-24T12:00:00.000Z",
+  });
+  await circuitStore.recordScalpCircuitOutcome({
+    walletAddress,
+    policyVersion: 8,
+    entryPath: "continuation",
+    outcomeId: "later-loss",
+    episodeId: "later-loss-episode",
+    reconciliationVersion: 2,
+    reconciledAt: "2026-08-24T12:03:00.000Z",
+    netPnlUsd: -1,
+    closedAt: "2026-08-24T12:02:00.000Z",
+  });
+  const corrected = await circuitStore.recordScalpCircuitOutcome({
+    walletAddress,
+    policyVersion: 8,
+    entryPath: "continuation",
+    outcomeId: "corrected-outcome",
+    episodeId: "corrected-episode",
+    reconciliationVersion: 2,
+    reconciledAt: "2026-08-24T12:04:00.000Z",
+    netPnlUsd: -0.05,
+    closedAt: "2026-08-24T12:00:00.000Z",
+  });
+
+  assert.equal(corrected.processedOutcomeCount, 2);
+  assert.equal(corrected.paths.continuation.consecutivePostFeeLosses, 2);
+  assert.equal(corrected.paths.continuation.disabled, true);
+});
+
+test("circuit corrections ignore stale financial revisions but reject identity changes", () => {
+  const existing = {
+    eventId: "wallet:8:outcome:trade",
+    walletAddress: "wallet",
+    policyVersion: 8,
+    eventType: "outcome" as const,
+    entryPath: "continuation" as const,
+    outcomeId: "trade",
+    episodeId: "episode",
+    reconciliationVersion: 2,
+    reconciledAt: "2026-08-24T12:05:00.000Z",
+    netPnlUsd: 0.15,
+    occurredAt: "2026-08-24T12:00:00.000Z",
+    reason: null,
+  };
+  const stale = circuitStore.resolveCanonicalScalpCircuitOutcome(existing, {
+    ...existing,
+    reconciliationVersion: 1,
+    reconciledAt: "2026-08-24T12:06:00.000Z",
+    netPnlUsd: 0.22,
+  });
+  assert.deepEqual(stale, existing);
+
+  const correctedCloseTime = circuitStore.resolveCanonicalScalpCircuitOutcome(existing, {
+    ...existing,
+    reconciliationVersion: 3,
+    reconciledAt: "2026-08-24T12:07:00.000Z",
+    occurredAt: "2026-08-24T12:00:30.000Z",
+  });
+  assert.equal(correctedCloseTime.occurredAt, "2026-08-24T12:00:30.000Z");
+  assert.equal(correctedCloseTime.outcomeId, existing.outcomeId);
+
+  assert.throws(() => circuitStore.resolveCanonicalScalpCircuitOutcome(existing, {
+    ...existing,
+    entryPath: "reversal",
+    reconciliationVersion: 3,
+    reconciledAt: "2026-08-24T12:08:00.000Z",
+  }), /cannot change trade identity/);
+
+  assert.throws(() => circuitStore.resolveCanonicalScalpCircuitOutcome(existing, {
+    ...existing,
+    netPnlUsd: -0.15,
+  }), /conflicting results at the same reconciliation revision/);
+});
+
 test("circuit path derivation recognizes the v8 breakout/retest audit tag", () => {
   assert.equal(circuitStore.deriveScalpEntryPath({
     scalpEntryPath: undefined,

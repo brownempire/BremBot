@@ -969,6 +969,7 @@ test("scalp admission fails closed when the authoritative circuit outcome batch 
   const base = createConfig();
   const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
   let routeCalls = 0;
+  const candidates: ScalpCandidate[] = [];
   const result = await runAutonomousPerpsMonitor({
     listConfigs: async () => [config],
     listSessions: async () => [createSession()],
@@ -990,6 +991,8 @@ test("scalp admission fails closed when the authoritative circuit outcome batch 
     recordScalpCircuitOutcomes: (async () => {
       throw new Error("circuit Redis unavailable");
     }) as never,
+    saveScalpCandidate: createCandidateRecorder(candidates),
+    labelMatureScalpCandidates: (async () => []) as never,
     routeSignal: (async () => {
       routeCalls += 1;
       return { ok: true, message: "unexpected" };
@@ -997,7 +1000,10 @@ test("scalp admission fails closed when the authoritative circuit outcome batch 
   });
 
   assert.equal(result.results[0]?.status, "failed");
+  assert.equal(result.results[0]?.code, "SCALP_CIRCUIT_RECONCILIATION_FAILED");
   assert.match(result.results[0]?.message ?? "", /circuit Redis unavailable/);
+  assert.match(candidates.at(-1)?.rejectionReasons.at(-1) ?? "", /SYSTEM_HEALTH_BLOCKED/);
+  assert.ok(candidates.at(-1)?.tags.includes("SYSTEM_HEALTH_BLOCKED"));
   assert.equal(routeCalls, 0);
 });
 
