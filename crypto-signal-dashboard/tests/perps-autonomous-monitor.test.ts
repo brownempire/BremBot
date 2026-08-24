@@ -110,6 +110,7 @@ const runAutonomousPerpsMonitor = (
     // Production scalp monitoring requires authoritative Redis reconciliation.
     // Focused unit cases inject deterministic in-memory outcomes by default.
     reconcileLearningHistory: async () => 0,
+    getLatestClosedOutcome: async () => null,
     getClosedScalpOutcomes: async () => [],
     recordScalpCircuitOutcomes: (async () => null) as never,
     getScalpCircuitDecision: (async () => ({ allowed: true, reasons: [], state: null })) as never,
@@ -1083,7 +1084,7 @@ test("monitor does not route an exceptional reversal missing structural persiste
     reconcileNoOpenPosition: async () => [],
     getAgentWallet: () => "agent-wallet",
     isWalletAllowed: () => true,
-    getLatestClosedScalpOutcome: async () => ({
+    getLatestClosedOutcome: async () => ({
       openedAt: new Date(lastSignalAt + 30_000).toISOString(),
       closedAt: new Date(latestTimestamp - SCALP_SIGNAL_COOLDOWN_SECONDS * 1_000).toISOString(),
       side: "short",
@@ -1221,7 +1222,7 @@ test("a stale v8 direction experiment cannot trigger the decision-veto cooldown 
 
   assert.equal(cancelledExperiments, 1);
   assert.equal(recordedTrades, 0);
-  assert.equal(cursorWrites, 1, JSON.stringify(result.results[0]));
+  assert.equal(cursorWrites, 0, JSON.stringify(result.results[0]));
   assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
 });
 
@@ -1413,7 +1414,7 @@ test("a generated smart signal that is skipped leaves Scalp Mode enabled", async
   assert.equal(disableCalls, 0);
 });
 
-test("a smart candidate inside cooldown leaves Scalp Mode enabled", async () => {
+test("a rejected Smart signal cursor cannot start a cooldown", async () => {
   let disableCalls = 0;
   let routeCalls = 0;
   const baseTime = 1_784_174_800_000;
@@ -1446,10 +1447,47 @@ test("a smart candidate inside cooldown leaves Scalp Mode enabled", async () => 
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.code, "SMART_SIGNAL_COOLDOWN");
-  assert.match(result.results[0]?.message ?? "", /remains enabled/i);
-  assert.equal(routeCalls, 0);
+  assert.equal(result.results[0]?.status, "executed");
+  assert.equal(routeCalls, 1);
   assert.equal(disableCalls, 0);
+});
+
+test("a completed trade close starts the shared seven-minute Smart and scalp cooldown", async () => {
+  let routeCalls = 0;
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const latestTimestamp = points.at(-1)!.t;
+  const base = createConfig();
+  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLatestClosedOutcome: async () => ({
+      openedAt: new Date(latestTimestamp - 10 * 60_000).toISOString(),
+      closedAt: new Date(latestTimestamp - 60_000).toISOString(),
+      side: "long",
+      netPnlUsd: 0.5,
+    }) as never,
+  });
+
+  assert.equal(result.results[0]?.code, "SMART_SIGNAL_COOLDOWN");
+  assert.match(result.results[0]?.message ?? "", /seven-minute post-close cooldown/i);
+  assert.equal(routeCalls, 0);
 });
 
 function createSession(): PerpsAutomationSession {
@@ -2543,10 +2581,11 @@ test("a worker that loses its lease to a successor cannot continue to live routi
       reconcileNoOpenPosition: async () => [],
       getAgentWallet: () => "agent-wallet",
       isWalletAllowed: () => true,
-      readLastSignal: async () => {
+      getLatestClosedOutcome: async () => {
         await monitorPaused;
         return null;
       },
+      readLastSignal: async () => null,
       writeLastSignal: async () => undefined,
     }, leaseGuard),
   });
@@ -2961,7 +3000,7 @@ test("server monitor routes a qualifying signal while the app is closed", async 
   const positionSizeUsd = 25 * 2;
   assert.ok(((routedTakeProfit - entryPrice) / entryPrice) * positionSizeUsd >= 1);
   assert.ok(((entryPrice - routedStopLoss) / entryPrice) * positionSizeUsd >= 1);
-  assert.equal(savedCursor, points[points.length - 1]?.t);
+  assert.equal(savedCursor, 0, "opening a trade does not start the post-close cooldown");
 });
 
 test("monitor recovery blocks the whole cycle even when pending scalp protection is repaired", async () => {
@@ -3778,7 +3817,7 @@ test("parameter candidates are skipped when the RSI indicator reaches the config
 
   assert.equal(routeCalls, 0);
   assert.equal(result.results[0]?.code, "INDICATOR_RSI_VETO");
-  assert.equal(savedCursor, points[points.length - 1]?.t);
+  assert.equal(savedCursor, 0, "a rejected Smart candidate does not start the post-close cooldown");
 });
 
 test("scalp monitor can route an opposite-side entry while independently managing the current position", async () => {

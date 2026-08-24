@@ -372,7 +372,7 @@ type MonitorDependencies = {
   getAgentWallet: typeof getAgentWalletForOwner;
   isWalletAllowed: typeof isPerpsLiveWalletAllowed;
   getLearningProfile: (walletAddress: string) => Promise<DecisionLearningProfile | null>;
-  getLatestClosedScalpOutcome: (walletAddress: string) => Promise<Awaited<ReturnType<typeof listTradeLearningOutcomes>>[number] | null>;
+  getLatestClosedOutcome: (walletAddress: string) => Promise<Awaited<ReturnType<typeof listTradeLearningOutcomes>>[number] | null>;
   getClosedScalpOutcomes: (walletAddress: string) => Promise<TradeLearningOutcome[]>;
   saveScalpCandidate: typeof saveScalpCandidate;
   labelMatureScalpCandidates: typeof labelMatureScalpCandidates;
@@ -451,12 +451,9 @@ const defaultDependencies: MonitorDependencies = {
   getAgentWallet: getAgentWalletForOwner,
   isWalletAllowed: isPerpsLiveWalletAllowed,
   getLearningProfile: getActiveDecisionLearningProfile,
-  getLatestClosedScalpOutcome: async (walletAddress) => {
-    const outcomes = await listTradeLearningOutcomes(walletAddress);
-    return [...outcomes].reverse().find((outcome) => (
-      outcome.signalType === "scalp"
-      || outcome.scalpSetupType !== null
-    )) ?? null;
+  getLatestClosedOutcome: async (walletAddress) => {
+    const outcomes = await listTradeLearningOutcomesAuthoritative(walletAddress);
+    return outcomes.at(-1) ?? null;
   },
   getClosedScalpOutcomes: async (walletAddress) => {
     const outcomes = await listTradeLearningOutcomesAuthoritative(walletAddress);
@@ -1709,11 +1706,17 @@ export async function runAutonomousPerpsMonitor(
         results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
         continue;
       }
-      const lastSmartSignalAt = await deps.readLastSignal(config.walletAddress, asset, "smart");
-      const latestClosedScalpOutcome = config.settings.scalpModeEnabled
-        ? closedScalpOutcomes.at(-1)
-          ?? await deps.getLatestClosedScalpOutcome(config.walletAddress).catch(() => null)
-        : null;
+      const latestClosedOutcome = await deps.getLatestClosedOutcome(config.walletAddress)
+        .catch(() => closedScalpOutcomes.at(-1) ?? null);
+      const latestClosedAt = latestClosedOutcome
+        ? Date.parse(latestClosedOutcome.closedAt)
+        : Number.NaN;
+      const postCloseCooldownSeconds = config.settings.scalpModeEnabled
+        ? scalpProfile.cooldownSeconds
+        : effectiveParams.cooldownSeconds;
+      const postCloseCooldownLabel = postCloseCooldownSeconds === SCALP_SIGNAL_COOLDOWN_SECONDS
+        ? "seven-minute"
+        : `${postCloseCooldownSeconds}-second`;
       const smartVolatilityPercent = computeVolatilityPercent(windowPoints);
       const scalpVolatilityPercent = computeVolatilityPercent(scalpPoints);
       const signalMetrics = computeSignalMetrics(windowPoints);
@@ -1725,8 +1728,11 @@ export async function runAutonomousPerpsMonitor(
       const smartSignal = detectSignals({
         symbol: `${asset}/USD`,
         points: windowPoints,
-        params: effectiveParams,
-        lastSignalAt: lastSmartSignalAt ?? undefined,
+        params: {
+          ...effectiveParams,
+          cooldownSeconds: postCloseCooldownSeconds,
+        },
+        lastSignalAt: Number.isFinite(latestClosedAt) ? latestClosedAt : undefined,
       })[0];
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
@@ -1773,12 +1779,12 @@ export async function runAutonomousPerpsMonitor(
             points: scalpPoints,
             indicators,
             profile: scalpProfile,
-            recentClosedTrade: latestClosedScalpOutcome
+            recentClosedTrade: latestClosedOutcome
               ? {
-                  openedAt: Date.parse(latestClosedScalpOutcome.openedAt),
-                  closedAt: Date.parse(latestClosedScalpOutcome.closedAt),
-                  side: latestClosedScalpOutcome.side,
-                  netPnlUsd: latestClosedScalpOutcome.netPnlUsd,
+                  openedAt: Date.parse(latestClosedOutcome.openedAt),
+                  closedAt: Date.parse(latestClosedOutcome.closedAt),
+                  side: latestClosedOutcome.side,
+                  netPnlUsd: latestClosedOutcome.netPnlUsd,
                 }
               : null,
           })
@@ -1874,9 +1880,6 @@ export async function runAutonomousPerpsMonitor(
           ));
           continue;
         }
-        if (smartSignal && !smartEligible) {
-          await deps.writeLastSignal(config.walletAddress, asset, "smart", smartSignal.timestamp);
-        }
         const smartRejectedByIndicators = smartSignal && indicatorsReady && !smartIndicatorScore?.qualified;
         const smartRejectedByDirection = smartSignal && !smartDirectionAllowed;
         const smartRejectedByLearning = smartSignal && !smartLearningConfirmed;
@@ -1899,7 +1902,7 @@ export async function runAutonomousPerpsMonitor(
               : smartRejectedByLearning
                 ? "The Smart candidate lacked matching trend and breakout confirmation, and no qualifying independent scalp/reversal setup replaced it."
                 : smartSignalCandidate
-                  ? "A Smart candidate was in cooldown; Scalp Mode remains enabled, but no qualifying independent scalp/reversal setup was detected."
+                  ? `A Smart candidate was inside the ${postCloseCooldownLabel} post-close cooldown; Scalp Mode remains enabled, but no qualifying independent scalp/reversal setup was detected.`
                 : scalpValidationPaused
                   ? "Scalp Mode is paused because its winner-derived profile has not passed loss-history validation."
                   : config.settings.scalpModeEnabled
@@ -1953,9 +1956,6 @@ export async function runAutonomousPerpsMonitor(
           scalpCandidateRecord,
           "Buy-only mode rejected the bearish scalp candidate."
         );
-        if (strategyClass === "smart") {
-          await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
-        }
         results.push(skip(config, asset, "BUY_ONLY_SKIP", "Buy-only mode skipped the bearish Perps signal."));
         continue;
       }
@@ -2086,12 +2086,12 @@ export async function runAutonomousPerpsMonitor(
           points: freshScalpPoints,
           indicators: freshIndicators,
           profile: scalpProfile,
-          recentClosedTrade: latestClosedScalpOutcome
+          recentClosedTrade: latestClosedOutcome
             ? {
-                openedAt: Date.parse(latestClosedScalpOutcome.openedAt),
-                closedAt: Date.parse(latestClosedScalpOutcome.closedAt),
-                side: latestClosedScalpOutcome.side,
-                netPnlUsd: latestClosedScalpOutcome.netPnlUsd,
+                openedAt: Date.parse(latestClosedOutcome.openedAt),
+                closedAt: Date.parse(latestClosedOutcome.closedAt),
+                side: latestClosedOutcome.side,
+                netPnlUsd: latestClosedOutcome.netPnlUsd,
               }
             : null,
         });
@@ -2298,7 +2298,7 @@ export async function runAutonomousPerpsMonitor(
           trendWindow: effectiveParams.trendWindow,
           trendThreshold: effectiveParams.trendThreshold,
           breakoutPercent: effectiveParams.breakoutPercent,
-          cooldownSeconds: strategyClass === "scalp"
+          cooldownSeconds: strategyClass === "scalp" || config.settings.scalpModeEnabled
             ? scalpProfile.cooldownSeconds
             : effectiveParams.cooldownSeconds,
           trendStrengthPercent: signalMetrics.trend.changePercent,
@@ -2370,9 +2370,6 @@ export async function runAutonomousPerpsMonitor(
             }
           );
         }
-      }
-      if (strategyClass === "smart" || routed.ok) {
-        await deps.writeLastSignal(config.walletAddress, asset, strategyClass, signal.timestamp);
       }
       if (routed.ok && pendingScalpReversal) {
         await deps.clearPendingScalpReversal(config.walletAddress);
