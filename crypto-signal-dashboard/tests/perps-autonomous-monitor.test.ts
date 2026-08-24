@@ -550,13 +550,13 @@ test("scalp trigger pricing adds estimated fees to the adaptive net target", () 
   assert.equal(triggers.stopLossPrice, null);
 });
 
-test("scalp planning uses the configured 50 percent base allocation with a 20x safety ceiling", () => {
+test("scalp planning uses the configured 50 percent base allocation with a 40x normal ceiling", () => {
   const planningConfig = getScalpTradePlanningConfig(createConfig());
   assert.equal(planningConfig.settings.walletAllocationMode, "percent");
   assert.equal(planningConfig.settings.walletPercent, 50);
   assert.equal(planningConfig.settings.perpsLeverage, SCALP_TRADE_LEVERAGE);
   assert.equal(planningConfig.settings.stopLossPercent, SCALP_STOP_LOSS_ROE_PERCENT);
-  assert.equal(SCALP_TRADE_LEVERAGE, 20);
+  assert.equal(SCALP_TRADE_LEVERAGE, 40);
   assert.equal(planningConfig.settings.perpsExecutionMode, "set-parameters");
 });
 
@@ -685,7 +685,8 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   assert.equal(routed?.strategyContext?.indicatorQualified, false);
   assert.equal(routed?.strategyContext?.estimatedRoundTripFeeRate, 0.00205);
   assert.equal(routed?.strategyContext?.indicators?.atrPercent !== null, true);
-  assert.ok((routed?.leverage ?? Number.POSITIVE_INFINITY) <= 20);
+  assert.ok((routed?.leverage ?? 0) >= 25);
+  assert.ok((routed?.leverage ?? Number.POSITIVE_INFINITY) <= 50);
   assert.ok((routed?.collateralUsd ?? Number.POSITIVE_INFINITY) <= 50);
   assert.equal(labelCalls, 1);
   assert.equal(candidates.at(-1)?.disposition, "accepted");

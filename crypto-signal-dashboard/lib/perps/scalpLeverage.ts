@@ -23,8 +23,10 @@ export function isExceptionalScalpLeverageSetup(input: {
 
   if (input.entryPath === "reversal" || input.entryPath === "range-reversal") {
     return input.indicatorBypass
-      && (input.adx === null || input.adx <= 45)
-      && (input.volumeRatio === null || input.volumeRatio >= 0.75);
+      && typeof input.adx === "number"
+      && input.adx <= 45
+      && typeof input.volumeRatio === "number"
+      && input.volumeRatio >= 0.75;
   }
 
   return (input.entryPath === "continuation" || input.entryPath === "breakout-retest")

@@ -21,7 +21,7 @@ function continuationPayload(overrides: Partial<TradeDecisionPayload> = {}): Tra
     strategyClass: "scalp",
     requestedTrade: {
       collateralUsd: 20,
-      leverage: 20,
+      leverage: 25,
       takeProfitPrice: 101.5,
       stopLossPrice: 99.5,
       maxSlippageBps: 100,
@@ -138,7 +138,7 @@ test("independent scalp veto requires the current detector policy version", () =
   assert.ok(result.explanationTags.includes("scalp-detector-context-required"));
 });
 
-test("independent scalp veto keeps the leverage cap without blanket-rejecting a volatile regime", () => {
+test("independent scalp veto accepts the 50x ceiling without blanket-rejecting a volatile regime", () => {
   const payload = continuationPayload({
     requestedTrade: {
       ...continuationPayload().requestedTrade,
@@ -152,9 +152,25 @@ test("independent scalp veto keeps the leverage cap without blanket-rejecting a 
 
   const result = evaluateTradeDecision(payload);
 
-  assert.equal(result.shouldTrade, false);
-  assert.ok(result.explanationTags.includes("scalp-leverage-cap-veto"));
+  assert.equal(result.shouldTrade, true);
+  assert.equal(result.explanationTags.includes("scalp-leverage-cap-veto"), false);
   assert.equal(result.explanationTags.includes("scalp-volatility-veto"), false);
+});
+
+test("independent scalp veto rejects leverage below 25x or above 50x", () => {
+  for (const leverage of [24.99, 50.01]) {
+    const payload = continuationPayload({
+      requestedTrade: {
+        ...continuationPayload().requestedTrade,
+        leverage,
+      },
+    });
+
+    const result = evaluateTradeDecision(payload);
+    assert.equal(result.shouldTrade, false);
+    assert.ok(result.explanationTags.includes("scalp-leverage-cap-veto"));
+    assert.match(result.explanationSummary, /25-50x scalp range/);
+  }
 });
 
 test("independent scalp veto accepts a fully confirmed setup during a wide 145-minute range", () => {
@@ -190,7 +206,7 @@ test("independent scalp veto uses the rolling conservative fee estimate", () => 
   const payload = continuationPayload();
   payload.strategyContext = {
     ...payload.strategyContext!,
-    estimatedRoundTripFeeRate: 0.005,
+    estimatedRoundTripFeeRate: 0.006,
   };
 
   const result = evaluateTradeDecision(payload);

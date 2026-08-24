@@ -1957,17 +1957,6 @@ export async function runAutonomousPerpsMonitor(
       const learnedPlan = strategyClass === "scalp"
         ? { ...learnedPlanBase, stopLossPercent: SCALP_STOP_LOSS_ROE_PERCENT }
         : learnedPlanBase;
-      const exceptionalScalpLeverage = strategyClass === "scalp" && scalpMetadata
-        ? isExceptionalScalpLeverageSetup({
-            entryPath: scalpEntryPath,
-            confidence: signal.confidence,
-            priceActionScore: scalpMetadata.priceActionScore,
-            indicatorScore: indicatorScore.score,
-            indicatorBypass: scalpMetadata.indicatorBypass,
-            adx: indicators.adx,
-            volumeRatio: indicators.volumeRatio,
-          })
-        : false;
       const probationContinuation = strategyClass === "scalp"
         && scalpMetadata?.priceActionTags.includes("CONTINUATION_PROBATION") === true;
       const standardScalpCollateralPercent = Number(
@@ -1985,7 +1974,7 @@ export async function runAutonomousPerpsMonitor(
               learnedLeverage: learnedPlan.leverage,
               learnedFloor: learningProfile?.leverageFloor,
               learnedCap: learningProfile?.leverageCap,
-              exceptional: exceptionalScalpLeverage,
+              exceptional: false,
             }),
             profileId: learningProfile?.profileId ?? null,
           }
@@ -2133,6 +2122,26 @@ export async function runAutonomousPerpsMonitor(
         routingIndicatorScore = scoreIndicatorSnapshot(freshIndicators, signal.direction, indicatorSettings);
         executionScalpMetadata = freshEvaluation.signal;
         executionSignalConfidence = freshEvaluation.signal!.confidence;
+      }
+      if (strategyClass === "scalp" && executionScalpMetadata) {
+        const exceptionalScalpLeverage = isExceptionalScalpLeverageSetup({
+          entryPath: scalpEntryPath,
+          confidence: executionSignalConfidence,
+          priceActionScore: executionScalpMetadata.priceActionScore,
+          indicatorScore: routingIndicatorScore.score,
+          indicatorBypass: executionScalpMetadata.indicatorBypass,
+          adx: routingIndicators.adx,
+          volumeRatio: routingIndicators.volumeRatio,
+        });
+        // Leverage is finalized only after the completed-candle and live-price
+        // revalidation. A setup cannot retain exceptional sizing from stale
+        // pre-submit evidence.
+        plan.leverage = resolveScalpTradeLeverage({
+          learnedLeverage: learnedPlan.leverage,
+          learnedFloor: learningProfile?.leverageFloor,
+          learnedCap: learningProfile?.leverageCap,
+          exceptional: exceptionalScalpLeverage,
+        });
       }
       const scalpExitPlan = strategyClass === "scalp"
         ? computePercentageScalpExitPlan({

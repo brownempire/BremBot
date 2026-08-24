@@ -46,10 +46,26 @@ test("the $12 low-balance override keeps Jupiter-compatible collateral on retrie
   ]);
 });
 
+test("scalp retries preserve $12 collateral and never cross the 25x execution floor", () => {
+  const lowBalanceSignal = { ...signal(), collateralUsd: 12, sizeUsd: 480, leverage: 40 };
+  const attempts = createPerpsEntryRetrySignals(lowBalanceSignal, { minimumLeverage: 25 });
+
+  assert.deepEqual(attempts.map((attempt) => ({
+    collateral: attempt.collateralUsd,
+    leverage: attempt.leverage,
+    size: attempt.sizeUsd,
+    takeProfit: attempt.takeProfit?.priceUsd,
+  })), [
+    { collateral: 12, leverage: 40, size: 480, takeProfit: 100.08 },
+    { collateral: 12, leverage: 30, size: 360, takeProfit: 100.08 },
+  ]);
+});
+
 test("confirmed build failures retry and return the successful reduced attempt", async () => {
   let buildCalls = 0;
   const result = await executePerpsEntryWithRetries({
     signal: signal(),
+    minimumLeverage: 25,
     build: async () => {
       buildCalls += 1;
       if (buildCalls < 3) throw new Error("Invalid leverage parameter");
@@ -88,6 +104,7 @@ test("an explicit 422 parameter rejection can retry safely", async () => {
   let submitCalls = 0;
   const result = await executePerpsEntryWithRetries({
     signal: signal(),
+    minimumLeverage: 25,
     build: async () => ({ serializedTxBase64: "built", positionPubkey: "position", tpslMode: "bundled" }),
     sign: (serialized) => `signed-${serialized}`,
     submit: async () => {
@@ -98,4 +115,19 @@ test("an explicit 422 parameter rejection can retry safely", async () => {
   });
   assert.equal(result.attemptCount, 2);
   assert.equal(result.signal.leverage, 37.5);
+});
+
+test("a 25x scalp is never silently retried below its strategy floor", async () => {
+  let buildCalls = 0;
+  await assert.rejects(() => executePerpsEntryWithRetries({
+    signal: { ...signal(), collateralUsd: 12, sizeUsd: 300, leverage: 25 },
+    minimumLeverage: 25,
+    build: async () => {
+      buildCalls += 1;
+      throw new Error("Invalid leverage parameter");
+    },
+    sign: (serialized) => `signed-${serialized}`,
+    submit: async () => ({ txid: "txid", positionPubkey: "position" }),
+  }), /Invalid leverage parameter/);
+  assert.equal(buildCalls, 1);
 });
