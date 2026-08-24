@@ -8,6 +8,13 @@ import {
   computeIndicatorSnapshot,
   type IndicatorSnapshot,
 } from "@/lib/signal/indicators";
+import { SCALP_NORMAL_MAXIMUM_LEVERAGE } from "@/lib/perps/scalpLeverage";
+
+export {
+  SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE,
+  SCALP_MINIMUM_LEVERAGE,
+  SCALP_NORMAL_MAXIMUM_LEVERAGE,
+} from "@/lib/perps/scalpLeverage";
 
 // Policy v8 only routes completed, structurally confirmed entries. A rejected
 // candidate never starts this timer: the cooldown begins only when an actual
@@ -49,7 +56,10 @@ export const SCALP_MAX_145M_NET_OR_RANGE_PERCENT = 2;
 // not use a wide historical range as a blanket live veto. Fresh path-specific
 // confirmation determines whether an entry is actionable.
 export const SCALP_EXHAUSTION_BLOCK_ENABLED = false;
-export const SCALP_TRADE_LEVERAGE = 20;
+// Normal scalp setups are quality-scaled from 25-40x. This compatibility
+// export remains the planning/UI ceiling; independently exceptional setups may
+// use the separately enforced 50x cap.
+export const SCALP_TRADE_LEVERAGE = SCALP_NORMAL_MAXIMUM_LEVERAGE;
 export const SCALP_POLICY_VERSION = 8;
 
 export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
