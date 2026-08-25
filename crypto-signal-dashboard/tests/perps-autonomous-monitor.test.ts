@@ -205,6 +205,7 @@ function createConfig(overrides: Partial<PerpsAutomationConfig> = {}): PerpsAuto
       ],
       activeSlotId: null,
       perpsActiveSlotId: "slot-sol",
+      scalpActiveSlotId: null,
       mode: "all",
       disableTpLock: false,
     },
@@ -693,6 +694,131 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   assert.equal(candidates.at(-1)?.disposition, "accepted");
   assert.equal(candidates.at(-1)?.entryPath, "breakout-retest");
   assert.equal(candidates.at(-1)?.executionId, "execution-v8");
+});
+
+test("Scalp Agent can route while regular Perps Auto-Trade is off", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let routedStrategy: PerpsAgentSignal["strategyClass"] = undefined;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedStrategy = signal.strategyClass;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    getScalpCircuitDecision: (async () => ({ allowed: true, reasons: [], state: null })) as never,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
+  assert.equal(routedStrategy, "scalp");
+});
+
+test("Scalp Agent off prevents scalp candidates from being read by regular Perps", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      scalpModeEnabled: false,
+      scalpActiveSlotId: null,
+    },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let candidateWrites = 0;
+  let labelCalls = 0;
+  const routedStrategies: Array<PerpsAgentSignal["strategyClass"]> = [];
+
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedStrategies.push(signal.strategyClass);
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    saveScalpCandidate: (async () => {
+      candidateWrites += 1;
+      throw new Error("Scalp candidate persistence must remain off.");
+    }) as never,
+    labelMatureScalpCandidates: (async () => {
+      labelCalls += 1;
+      return [];
+    }) as never,
+    getDirectionExperiment: async () => {
+      throw new Error("Scalp direction state must remain unread.");
+    },
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(candidateWrites, 0);
+  assert.equal(labelCalls, 0);
+  assert.equal(routedStrategies.includes("scalp"), false);
+});
+
+test("regular Perps off prevents Smart signals from being routed by Scalp Agent", async () => {
+  const baseTime = 1_784_174_800_000;
+  const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: baseTime + index * 60_000,
+    v: value,
+  }));
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+  });
+  const routedStrategies: Array<PerpsAgentSignal["strategyClass"]> = [];
+
+  await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedStrategies.push(signal.strategyClass);
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(routedStrategies.includes("smart"), false);
 });
 
 test("a rejected scalp route does not write a cooldown cursor", async () => {

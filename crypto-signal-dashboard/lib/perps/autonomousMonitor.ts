@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { getPerpsRuntimeOverride } from "@/lib/perps/auditLog";
 import {
   getActivePerpsAsset,
+  getActiveRegularPerpsAsset,
+  getActiveScalpAsset,
   isPerpsAutomationEnabled,
   type PerpsAutomationConfig,
 } from "@/lib/perps/automationConfig";
@@ -1191,6 +1193,8 @@ export async function runAutonomousPerpsMonitor(
     leaseGuard?.assertOwned();
     const asset = getActivePerpsAsset(config);
     if (!asset) continue;
+    const regularPerpsLayerEnabled = getActiveRegularPerpsAsset(config) === asset;
+    const scalpAgentLayerEnabled = getActiveScalpAsset(config) === asset;
     const session = getSessionForConfig(config, sessions);
     if (recoveryBlockedWallets.has(config.walletAddress)) continue;
     if (!session || session.sessionState !== "clocked_in") {
@@ -1222,7 +1226,7 @@ export async function runAutonomousPerpsMonitor(
         openPositions.length === 0
         && snapshot.readEvidence?.authoritativePositionAbsence !== true
       ) {
-        if (config.settings.scalpModeEnabled) {
+        if (scalpAgentLayerEnabled) {
           // Scalp-policy initialization/migration only persists policy metadata;
           // it neither reconciles inventory nor admits an entry. Keep it ahead of
           // the unverified-flat guard so an older profile cannot remain stuck,
@@ -1624,7 +1628,7 @@ export async function runAutonomousPerpsMonitor(
       }
       if (positionLifecycleBusy) continue;
       if (openPositions.length === 0) await deps.clearProfitLockState(config.walletAddress);
-      if (config.settings.scalpModeEnabled) {
+      if (scalpAgentLayerEnabled) {
         // Scalp v8 circuit accounting and fee estimates must be based on the
         // authoritative, freshly reconciled outcome set. Never admit a new
         // scalp entry after a failed reconciliation.
@@ -1635,30 +1639,35 @@ export async function runAutonomousPerpsMonitor(
       } else {
         await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       }
-      if (config.settings.scalpModeEnabled) {
+      if (scalpAgentLayerEnabled) {
         // Initialize the stable rollout first, then consume/review authoritative
         // scalp outcomes independently of Smart Trade execution mode.
         await deps.ensureScalpPolicyProfile(config.walletAddress);
         await deps.autoTrain(config.walletAddress, config);
-      } else if (config.settings.perpsExecutionMode === "smart-trades" && config.settings.decisionMode === "active") {
+      } else if (
+        regularPerpsLayerEnabled
+        && config.settings.perpsExecutionMode === "smart-trades"
+        && config.settings.decisionMode === "active"
+      ) {
         // This initializes/migrates the researched baseline, immediately consumes newly closed
         // outcomes, and performs the trainer's interval-gated full holdout pass when due.
         await deps.autoTrain(config.walletAddress, config).catch(() => undefined);
       }
-      const learningProfile = config.settings.scalpModeEnabled
+      const learningProfile = scalpAgentLayerEnabled
         ? await deps.ensureScalpPolicyProfile(config.walletAddress)
         : await deps.getLearningProfile(config.walletAddress);
-      const executionProfile = config.settings.perpsExecutionMode === "smart-trades"
+      const executionProfile = regularPerpsLayerEnabled
+        && config.settings.perpsExecutionMode === "smart-trades"
         && config.settings.decisionMode === "active"
         ? learningProfile
         : null;
       const scalpProfile = getScalpLearningProfile(learningProfile);
-      const closedScalpOutcomes = config.settings.scalpModeEnabled
+      const closedScalpOutcomes = scalpAgentLayerEnabled
         ? await deps.getClosedScalpOutcomes(config.walletAddress)
         : prefetchedClosedScalpOutcomes
           ?? await deps.getClosedScalpOutcomes(config.walletAddress).catch(() => []);
       let scalpCircuitReconciliationError: string | null = null;
-      if (config.settings.scalpModeEnabled && scalpProfile.policyVersion === SCALP_POLICY_VERSION) {
+      if (scalpAgentLayerEnabled && scalpProfile.policyVersion === SCALP_POLICY_VERSION) {
         try {
           await recordPolicyScalpOutcomes({
             deps,
@@ -1711,7 +1720,7 @@ export async function runAutonomousPerpsMonitor(
       const latestClosedAt = latestClosedOutcome
         ? Date.parse(latestClosedOutcome.closedAt)
         : Number.NaN;
-      const postCloseCooldownSeconds = config.settings.scalpModeEnabled
+      const postCloseCooldownSeconds = scalpAgentLayerEnabled
         ? scalpProfile.cooldownSeconds
         : effectiveParams.cooldownSeconds;
       const postCloseCooldownLabel = postCloseCooldownSeconds === SCALP_SIGNAL_COOLDOWN_SECONDS
@@ -1720,20 +1729,24 @@ export async function runAutonomousPerpsMonitor(
       const smartVolatilityPercent = computeVolatilityPercent(windowPoints);
       const scalpVolatilityPercent = computeVolatilityPercent(scalpPoints);
       const signalMetrics = computeSignalMetrics(windowPoints);
-      const smartSignalCandidate = detectSignals({
-        symbol: `${asset}/USD`,
-        points: windowPoints,
-        params: effectiveParams,
-      })[0];
-      const smartSignal = detectSignals({
-        symbol: `${asset}/USD`,
-        points: windowPoints,
-        params: {
-          ...effectiveParams,
-          cooldownSeconds: postCloseCooldownSeconds,
-        },
-        lastSignalAt: Number.isFinite(latestClosedAt) ? latestClosedAt : undefined,
-      })[0];
+      const smartSignalCandidate = regularPerpsLayerEnabled
+        ? detectSignals({
+            symbol: `${asset}/USD`,
+            points: windowPoints,
+            params: effectiveParams,
+          })[0]
+        : null;
+      const smartSignal = regularPerpsLayerEnabled
+        ? detectSignals({
+            symbol: `${asset}/USD`,
+            points: windowPoints,
+            params: {
+              ...effectiveParams,
+              cooldownSeconds: postCloseCooldownSeconds,
+            },
+            lastSignalAt: Number.isFinite(latestClosedAt) ? latestClosedAt : undefined,
+          })[0]
+        : null;
       const indicatorSettings = getIndicatorSettings(learningProfile);
       const indicators = computeIndicatorSnapshot(points, indicatorSettings);
       const indicatorsReady = indicators.emaFast !== null
@@ -1760,20 +1773,23 @@ export async function runAutonomousPerpsMonitor(
         || executionProfile.preferredDirection === "balanced"
         || smartSignal.direction === executionProfile.preferredDirection;
       const smartEligible = Boolean(
-        smartSignal
+        regularPerpsLayerEnabled
+        && smartSignal
         && (!indicatorsReady || smartIndicatorScore?.qualified)
         && smartLearningConfirmed
         && smartDirectionAllowed
       );
-      const scalpValidationPaused = config.settings.scalpModeEnabled
+      const scalpValidationPaused = scalpAgentLayerEnabled
         && !scalpProfileAllowsLiveEntries(scalpProfile);
-      await deps.labelMatureScalpCandidates({
-        walletAddress: config.walletAddress,
-        points,
-        policyVersion: SCALP_POLICY_VERSION,
-        evaluatedAt: latestTimestamp,
-      }).catch(() => []);
-      const scalpEvaluation = config.settings.scalpModeEnabled && !scalpValidationPaused
+      if (scalpAgentLayerEnabled) {
+        await deps.labelMatureScalpCandidates({
+          walletAddress: config.walletAddress,
+          points,
+          policyVersion: SCALP_POLICY_VERSION,
+          evaluatedAt: latestTimestamp,
+        }).catch(() => []);
+      }
+      const scalpEvaluation = scalpAgentLayerEnabled && !scalpValidationPaused
         ? evaluateAdaptiveScalpCandidate({
             symbol: `${asset}/USD`,
             points: scalpPoints,
@@ -1800,7 +1816,9 @@ export async function runAutonomousPerpsMonitor(
           })
         : null;
       const scalpSignal = scalpEvaluation?.signal ?? null;
-      let directionExperiment = await deps.getDirectionExperiment(config.walletAddress);
+      let directionExperiment = scalpAgentLayerEnabled
+        ? await deps.getDirectionExperiment(config.walletAddress)
+        : null;
       if (
         scalpProfile.policyVersion === SCALP_POLICY_VERSION
         && directionExperiment?.enabled
@@ -1814,7 +1832,8 @@ export async function runAutonomousPerpsMonitor(
         directionExperiment = null;
       }
       const directionExperimentActive = Boolean(
-        directionExperiment?.enabled
+        scalpAgentLayerEnabled
+        && directionExperiment?.enabled
         && directionExperiment.tradesRemaining > 0
       );
       const signal = directionExperimentActive
@@ -1905,9 +1924,11 @@ export async function runAutonomousPerpsMonitor(
                   ? `A Smart candidate was inside the ${postCloseCooldownLabel} post-close cooldown; Scalp Mode remains enabled, but no qualifying independent scalp/reversal setup was detected.`
                 : scalpValidationPaused
                   ? "Scalp Mode is paused because its winner-derived profile has not passed loss-history validation."
-                  : config.settings.scalpModeEnabled
+                  : regularPerpsLayerEnabled && scalpAgentLayerEnabled
                     ? "No qualifying Smart, range scalp, or candle-structure reversal signal was detected in the latest window."
-                    : "No qualifying signal was detected in the latest candle window."
+                    : scalpAgentLayerEnabled
+                      ? "No qualifying range scalp or candle-structure reversal signal was detected in the latest window."
+                      : "No qualifying Smart signal was detected in the latest candle window."
         ));
         continue;
       }
@@ -2298,7 +2319,7 @@ export async function runAutonomousPerpsMonitor(
           trendWindow: effectiveParams.trendWindow,
           trendThreshold: effectiveParams.trendThreshold,
           breakoutPercent: effectiveParams.breakoutPercent,
-          cooldownSeconds: strategyClass === "scalp" || config.settings.scalpModeEnabled
+          cooldownSeconds: strategyClass === "scalp" || scalpAgentLayerEnabled
             ? scalpProfile.cooldownSeconds
             : effectiveParams.cooldownSeconds,
           trendStrengthPercent: signalMetrics.trend.changePercent,

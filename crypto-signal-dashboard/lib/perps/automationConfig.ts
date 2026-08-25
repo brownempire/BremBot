@@ -32,8 +32,30 @@ export const perpsAutomationSettingsSchema = z.object({
   })).min(1).max(3),
   activeSlotId: z.string().trim().min(1).nullable(),
   perpsActiveSlotId: z.string().trim().min(1).nullable(),
+  scalpActiveSlotId: z.string().trim().min(1).nullable().optional(),
   mode: z.enum(["all", "buy-only"]),
   disableTpLock: z.boolean(),
+}).transform((settings) => {
+  const scalpActiveSlotId = settings.scalpActiveSlotId === undefined
+    ? settings.scalpModeEnabled ? settings.perpsActiveSlotId : null
+    : settings.scalpActiveSlotId;
+  return {
+    ...settings,
+    scalpActiveSlotId,
+    scalpModeEnabled: Boolean(scalpActiveSlotId),
+  };
+}).superRefine((settings, context) => {
+  if (
+    settings.perpsActiveSlotId
+    && settings.scalpActiveSlotId
+    && settings.perpsActiveSlotId !== settings.scalpActiveSlotId
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["scalpActiveSlotId"],
+      message: "Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.",
+    });
+  }
 });
 
 export const signalParamsSchema = z.object({
@@ -68,11 +90,26 @@ export const DEFAULT_SERVER_SIGNAL_PARAMS: UserParams = {
   ...OPERATOR_TRAINING_BASELINE.signalParams,
 };
 
-export function getActivePerpsAsset(config: PerpsAutomationConfig) {
-  const activeSlot = config.settings.slots.find((slot) => slot.id === config.settings.perpsActiveSlotId);
+function getPerpsAssetForSlot(config: PerpsAutomationConfig, slotId: string | null | undefined) {
+  const activeSlot = config.settings.slots.find((slot) => slot.id === slotId);
   const token = activeSlot?.token;
   return token === "SOL" || token === "ETH" || token === "BTC" ? token : null;
 }
+
+export function getActiveRegularPerpsAsset(config: PerpsAutomationConfig) {
+  return getPerpsAssetForSlot(config, config.settings.perpsActiveSlotId);
+}
+
+export function getActiveScalpAsset(config: PerpsAutomationConfig) {
+  const slotId = config.settings.scalpActiveSlotId
+    ?? (config.settings.scalpModeEnabled ? config.settings.perpsActiveSlotId : null);
+  return getPerpsAssetForSlot(config, slotId);
+}
+
+export function getActivePerpsAsset(config: PerpsAutomationConfig) {
+  return getActiveRegularPerpsAsset(config) ?? getActiveScalpAsset(config);
+}
+
 export function isPerpsAutomationEnabled(config: PerpsAutomationConfig) {
-  return Boolean(getActivePerpsAsset(config));
+  return Boolean(getActiveRegularPerpsAsset(config) || getActiveScalpAsset(config));
 }

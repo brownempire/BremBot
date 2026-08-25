@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   DEFAULT_SERVER_SIGNAL_PARAMS,
+  getActiveRegularPerpsAsset,
+  getActiveScalpAsset,
+  isPerpsAutomationEnabled,
   perpsAutomationConfigWriteSchema,
   type PerpsAutomationConfigInput,
 } from "../lib/perps/automationConfig";
@@ -34,6 +37,7 @@ function createInput(): PerpsAutomationConfigInput {
       slots: [{ id: "slot-sol", token: "SOL" }],
       activeSlotId: null,
       perpsActiveSlotId: "slot-sol",
+      scalpActiveSlotId: null,
       mode: "all",
       disableTpLock: false,
     },
@@ -51,6 +55,7 @@ test("legacy wallet automation configs migrate to revision one", () => {
   const {
     decisionMode: _decisionMode,
     scalpModeEnabled: _scalpModeEnabled,
+    scalpActiveSlotId: _scalpActiveSlotId,
     scalpTakeProfitRoePercent: _scalpTakeProfitRoePercent,
     ...legacySettings
   } = input.settings;
@@ -64,9 +69,75 @@ test("legacy wallet automation configs migrate to revision one", () => {
   assert.equal(parsed?.revision, 1);
   assert.equal(parsed?.settings.decisionMode, "active");
   assert.equal(parsed?.settings.scalpModeEnabled, false);
+  assert.equal(parsed?.settings.scalpActiveSlotId, null);
   assert.equal(parsed?.settings.scalpTakeProfitRoePercent, 25);
   assert.equal(parsed?.settings.stopLossPercent, 25);
   assert.equal(parsed?.walletAddress, walletAddress);
+});
+
+test("legacy enabled Scalp Mode inherits the selected Perps token", () => {
+  const input = createInput();
+  const { scalpActiveSlotId: _scalpActiveSlotId, ...legacySettings } = input.settings;
+  const parsed = parsePerpsAutomationConfig(JSON.stringify({
+    walletAddress,
+    ...input,
+    settings: { ...legacySettings, scalpModeEnabled: true },
+    updatedAt: new Date().toISOString(),
+  }));
+
+  assert.equal(parsed?.settings.scalpModeEnabled, true);
+  assert.equal(parsed?.settings.scalpActiveSlotId, "slot-sol");
+});
+
+test("regular Perps and Scalp Agent can be enabled independently", () => {
+  const input = createInput();
+  const scalpOnly = parsePerpsAutomationConfig(JSON.stringify({
+    walletAddress,
+    ...input,
+    settings: {
+      ...input.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+    updatedAt: new Date().toISOString(),
+  }));
+  assert.ok(scalpOnly);
+  assert.equal(getActiveRegularPerpsAsset(scalpOnly), null);
+  assert.equal(getActiveScalpAsset(scalpOnly), "SOL");
+  assert.equal(isPerpsAutomationEnabled(scalpOnly), true);
+
+  const regularOnly = parsePerpsAutomationConfig(JSON.stringify({
+    walletAddress,
+    ...input,
+    settings: {
+      ...input.settings,
+      scalpModeEnabled: false,
+      scalpActiveSlotId: null,
+    },
+    updatedAt: new Date().toISOString(),
+  }));
+  assert.ok(regularOnly);
+  assert.equal(getActiveRegularPerpsAsset(regularOnly), "SOL");
+  assert.equal(getActiveScalpAsset(regularOnly), null);
+  assert.equal(isPerpsAutomationEnabled(regularOnly), true);
+});
+
+test("regular Perps and Scalp Agent must share a token when both are enabled", () => {
+  const input = createInput();
+  assert.equal(perpsAutomationConfigWriteSchema.safeParse({
+    ...input,
+    settings: {
+      ...input.settings,
+      slots: [
+        { id: "slot-sol", token: "SOL" },
+        { id: "slot-eth", token: "ETH" },
+      ],
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-eth",
+    },
+    expectedRevision: 0,
+  }).success, false);
 });
 
 test("saved zero stop losses migrate to the fixed 25% ROE safeguard", () => {

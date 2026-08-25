@@ -167,6 +167,7 @@ type AutoTradeSettings = {
   slots: AutoTradeSlot[];
   activeSlotId: string | null;
   perpsActiveSlotId: string | null;
+  scalpActiveSlotId: string | null;
   mode: AutoTradeMode;
   disableTpLock: boolean;
 };
@@ -200,6 +201,7 @@ const DEFAULT_AUTO_TRADE_SETTINGS: AutoTradeSettings = {
   ],
   activeSlotId: null,
   perpsActiveSlotId: null,
+  scalpActiveSlotId: null,
   mode: "all",
   disableTpLock: false,
 };
@@ -1147,7 +1149,7 @@ function DashboardPage() {
     connected: false,
   });
   const [jupiterPerpsController, setJupiterPerpsController] = useState<JupiterPerpsWidgetController | null>(null);
-  const [showAutoTradeSelectorWarning, setShowAutoTradeSelectorWarning] = useState(false);
+  const [autoTradeSelectorWarning, setAutoTradeSelectorWarning] = useState<string | null>(null);
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [pnlRange, setPnlRange] = useState<PnlRange>("24h");
   const [pnlMode, setPnlMode] = useState<PnlMode>("primary");
@@ -1220,11 +1222,17 @@ function DashboardPage() {
     () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.perpsActiveSlotId) ?? null,
     [autoTradeSettings.perpsActiveSlotId, autoTradeSettings.slots]
   );
+  const activeScalpAgentSlot = useMemo(
+    () => autoTradeSettings.slots.find((slot) => slot.id === autoTradeSettings.scalpActiveSlotId) ?? null,
+    [autoTradeSettings.scalpActiveSlotId, autoTradeSettings.slots]
+  );
   const activeAutoTradeToken = activeAutoTradeSlot ? getAutoTradeTokenOption(activeAutoTradeSlot.token) : null;
   const activePerpsAutoTradeToken = activePerpsAutoTradeSlot ? getAutoTradeTokenOption(activePerpsAutoTradeSlot.token) : null;
+  const activeScalpAgentToken = activeScalpAgentSlot ? getAutoTradeTokenOption(activeScalpAgentSlot.token) : null;
   const latestSignal = signals[0] ?? null;
   const autoTradeEnabled = Boolean(activeAutoTradeToken);
   const perpsAutoTradeEnabled = Boolean(activePerpsAutoTradeToken);
+  const scalpAgentEnabled = Boolean(activeScalpAgentToken);
   const nativeWalletShell = nativeShell || nativeMacShell;
   const remoteSyncWalletAddress = resolveRemoteSyncWalletAddress({
     source: remoteAuthSource,
@@ -3548,7 +3556,7 @@ function DashboardPage() {
         : DEFAULT_AUTO_TRADE_SETTINGS.perpsLeverage;
       const mode = parsed.mode === "buy-only" ? "buy-only" : "all";
       const perpsExecutionMode = parsed.perpsExecutionMode === "smart-trades" ? "smart-trades" : "set-parameters";
-      const scalpModeEnabled = Boolean(parsed.scalpModeEnabled);
+      const legacyScalpModeEnabled = Boolean(parsed.scalpModeEnabled);
       const parsedScalpTakeProfitRoePercent = Number(parsed.scalpTakeProfitRoePercent);
       const scalpTakeProfitRoePercent = Number.isFinite(parsedScalpTakeProfitRoePercent)
         ? Math.min(100, Math.max(SCALP_MINIMUM_TAKE_PROFIT_ROE_PERCENT, parsedScalpTakeProfitRoePercent))
@@ -3588,6 +3596,11 @@ function DashboardPage() {
       const perpsActiveSlotId = typeof parsed.perpsActiveSlotId === "string"
         ? normalizedSlots.some((slot) => slot.id === parsed.perpsActiveSlotId) ? parsed.perpsActiveSlotId : null
         : null;
+      const scalpActiveSlotId = typeof parsed.scalpActiveSlotId === "string"
+        ? normalizedSlots.some((slot) => slot.id === parsed.scalpActiveSlotId) ? parsed.scalpActiveSlotId : null
+        : legacyScalpModeEnabled
+          ? perpsActiveSlotId
+          : null;
 
       setAutoTradeSettings({
         walletPercent: percent,
@@ -3601,13 +3614,14 @@ function DashboardPage() {
           ? OPERATOR_TRAINING_BASELINE.leverageCap
           : perpsLeverage,
         perpsExecutionMode,
-        scalpModeEnabled,
+        scalpModeEnabled: Boolean(scalpActiveSlotId),
         scalpTakeProfitRoePercent,
         decisionMode,
         smartTradeProfile,
         slots: normalizedSlots,
         activeSlotId,
         perpsActiveSlotId,
+        scalpActiveSlotId,
         mode,
         disableTpLock,
       });
@@ -3966,7 +3980,7 @@ function DashboardPage() {
   useEffect(() => {
     if (nativeShell || typeof window === "undefined") return;
 
-    const shouldKeepAwake = autoTradeEnabled || perpsAutoTradeEnabled;
+    const shouldKeepAwake = autoTradeEnabled || perpsAutoTradeEnabled || scalpAgentEnabled;
     const wakeLockApi = (navigator as Navigator & {
       wakeLock?: {
         request?: (type: "screen") => Promise<{ release?: () => Promise<void> }>;
@@ -4011,7 +4025,7 @@ function DashboardPage() {
       }
       wakeLockRef.current = null;
     };
-  }, [autoTradeEnabled, nativeShell, perpsAutoTradeEnabled]);
+  }, [autoTradeEnabled, nativeShell, perpsAutoTradeEnabled, scalpAgentEnabled]);
 
   const requestRemoteAuthChallenge = useCallback(async (address: string) => {
     const response = await fetch("/api/trades/auth", {
@@ -5183,7 +5197,7 @@ function DashboardPage() {
 
   function toggleAutoTradeSlot(slotId: string, enabled: boolean) {
     if (enabled && autoTradeSettings.activeSlotId && autoTradeSettings.activeSlotId !== slotId) {
-      setShowAutoTradeSelectorWarning(true);
+      setAutoTradeSelectorWarning("Only one token can be active for Spot Auto-Trade at a time.");
       return;
     }
 
@@ -5204,7 +5218,11 @@ function DashboardPage() {
 
   function togglePerpsAutoTradeSlot(slotId: string, enabled: boolean) {
     if (enabled && autoTradeSettings.perpsActiveSlotId && autoTradeSettings.perpsActiveSlotId !== slotId) {
-      setShowAutoTradeSelectorWarning(true);
+      setAutoTradeSelectorWarning("Only one token can be active for Perps Auto-Trade at a time.");
+      return;
+    }
+    if (enabled && autoTradeSettings.scalpActiveSlotId && autoTradeSettings.scalpActiveSlotId !== slotId) {
+      setAutoTradeSelectorWarning("Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.");
       return;
     }
 
@@ -5221,6 +5239,24 @@ function DashboardPage() {
         ? `Perps auto-trade is on (${token.symbol}, ${formatAutoTradeAllocationLabel(next, "collateral")}, ${next.perpsLeverage}x, ${next.mode === "buy-only" ? "Buy Only" : "All"})`
         : "Perps auto-trade is off"
     );
+  }
+
+  function toggleScalpAgentSlot(slotId: string, enabled: boolean) {
+    if (enabled && autoTradeSettings.scalpActiveSlotId && autoTradeSettings.scalpActiveSlotId !== slotId) {
+      setAutoTradeSelectorWarning("Only one token can be active for Scalp Agent at a time.");
+      return;
+    }
+    if (enabled && autoTradeSettings.perpsActiveSlotId && autoTradeSettings.perpsActiveSlotId !== slotId) {
+      setAutoTradeSelectorWarning("Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.");
+      return;
+    }
+
+    const scalpActiveSlotId = enabled ? slotId : null;
+    persistAutoTradeSettings({
+      ...autoTradeSettings,
+      scalpActiveSlotId,
+      scalpModeEnabled: Boolean(scalpActiveSlotId),
+    });
   }
 
   function updateAutoTradeMode(mode: AutoTradeMode) {
@@ -5664,10 +5700,17 @@ function DashboardPage() {
             onClockOut={() => { void clockOutPerpsAgent("User manually clocked out.").catch(() => undefined); }}
             onViewLog={() => { void openDecisionLog(); }}
             scalpModeEnabled={autoTradeSettings.scalpModeEnabled}
-            onToggleScalpMode={(enabled) => persistAutoTradeSettings({
-              ...autoTradeSettings,
-              scalpModeEnabled: enabled,
-            })}
+            onToggleScalpMode={(enabled) => {
+              const fallbackSlotId = autoTradeSettings.scalpActiveSlotId
+                ?? autoTradeSettings.perpsActiveSlotId
+                ?? autoTradeSettings.slots.find((slot) => isSupportedPerpsAutoTradeToken(slot.token))?.id
+                ?? null;
+              persistAutoTradeSettings({
+                ...autoTradeSettings,
+                scalpModeEnabled: enabled && Boolean(fallbackSlotId),
+                scalpActiveSlotId: enabled ? fallbackSlotId : null,
+              });
+            }}
             onToggleMode={() => setPerpsSessionModePreference((current) => current === "paper" ? "live" : "paper")}
             onToggleDecisionMode={() => setAutoTradeSettings((current) => ({
               ...current,
@@ -5920,6 +5963,7 @@ function DashboardPage() {
                   ? `Smart Trades (${autoTradeSettings.smartTradeProfile}) adjusts collateral, leverage, TP, and SL from confidence and recent volatility.`
                   : "Set Parameter Trades uses the exact wallet %, leverage, TP, and SL values set above."}
               </span>
+              <span className="subtext">Scalp Agent is an independent Perps signal layer. Either Perps layer can run alone, or both can listen on the same token.</span>
               {pendingTakeProfit && !autoTradeSettings.disableTpLock ? (
                 <span className="subtext">
                   TP lock active: sell {pendingTakeProfit.amount.toFixed(6)} {pendingTakeProfit.tokenSymbol} at {formatUsd(pendingTakeProfit.targetPrice)}
@@ -5971,14 +6015,19 @@ function DashboardPage() {
                     <input type="checkbox" checked={autoTradeSettings.perpsActiveSlotId === slot.id} onChange={(event) => togglePerpsAutoTradeSlot(slot.id, event.target.checked)} />
                     <span>{autoTradeSettings.perpsActiveSlotId === slot.id ? "On" : "Off"}</span>
                   </label>
+                  <label className="auto-trade-slot-toggle">
+                    <span className="subtext">Scalp Agent</span>
+                    <input type="checkbox" checked={autoTradeSettings.scalpActiveSlotId === slot.id} onChange={(event) => toggleScalpAgentSlot(slot.id, event.target.checked)} />
+                    <span>{autoTradeSettings.scalpActiveSlotId === slot.id ? "On" : "Off"}</span>
+                  </label>
                 </div>
               ))}
             </div>
-            {showAutoTradeSelectorWarning ? (
+            {autoTradeSelectorWarning ? (
               <div className="auto-trade-selector-modal" role="alertdialog" aria-modal="true">
                 <div className="auto-trade-selector-modal-card">
-                  <strong>Only One Token Allowed For Each Auto-Trade Mode At A Time</strong>
-                  <button type="button" style={{ marginTop: 10 }} onClick={() => setShowAutoTradeSelectorWarning(false)}>OK</button>
+                  <strong>{autoTradeSelectorWarning}</strong>
+                  <button type="button" style={{ marginTop: 10 }} onClick={() => setAutoTradeSelectorWarning(null)}>OK</button>
                 </div>
               </div>
             ) : null}

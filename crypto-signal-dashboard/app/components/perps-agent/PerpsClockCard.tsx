@@ -77,7 +77,7 @@ export function PerpsClockCard(props: PerpsClockCardProps) {
           </summary>
           <div className="perps-scalp-dropdown">
             <div>
-              <strong>Scalp Mode</strong>
+              <strong>Scalp Agent</strong>
               <div className="subtext">Sideways-market strategy</div>
             </div>
             <label className="perps-scalp-switch">

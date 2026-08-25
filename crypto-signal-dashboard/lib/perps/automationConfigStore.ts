@@ -44,6 +44,7 @@ if decoded.settings.scalpModeEnabled ~= true then
 end
 
 decoded.settings.scalpModeEnabled = false
+decoded.settings.scalpActiveSlotId = cjson.null
 decoded.revision = (tonumber(decoded.revision) or 1) + 1
 decoded.updatedAt = ARGV[2]
 local encoded = cjson.encode(decoded)
