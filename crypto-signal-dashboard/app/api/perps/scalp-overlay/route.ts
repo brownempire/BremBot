@@ -1,5 +1,6 @@
 import { buildScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
 import { getActiveDecisionLearningProfile, listTradeLearningOutcomes } from "@/lib/decision/learningStore";
+import { getActiveScalpAsset } from "@/lib/perps/automationConfig";
 import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
 import { getLastAutonomousMonitorRun } from "@/lib/perps/autonomousMonitor";
 import { getScalpLearningProfile } from "@/lib/perps/scalpEngine";
@@ -38,7 +39,7 @@ export async function GET(request: Request) {
     const latestClosed = [...outcomes].reverse().find((outcome) => (
       outcome.signalType === "scalp" || outcome.scalpSetupType !== null
     )) ?? null;
-    const activeSlot = config?.settings.slots.find((slot) => slot.id === config.settings.perpsActiveSlotId) ?? null;
+    const activeScalpAsset = config ? getActiveScalpAsset(config) : null;
     const walletResults = lastRun?.results.filter((result) => result.walletAddress === walletAddress) ?? [];
     const walletResult = walletResults.find((result) => result.status === "failed")
       ?? walletResults.at(-1)
@@ -60,8 +61,8 @@ export async function GET(request: Request) {
         ...BASE_INDICATOR_SETTINGS,
         ...(profile?.indicatorSettings ?? {}),
       },
-      scalpModeEnabled: config?.settings.scalpModeEnabled === true,
-      isActiveAsset: activeSlot?.token === market.asset,
+      scalpModeEnabled: Boolean(activeScalpAsset),
+      isActiveAsset: activeScalpAsset === market.asset,
       monitorHealth: {
         healthy: monitorHealthy,
         stale,

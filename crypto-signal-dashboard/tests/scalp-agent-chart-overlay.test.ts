@@ -165,6 +165,10 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(route, /profile\?\.indicatorSettings/);
   assert.match(route, /listTradeLearningOutcomes\(walletAddress\)/);
   assert.match(route, /getLastAutonomousMonitorRun\(\)/);
+  assert.match(route, /getActiveScalpAsset\(config\)/);
+  assert.match(route, /scalpModeEnabled: Boolean\(activeScalpAsset\)/);
+  assert.match(route, /isActiveAsset: activeScalpAsset === market\.asset/);
+  assert.doesNotMatch(route, /perpsActiveSlotId/);
   assert.match(route, /walletFailureStreaks/);
   assert.match(route, /monitorHealth:/);
   assert.match(route, /recentClosedTrade: latestClosed/);
