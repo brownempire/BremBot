@@ -155,7 +155,8 @@ function outcomeMatchesWinnerBaseline(outcome: TradeLearningOutcome, profile: Sc
 
 export function createProfitableScalpBaseline(
   current: ScalpLearningProfile | null | undefined,
-  allScalpOutcomes: TradeLearningOutcome[]
+  allScalpOutcomes: TradeLearningOutcome[],
+  options: { maximumMinimumPriceActionScore?: number } = {}
 ): ScalpLearningProfile {
   const ordered = allScalpOutcomes
     .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
@@ -194,7 +195,19 @@ export function createProfitableScalpBaseline(
   const longRangeWinners = rangeWinners.filter((outcome) => outcome.side === "long");
   const shortRangeWinners = rangeWinners.filter((outcome) => outcome.side === "short");
   baseline.minimumConfidence = Number(clamp(quantile(winners.map((outcome) => outcome.signalConfidence), 0.25) ?? 0.82, 0.68, 0.82).toFixed(4));
-  baseline.minimumPriceActionScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.25) ?? 0.58, 0.58, 0.82).toFixed(3));
+  const learnedMinimumPriceActionScore = clamp(
+    quantile(winners.map((outcome) => outcome.priceActionScore), 0.25) ?? 0.58,
+    0.58,
+    0.82
+  );
+  const activePriceActionScoreCap = options.maximumMinimumPriceActionScore;
+  baseline.minimumPriceActionScore = Number(clamp(
+    typeof activePriceActionScoreCap === "number" && Number.isFinite(activePriceActionScoreCap)
+      ? Math.min(learnedMinimumPriceActionScore, activePriceActionScoreCap)
+      : learnedMinimumPriceActionScore,
+    0.52,
+    0.82
+  ).toFixed(3));
   baseline.strongReversalScore = Number(clamp(quantile(winners.map((outcome) => outcome.priceActionScore), 0.75) ?? 0.9, 0.78, 0.9).toFixed(3));
   baseline.preferredDirection = winnerDirectionPreference(winners);
   baseline.longRsiMaximum = Number(clamp(quantile(longRangeWinners.map((outcome) => outcome.rsi), 0.75) ?? 46, 38, 58).toFixed(2));
@@ -244,12 +257,13 @@ export function createProfitableScalpBaseline(
 
 export function createOperatorActivatedProfitableScalpBaseline(
   allScalpOutcomes: TradeLearningOutcome[],
-  activatedAt = new Date()
+  activatedAt = new Date(),
+  options: { maximumMinimumPriceActionScore?: number } = {}
 ): ScalpLearningProfile {
   const resetSeed = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
   resetSeed.policyOutcomeOffset = 0;
   resetSeed.learnedFromClosedTrades = 0;
-  const baseline = createProfitableScalpBaseline(resetSeed, allScalpOutcomes);
+  const baseline = createProfitableScalpBaseline(resetSeed, allScalpOutcomes, options);
   if (baseline.validation.trainingSize < MIN_PROFITABLE_BASELINE_TRADES) {
     throw new Error(
       `A profitable scalp reset requires at least ${MIN_PROFITABLE_BASELINE_TRADES} compatible post-fee winners.`

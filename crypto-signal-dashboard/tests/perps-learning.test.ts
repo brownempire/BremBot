@@ -308,6 +308,15 @@ test("operator activation re-enables a conservative winner-derived scalp baselin
   assert.equal(profile.cooldownSeconds, 420);
   assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(profile), true);
   assert.match(profile.validation.reasons[0] ?? "", /operator activated/i);
+
+  const cappedProfile = scalpTrainer.createOperatorActivatedProfitableScalpBaseline(
+    outcomes,
+    new Date("2026-08-05T05:00:00.000Z"),
+    { maximumMinimumPriceActionScore: 0.618 }
+  );
+  assert.equal(profile.minimumPriceActionScore, 0.82);
+  assert.equal(cappedProfile.minimumPriceActionScore, 0.618);
+  assert.equal(cappedProfile.validation.passed, true);
 });
 
 test("opposite-direction experiment outcomes stay auditable without corrupting normal scalp learning", async () => {

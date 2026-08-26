@@ -111,7 +111,11 @@ export async function resetWalletScalpToProfitableProfile(input: {
     && outcome.reconciliationVersion === CURRENT_OUTCOME_RECONCILIATION_VERSION
   ));
   const version = Math.max(active.version, ...history.map((profile) => profile.version)) + 1;
-  const scalpProfile = createOperatorActivatedProfitableScalpBaseline(outcomes);
+  const scalpProfile = createOperatorActivatedProfitableScalpBaseline(
+    outcomes,
+    new Date(),
+    { maximumMinimumPriceActionScore: active.scalpProfile?.minimumPriceActionScore }
+  );
   const next = {
     ...active,
     profileId: `learn_${crypto.randomUUID()}`,
