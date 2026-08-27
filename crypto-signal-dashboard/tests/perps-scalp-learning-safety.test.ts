@@ -112,7 +112,17 @@ test("policy migration is explicitly live on probation without claiming zero-sam
   const paused = structuredClone(profile);
   if (!paused.policyRollout) throw new Error("Expected rollout metadata.");
   paused.policyRollout.status = "paused";
-  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(paused), false);
+  paused.policyRollout.timeoutStartedAt = "2026-08-19T12:00:00.000Z";
+  paused.policyRollout.timeoutExpiresAt = "2026-08-19T12:30:00.000Z";
+  assert.equal(
+    scalpEngine.scalpProfileAllowsLiveEntries(paused, "2026-08-19T12:29:59.999Z"),
+    false
+  );
+  assert.equal(
+    scalpEngine.scalpProfileAllowsLiveEntries(paused, "2026-08-19T12:30:00.000Z"),
+    true,
+    "a learning-layer pause must restore every live entry path at the exact timeout boundary"
+  );
 });
 
 test("five-trade learning batches preserve probation until ten profitable post-fee outcomes validate it", () => {
@@ -143,12 +153,17 @@ test("a completed negative probation sample pauses live entry instead of auto-pa
   if (!baseline.policyRollout) throw new Error("Expected rollout metadata.");
   baseline.policyRollout.startedAt = "2026-08-19T11:59:00.000Z";
   const firstBatch = scalpTrainer.updateScalpLearningProfile(baseline, outcomes.slice(0, 5));
-  const failed = scalpTrainer.updateScalpLearningProfile(firstBatch, outcomes);
+  const failed = scalpTrainer.updateScalpLearningProfile(firstBatch, outcomes, {
+    evaluatedAt: new Date("2026-08-19T12:30:00.000Z"),
+  });
 
   assert.equal(failed.policyRollout?.status, "paused");
   assert.equal(failed.policyRollout?.liveTradingAuthorized, false);
+  assert.equal(failed.policyRollout?.timeoutStartedAt, "2026-08-19T12:30:00.000Z");
+  assert.equal(failed.policyRollout?.timeoutExpiresAt, "2026-08-19T13:00:00.000Z");
   assert.equal(failed.validation.passed, false);
-  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(failed), false);
+  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(failed, "2026-08-19T12:59:59.999Z"), false);
+  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(failed, "2026-08-19T13:00:00.000Z"), true);
 });
 
 test("v8 scalp learning tracks processed outcome IDs so a late older outcome cannot shift its cursor", () => {
@@ -183,7 +198,7 @@ test("v8 scalp learning tracks processed outcome IDs so a late older outcome can
   assert.equal(replayed.riskMultiplier, afterLateBatch.riskMultiplier);
 });
 
-test("circuit breakers disable a path after two losses and pause all scalp entries after three", async () => {
+test("any path loss limit starts one 30-minute timeout for every scalp layer, then fully recovers", async () => {
   const base = {
     walletAddress: "circuit-wallet",
     policyVersion: 8,
@@ -194,45 +209,80 @@ test("circuit breakers disable a path after two losses and pause all scalp entri
     outcomeId: "loss-1",
     netPnlUsd: -1,
     closedAt: "2026-08-19T12:01:00.000Z",
+    evaluatedAt: "2026-08-19T12:01:01.000Z",
   });
-  const pathDisabled = await circuitStore.recordScalpCircuitOutcome({
+  const timedOut = await circuitStore.recordScalpCircuitOutcome({
     ...base,
     outcomeId: "loss-2",
     netPnlUsd: -2,
     closedAt: "2026-08-19T12:02:00.000Z",
+    evaluatedAt: "2026-08-19T12:02:01.000Z",
   });
 
-  assert.equal(pathDisabled.paths.continuation.disabled, true);
-  assert.equal(pathDisabled.globallyPaused, false);
-  assert.equal((await circuitStore.getScalpCircuitDecision(base)).allowed, false);
+  assert.equal(timedOut.timedOut, true);
+  assert.equal(timedOut.globallyPaused, true);
+  assert.equal(timedOut.timeoutExpiresAt, "2026-08-19T12:32:00.000Z");
+  assert.ok(Object.values(timedOut.paths).every((path) => path.disabled));
+  for (const entryPath of ["range-reversal", "reversal", "continuation", "breakout-retest"] as const) {
+    const decision = await circuitStore.getScalpCircuitDecision({
+      ...base,
+      entryPath,
+      evaluatedAt: "2026-08-19T12:31:59.999Z",
+    });
+    assert.equal(decision.allowed, false);
+    assert.match(decision.reasons.join(" "), /entire scalp agent.*30-minute timeout/i);
+  }
 
-  const globallyPaused = await circuitStore.recordScalpCircuitOutcome({
+  const duringTimeout = await circuitStore.recordScalpCircuitOutcome({
     ...base,
     entryPath: "range-reversal",
     outcomeId: "loss-3",
     netPnlUsd: -3,
     closedAt: "2026-08-19T12:03:00.000Z",
+    evaluatedAt: "2026-08-19T12:03:01.000Z",
   });
-  assert.equal(globallyPaused.globallyPaused, true);
-  assert.equal((await circuitStore.getScalpCircuitDecision({ ...base, entryPath: "breakout-retest" })).allowed, false);
+  assert.equal(duringTimeout.timeoutExpiresAt, timedOut.timeoutExpiresAt, "losses cannot extend an active timeout");
 
-  const idempotent = await circuitStore.recordScalpCircuitOutcome({
+  const recovered = await circuitStore.getScalpCircuitState(base.walletAddress, base.policyVersion, {
+    evaluatedAt: "2026-08-19T12:32:00.000Z",
+  });
+  assert.equal(recovered.timedOut, false);
+  assert.equal(recovered.globallyPaused, false);
+  assert.equal(recovered.consecutivePostFeeLosses, 0);
+  assert.ok(Object.values(recovered.paths).every((path) => !path.disabled && path.consecutivePostFeeLosses === 0));
+  assert.equal((await circuitStore.getScalpCircuitDecision({
     ...base,
-    entryPath: "range-reversal",
-    outcomeId: "loss-3",
-    netPnlUsd: -3,
-    closedAt: "2026-08-19T12:03:00.000Z",
-  });
-  assert.equal(idempotent.processedOutcomeCount, 3);
+    entryPath: "breakout-retest",
+    evaluatedAt: "2026-08-19T12:32:00.000Z",
+  })).allowed, true);
 
-  const reset = await circuitStore.resetScalpCircuit({
-    walletAddress: base.walletAddress,
-    policyVersion: base.policyVersion,
-    reason: "Operator reviewed the stopped paths.",
-    resetAt: "2026-08-19T12:04:00.000Z",
+  const firstPostRecoveryLoss = await circuitStore.recordScalpCircuitOutcome({
+    ...base,
+    outcomeId: "loss-after-recovery",
+    netPnlUsd: -1,
+    closedAt: "2026-08-19T12:33:00.000Z",
+    evaluatedAt: "2026-08-19T12:33:01.000Z",
   });
-  assert.equal(reset.globallyPaused, false);
-  assert.equal(reset.paths.continuation.disabled, false);
+  assert.equal(firstPostRecoveryLoss.timedOut, false);
+  assert.equal(firstPostRecoveryLoss.paths.continuation.consecutivePostFeeLosses, 1);
+});
+
+test("three consecutive losses across separate paths still time out the entire scalp agent", async () => {
+  const walletAddress = "cross-path-timeout-wallet";
+  for (const [index, entryPath] of ["continuation", "reversal", "range-reversal"].entries()) {
+    const minute = index + 1;
+    const state = await circuitStore.recordScalpCircuitOutcome({
+      walletAddress,
+      policyVersion: 8,
+      entryPath: entryPath as "continuation" | "reversal" | "range-reversal",
+      outcomeId: `cross-path-loss-${minute}`,
+      netPnlUsd: -1,
+      closedAt: `2026-08-19T13:0${minute}:00.000Z`,
+      evaluatedAt: `2026-08-19T13:0${minute}:01.000Z`,
+    });
+    assert.equal(state.timedOut, minute === 3);
+    if (minute === 3) assert.ok(Object.values(state.paths).every((path) => path.disabled));
+  }
 });
 
 test("late fee corrections replace one circuit outcome without double-counting the trade", async () => {
@@ -275,6 +325,7 @@ test("a corrected win-to-loss result is recomputed once and can legitimately tri
     reconciledAt: "2026-08-24T12:01:00.000Z",
     netPnlUsd: 0.02,
     closedAt: "2026-08-24T12:00:00.000Z",
+    evaluatedAt: "2026-08-24T12:01:01.000Z",
   });
   await circuitStore.recordScalpCircuitOutcome({
     walletAddress,
@@ -286,6 +337,7 @@ test("a corrected win-to-loss result is recomputed once and can legitimately tri
     reconciledAt: "2026-08-24T12:03:00.000Z",
     netPnlUsd: -1,
     closedAt: "2026-08-24T12:02:00.000Z",
+    evaluatedAt: "2026-08-24T12:03:01.000Z",
   });
   const corrected = await circuitStore.recordScalpCircuitOutcome({
     walletAddress,
@@ -297,11 +349,13 @@ test("a corrected win-to-loss result is recomputed once and can legitimately tri
     reconciledAt: "2026-08-24T12:04:00.000Z",
     netPnlUsd: -0.05,
     closedAt: "2026-08-24T12:00:00.000Z",
+    evaluatedAt: "2026-08-24T12:04:01.000Z",
   });
 
   assert.equal(corrected.processedOutcomeCount, 2);
   assert.equal(corrected.paths.continuation.consecutivePostFeeLosses, 2);
-  assert.equal(corrected.paths.continuation.disabled, true);
+  assert.equal(corrected.timedOut, true);
+  assert.ok(Object.values(corrected.paths).every((path) => path.disabled));
 });
 
 test("circuit corrections ignore stale financial revisions but reject identity changes", () => {

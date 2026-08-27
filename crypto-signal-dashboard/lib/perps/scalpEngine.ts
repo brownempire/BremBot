@@ -9,6 +9,7 @@ import {
   type IndicatorSnapshot,
 } from "@/lib/signal/indicators";
 import { SCALP_NORMAL_MAXIMUM_LEVERAGE } from "@/lib/perps/scalpLeverage";
+import { resolveScalpRolloutTimeout } from "@/lib/perps/scalpTimeoutPolicy";
 
 export {
   SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE,
@@ -32,6 +33,7 @@ export const SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE = 0.72;
 export const SCALP_CONTINUATION_PREVIOUS_MIN_PRICE_ACTION_SCORE = 0.58;
 export const SCALP_CONTINUATION_MIN_CONFIRMATION_GROUPS = 3;
 export const SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE = 0.72;
+export const SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE = 0.82;
 export const SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT = 0.45;
 export const SCALP_CONTINUATION_MIN_ATR_PERCENT = 0.1;
 export const SCALP_CONTINUATION_MIN_VOLUME_RATIO = 1.15;
@@ -381,6 +383,24 @@ function doubleReversal(points: PricePoint[], direction: "bullish" | "bearish") 
   return separation <= 0.25 && middleMove >= 0.12;
 }
 
+export function normalizeScalpLearningProfileForLiveOperation(
+  profile: ScalpLearningProfile
+): ScalpLearningProfile {
+  const scalpProfile = structuredClone(profile);
+  // A completed range-reversal state emits a fixed 0.82 confidence. Never let
+  // learning raise its required confidence above that reachable value.
+  const reachableRangeAdjustment = Math.floor(
+    (SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE - scalpProfile.minimumConfidence + Number.EPSILON) * 1_000
+  ) / 1_000;
+  scalpProfile.setupConfidenceAdjustments.rangeReversal = Number(clamp(
+    scalpProfile.setupConfidenceAdjustments.rangeReversal,
+    -0.08,
+    reachableRangeAdjustment
+  ).toFixed(3));
+  scalpProfile.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
+  return scalpProfile;
+}
+
 export function getScalpLearningProfile(profile: DecisionLearningProfile | null): ScalpLearningProfile {
   const scalpProfile = profile?.scalpProfile
     ? structuredClone(profile.scalpProfile)
@@ -388,15 +408,19 @@ export function getScalpLearningProfile(profile: DecisionLearningProfile | null)
   // The operator-selected post-close cooldown is fixed at seven minutes.
   // Normalize persisted profiles immediately so deployment does not wait for
   // another learning batch or policy migration to take effect.
-  scalpProfile.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
-  return scalpProfile;
+  return normalizeScalpLearningProfileForLiveOperation(scalpProfile);
 }
 
-export function scalpProfileAllowsLiveEntries(profile: ScalpLearningProfile) {
+export function scalpProfileAllowsLiveEntries(
+  profile: ScalpLearningProfile,
+  evaluatedAt: Date | number | string = Date.now()
+) {
   const rollout = profile.policyRollout;
-  return profile.policyVersion === SCALP_POLICY_VERSION
-    && rollout?.status !== "paused"
-    && (
+  if (profile.policyVersion !== SCALP_POLICY_VERSION) return false;
+  if (rollout?.status === "paused") {
+    return !resolveScalpRolloutTimeout(rollout, evaluatedAt).timedOut;
+  }
+  return (
       profile.validation.passed
       || profile.operatorActivation !== null
       || (
@@ -1097,7 +1121,7 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
       ? 0.72 + priceAction.score * 0.2
       : exceptionalReversal || strongReversal || moderateReversal
       ? 0.55 + priceAction.score * 0.35
-      : 0.82;
+      : SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE;
   if (rawConfidence < requiredConfidence && !trendContinuation) {
     return reject([`Raw confidence ${rawConfidence.toFixed(3)} is below the required ${requiredConfidence.toFixed(3)}.`]);
   }

@@ -7,6 +7,10 @@ import {
   type ScalpEntryPath,
   type TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
+import {
+  SCALP_AGENT_TIMEOUT_MINUTES,
+  SCALP_AGENT_TIMEOUT_MS,
+} from "@/lib/perps/scalpTimeoutPolicy";
 import { getRedisClient } from "@/lib/server/redis";
 
 export const SCALP_PATH_LOSS_LIMIT = 2;
@@ -59,6 +63,10 @@ export type ScalpCircuitState = {
   walletAddress: string;
   policyVersion: number;
   consecutivePostFeeLosses: number;
+  timedOut: boolean;
+  timeoutStartedAt: string | null;
+  timeoutExpiresAt: string | null;
+  timeoutTriggerPath: ScalpEntryPath | null;
   globallyPaused: boolean;
   globallyPausedAt: string | null;
   triggeringOutcomeId: string | null;
@@ -172,6 +180,10 @@ export function emptyScalpCircuitState(walletAddress: string, policyVersion: num
     walletAddress,
     policyVersion,
     consecutivePostFeeLosses: 0,
+    timedOut: false,
+    timeoutStartedAt: null,
+    timeoutExpiresAt: null,
+    timeoutTriggerPath: null,
     globallyPaused: false,
     globallyPausedAt: null,
     triggeringOutcomeId: null,
@@ -179,6 +191,47 @@ export function emptyScalpCircuitState(walletAddress: string, policyVersion: num
     processedOutcomeCount: 0,
     updatedAt: null,
   };
+}
+
+function restoreFullScalpOperation(state: ScalpCircuitState, resetProcessedOutcomeCount = false) {
+  state.consecutivePostFeeLosses = 0;
+  state.timedOut = false;
+  state.timeoutStartedAt = null;
+  state.timeoutExpiresAt = null;
+  state.timeoutTriggerPath = null;
+  state.globallyPaused = false;
+  state.globallyPausedAt = null;
+  state.triggeringOutcomeId = null;
+  state.paths = Object.fromEntries(
+    ENTRY_PATHS.map((path) => [path, emptyPathState()])
+  ) as Record<ScalpEntryPath, ScalpPathCircuitState>;
+  if (resetProcessedOutcomeCount) state.processedOutcomeCount = 0;
+}
+
+function restoreExpiredScalpOperation(state: ScalpCircuitState, evaluatedAt: number) {
+  const timeoutExpiresAt = state.timeoutExpiresAt ? Date.parse(state.timeoutExpiresAt) : Number.NaN;
+  if (state.timedOut && Number.isFinite(timeoutExpiresAt) && evaluatedAt >= timeoutExpiresAt) {
+    restoreFullScalpOperation(state);
+  }
+}
+
+function startAgentWideScalpTimeout(
+  state: ScalpCircuitState,
+  event: ScalpCircuitEvent & { entryPath: ScalpEntryPath; outcomeId: string }
+) {
+  const startedAt = Date.parse(event.occurredAt);
+  state.timedOut = true;
+  state.timeoutStartedAt = event.occurredAt;
+  state.timeoutExpiresAt = new Date(startedAt + SCALP_AGENT_TIMEOUT_MS).toISOString();
+  state.timeoutTriggerPath = event.entryPath;
+  state.globallyPaused = true;
+  state.globallyPausedAt = event.occurredAt;
+  state.triggeringOutcomeId = event.outcomeId;
+  for (const path of ENTRY_PATHS) {
+    state.paths[path].disabled = true;
+    state.paths[path].disabledAt = event.occurredAt;
+    state.paths[path].triggeringOutcomeId = event.outcomeId;
+  }
 }
 
 export function deriveScalpEntryPath(outcome: Pick<TradeLearningOutcome, "scalpEntryPath" | "scalpSetupType" | "priceActionTags">): ScalpEntryPath {
@@ -196,7 +249,8 @@ export function deriveScalpEntryPath(outcome: Pick<TradeLearningOutcome, "scalpE
 export function reduceScalpCircuitEvents(
   walletAddress: string,
   policyVersion: number,
-  events: ScalpCircuitEvent[]
+  events: ScalpCircuitEvent[],
+  evaluatedAt: Date | number | string = Date.now()
 ): ScalpCircuitState {
   const state = emptyScalpCircuitState(walletAddress, policyVersion);
   const ordered = events
@@ -205,19 +259,17 @@ export function reduceScalpCircuitEvents(
       || left.eventId.localeCompare(right.eventId));
 
   for (const event of ordered) {
+    const eventAt = Date.parse(event.occurredAt);
+    restoreExpiredScalpOperation(state, eventAt);
     state.updatedAt = event.occurredAt;
     if (event.eventType === "reset-all") {
-      const reset = emptyScalpCircuitState(walletAddress, policyVersion);
-      state.consecutivePostFeeLosses = reset.consecutivePostFeeLosses;
-      state.globallyPaused = reset.globallyPaused;
-      state.globallyPausedAt = reset.globallyPausedAt;
-      state.triggeringOutcomeId = reset.triggeringOutcomeId;
-      state.paths = reset.paths;
-      state.processedOutcomeCount = 0;
+      restoreFullScalpOperation(state, true);
       continue;
     }
+    // Legacy path-only reset events are projected as an agent-wide reset. A
+    // partial recovery would violate the all-active-or-all-timed-out policy.
     if (event.eventType === "reset-path" && event.entryPath) {
-      state.paths[event.entryPath] = emptyPathState();
+      restoreFullScalpOperation(state, true);
       continue;
     }
     if (event.eventType !== "outcome" || !event.entryPath || event.netPnlUsd === null || !event.outcomeId) {
@@ -225,25 +277,29 @@ export function reduceScalpCircuitEvents(
     }
 
     state.processedOutcomeCount += 1;
+    if (state.timedOut) continue;
     const pathState = state.paths[event.entryPath];
     if (event.netPnlUsd < 0) {
       state.consecutivePostFeeLosses += 1;
       pathState.consecutivePostFeeLosses += 1;
-      if (!pathState.disabled && pathState.consecutivePostFeeLosses >= SCALP_PATH_LOSS_LIMIT) {
-        pathState.disabled = true;
-        pathState.disabledAt = event.occurredAt;
-        pathState.triggeringOutcomeId = event.outcomeId;
-      }
-      if (!state.globallyPaused && state.consecutivePostFeeLosses >= SCALP_GLOBAL_LOSS_LIMIT) {
-        state.globallyPaused = true;
-        state.globallyPausedAt = event.occurredAt;
-        state.triggeringOutcomeId = event.outcomeId;
+      if (
+        pathState.consecutivePostFeeLosses >= SCALP_PATH_LOSS_LIMIT
+        || state.consecutivePostFeeLosses >= SCALP_GLOBAL_LOSS_LIMIT
+      ) {
+        startAgentWideScalpTimeout(state, event as ScalpCircuitEvent & {
+          entryPath: ScalpEntryPath;
+          outcomeId: string;
+        });
       }
     } else {
       state.consecutivePostFeeLosses = 0;
       pathState.consecutivePostFeeLosses = 0;
     }
   }
+  const evaluatedAtMs = evaluatedAt instanceof Date
+    ? evaluatedAt.getTime()
+    : typeof evaluatedAt === "number" ? evaluatedAt : Date.parse(evaluatedAt);
+  if (Number.isFinite(evaluatedAtMs)) restoreExpiredScalpOperation(state, evaluatedAtMs);
   return state;
 }
 
@@ -342,12 +398,13 @@ async function saveCircuitEvent(
 export async function getScalpCircuitState(
   walletAddress: string,
   policyVersion: number,
-  options: { requireAuthoritative?: boolean } = {}
+  options: { requireAuthoritative?: boolean; evaluatedAt?: Date | number | string } = {}
 ) {
   return reduceScalpCircuitEvents(
     walletAddress,
     policyVersion,
-    await listScalpCircuitEvents(walletAddress, policyVersion, options)
+    await listScalpCircuitEvents(walletAddress, policyVersion, options),
+    options.evaluatedAt
   );
 }
 
@@ -356,16 +413,17 @@ export async function getScalpCircuitDecision(input: {
   policyVersion: number;
   entryPath: ScalpEntryPath;
   requireAuthoritative?: boolean;
+  evaluatedAt?: Date | number | string;
 }) {
   const state = await getScalpCircuitState(input.walletAddress, input.policyVersion, {
     requireAuthoritative: input.requireAuthoritative,
+    evaluatedAt: input.evaluatedAt,
   });
   const reasons: string[] = [];
-  if (state.globallyPaused) {
-    reasons.push(`Scalp execution paused after ${SCALP_GLOBAL_LOSS_LIMIT} consecutive post-fee losses.`);
-  }
-  if (state.paths[input.entryPath].disabled) {
-    reasons.push(`${input.entryPath} disabled after ${SCALP_PATH_LOSS_LIMIT} consecutive post-fee losses on that entry path.`);
+  if (state.timedOut) {
+    reasons.push(
+      `The entire scalp agent is in a synchronized ${SCALP_AGENT_TIMEOUT_MINUTES}-minute timeout after the ${state.timeoutTriggerPath ?? "scalp"} layer reached its loss limit. Every entry layer resumes automatically at ${state.timeoutExpiresAt}.`
+    );
   }
   return { allowed: reasons.length === 0, reasons, state };
 }
@@ -381,12 +439,14 @@ export async function recordScalpCircuitOutcome(input: {
   netPnlUsd: number;
   closedAt: string;
   requireAuthoritative?: boolean;
+  evaluatedAt?: Date | number | string;
 }) {
   return recordScalpCircuitOutcomes({
     walletAddress: input.walletAddress,
     policyVersion: input.policyVersion,
     outcomes: [input],
     requireAuthoritative: input.requireAuthoritative,
+    evaluatedAt: input.evaluatedAt,
   });
 }
 
@@ -408,6 +468,7 @@ export async function recordScalpCircuitOutcomes(input: {
     closedAt: string;
   }>;
   requireAuthoritative?: boolean;
+  evaluatedAt?: Date | number | string;
 }) {
   const parsed = input.outcomes.map((outcome) => scalpCircuitEventSchema.parse({
     eventId: `${input.walletAddress}:${input.policyVersion}:outcome:${outcome.outcomeId}`,
@@ -426,6 +487,7 @@ export async function recordScalpCircuitOutcomes(input: {
   if (parsed.length === 0) {
     return getScalpCircuitState(input.walletAddress, input.policyVersion, {
       requireAuthoritative: input.requireAuthoritative,
+      evaluatedAt: input.evaluatedAt,
     });
   }
 
@@ -475,7 +537,8 @@ export async function recordScalpCircuitOutcomes(input: {
           return reduceScalpCircuitEvents(
             input.walletAddress,
             input.policyVersion,
-            [...merged.values()]
+            [...merged.values()],
+            input.evaluatedAt
           );
         }
         const committed = Number(await redis.eval(CIRCUIT_BATCH_COMPARE_AND_SET_LUA, {
@@ -490,7 +553,8 @@ export async function recordScalpCircuitOutcomes(input: {
           return reduceScalpCircuitEvents(
             input.walletAddress,
             input.policyVersion,
-            [...merged.values()]
+            [...merged.values()],
+            input.evaluatedAt
           );
         }
       }
@@ -513,7 +577,9 @@ export async function recordScalpCircuitOutcomes(input: {
     disk[event.eventId] = canonical;
     writeJsonFile(CIRCUIT_FILE, disk);
   }
-  return getScalpCircuitState(input.walletAddress, input.policyVersion);
+  return getScalpCircuitState(input.walletAddress, input.policyVersion, {
+    evaluatedAt: input.evaluatedAt,
+  });
 }
 
 export async function resetScalpCircuit(input: {
@@ -525,11 +591,11 @@ export async function resetScalpCircuit(input: {
 }) {
   const resetAt = input.resetAt ?? new Date().toISOString();
   await saveCircuitEvent({
-    eventId: `${input.walletAddress}:${input.policyVersion}:reset:${resetAt}:${input.entryPath ?? "all"}`,
+    eventId: `${input.walletAddress}:${input.policyVersion}:reset:${resetAt}:all`,
     walletAddress: input.walletAddress,
     policyVersion: input.policyVersion,
-    eventType: input.entryPath ? "reset-path" : "reset-all",
-    entryPath: input.entryPath ?? null,
+    eventType: "reset-all",
+    entryPath: null,
     outcomeId: null,
     episodeId: null,
     reconciliationVersion: null,

@@ -4,7 +4,12 @@ import {
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_POLICY_VERSION,
   SCALP_STANDARD_COOLDOWN_SECONDS,
+  normalizeScalpLearningProfileForLiveOperation,
 } from "@/lib/perps/scalpEngine";
+import {
+  SCALP_AGENT_TIMEOUT_MINUTES,
+  scalpTimeoutExpiresAt,
+} from "@/lib/perps/scalpTimeoutPolicy";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -86,6 +91,8 @@ export function createAuditedScalpBaseline(allScalpOutcomes: TradeLearningOutcom
   baseline.policyRollout = {
     status: "probation",
     startedAt: new Date().toISOString(),
+    timeoutStartedAt: null,
+    timeoutExpiresAt: null,
     baselineOutcomeCount: ordered.length,
     reviewedOutcomeCount: 0,
     minimumValidationTrades: SCALP_POLICY_PROBATION_MIN_TRADES,
@@ -234,12 +241,13 @@ export function createProfitableScalpBaseline(
         ).toFixed(3));
   });
 
-  const admittedValidation = compatibleOutcomes.filter((outcome) => outcomeMatchesWinnerBaseline(outcome, baseline));
+  const operationalBaseline = normalizeScalpLearningProfileForLiveOperation(baseline);
+  const admittedValidation = compatibleOutcomes.filter((outcome) => outcomeMatchesWinnerBaseline(outcome, operationalBaseline));
   const measured = stats(admittedValidation);
   const validationPassed = admittedValidation.length >= MIN_BASELINE_VALIDATION_TRADES
     && measured.expectancyUsd > 0
     && measured.profitFactor >= 1.05;
-  baseline.validation = {
+  operationalBaseline.validation = {
     sampleSize: compatibleOutcomes.length,
     trainingSize: winners.length,
     validationSize: admittedValidation.length,
@@ -252,7 +260,7 @@ export function createProfitableScalpBaseline(
       ? [`Winner-derived scalp baseline passed counterfactual validation against ${compatibleOutcomes.length} compatible closed outcomes.`]
       : [`Scalp Mode paused: the baseline learned from ${winners.length} compatible post-fee winners, but admitted loss-history validation remained negative.`],
   };
-  return baseline;
+  return operationalBaseline;
 }
 
 export function createOperatorActivatedProfitableScalpBaseline(
@@ -285,6 +293,8 @@ export function createOperatorActivatedProfitableScalpBaseline(
   baseline.policyRollout = {
     status: historicalValidationPassed ? "validated" : "probation",
     startedAt: activatedAt.toISOString(),
+    timeoutStartedAt: null,
+    timeoutExpiresAt: null,
     baselineOutcomeCount: baseline.learnedFromClosedTrades,
     reviewedOutcomeCount: baseline.validation.validationSize,
     minimumValidationTrades: SCALP_POLICY_PROBATION_MIN_TRADES,
@@ -300,7 +310,8 @@ export function createOperatorActivatedProfitableScalpBaseline(
 
 export function updateScalpLearningProfile(
   current: ScalpLearningProfile | null | undefined,
-  allScalpOutcomes: TradeLearningOutcome[]
+  allScalpOutcomes: TradeLearningOutcome[],
+  options: { evaluatedAt?: Date } = {}
 ): ScalpLearningProfile {
   const ordered = allScalpOutcomes
     .filter((outcome) => outcome.signalType === "scalp" && outcome.directionInverted !== true)
@@ -309,6 +320,7 @@ export function updateScalpLearningProfile(
     return createAuditedScalpBaseline(ordered);
   }
   const profile = structuredClone(current);
+  const evaluatedAt = options.evaluatedAt ?? new Date();
   profile.cooldownSeconds = SCALP_STANDARD_COOLDOWN_SECONDS;
   const rolloutStartedAt = profile.policyRollout
     ? Date.parse(profile.policyRollout.startedAt)
@@ -444,7 +456,11 @@ export function updateScalpLearningProfile(
         : profile.policyRollout.authorization;
       profile.policyRollout.reason = validationPassed
         ? `Policy v${profile.policyVersion} passed live probation with positive post-fee expectancy and a ${measured.profitFactor.toFixed(2)} profit factor.`
-        : `Policy v${profile.policyVersion} failed live probation after ${policyOutcomes.length} post-fee outcomes and was paused.`;
+        : `Policy v${profile.policyVersion} failed live probation after ${policyOutcomes.length} post-fee outcomes and entered a synchronized ${SCALP_AGENT_TIMEOUT_MINUTES}-minute timeout.`;
+      profile.policyRollout.timeoutStartedAt = validationPassed ? null : evaluatedAt.toISOString();
+      profile.policyRollout.timeoutExpiresAt = validationPassed
+        ? null
+        : scalpTimeoutExpiresAt(evaluatedAt);
     }
   }
   if (validationOutcomes.length >= MIN_BASELINE_VALIDATION_TRADES || probationSampleComplete) {
@@ -466,7 +482,8 @@ export function updateScalpLearningProfile(
     const typedKey = key as keyof typeof profile.setupConfidenceAdjustments;
     profile.setupConfidenceAdjustments[typedKey] = Number(profile.setupConfidenceAdjustments[typedKey].toFixed(3));
   });
-  profile.validation = {
+  const operationalProfile = normalizeScalpLearningProfileForLiveOperation(profile);
+  operationalProfile.validation = {
     sampleSize: policyOutcomes.length,
     trainingSize: profile.policyRollout
       ? 0
@@ -487,5 +504,5 @@ export function updateScalpLearningProfile(
         ? [`Applied bounded scalp-only learning from ${newOutcomes.length} new closed scalp trade${newOutcomes.length === 1 ? "" : "s"}; Smart Trade parameters were untouched.`]
         : ["No new closed scalp outcomes were available."],
   };
-  return profile;
+  return operationalProfile;
 }

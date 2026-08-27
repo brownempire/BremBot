@@ -40,6 +40,8 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   profile.policyRollout = {
     status: "paused",
     startedAt: "2026-08-19T12:00:00.000Z",
+    timeoutStartedAt: "2026-08-19T12:00:00.000Z",
+    timeoutExpiresAt: "2026-08-19T12:30:00.000Z",
     baselineOutcomeCount: 0,
     reviewedOutcomeCount: 10,
     minimumValidationTrades: 10,
@@ -55,14 +57,16 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
     indicatorSettings: BASE_INDICATOR_SETTINGS,
     scalpModeEnabled: true,
     isActiveAsset: true,
-    now: new Date("2026-08-02T12:00:00.000Z"),
+    now: new Date("2026-08-19T12:10:00.000Z"),
   });
 
   assert.equal(snapshot.timeframe, "1");
   assert.equal(snapshot.state, "blocked");
   assert.equal(snapshot.profilePassed, false);
-  assert.match(snapshot.headline, /validation paused/i);
+  assert.match(snapshot.headline, /scalp agent timeout.*20m remaining/i);
   assert.match(snapshot.reasons[0] ?? "", /loss-history validation/i);
+  assert.equal(snapshot.agentTimeout.timedOut, true);
+  assert.equal(snapshot.agentTimeout.expiresAt, "2026-08-19T12:30:00.000Z");
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
   assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, true);
@@ -74,6 +78,36 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.ok(snapshot.indicators.rsi !== null);
   assert.ok(snapshot.indicators.adx !== null);
   assert.ok(snapshot.indicators.bollingerPosition !== null);
+});
+
+test("scalp chart restores the whole learned profile at the exact 30-minute boundary", () => {
+  const profile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  profile.policyRollout = {
+    status: "paused",
+    startedAt: "2026-08-19T12:00:00.000Z",
+    timeoutStartedAt: "2026-08-19T12:00:00.000Z",
+    timeoutExpiresAt: "2026-08-19T12:30:00.000Z",
+    baselineOutcomeCount: 0,
+    reviewedOutcomeCount: 10,
+    minimumValidationTrades: 10,
+    liveTradingAuthorized: false,
+    authorization: "operator-approved-live-rollout",
+    reason: "Loss-history validation remained negative.",
+  };
+
+  const snapshot = buildScalpAgentOverlaySnapshot({
+    symbol: "COINBASE:SOLUSD",
+    points: candleWindow(),
+    profile,
+    indicatorSettings: BASE_INDICATOR_SETTINGS,
+    scalpModeEnabled: true,
+    isActiveAsset: true,
+    now: new Date("2026-08-19T12:30:00.000Z"),
+  });
+
+  assert.equal(snapshot.agentTimeout.timedOut, false);
+  assert.equal(snapshot.profilePassed, true);
+  assert.doesNotMatch(snapshot.headline, /timeout|paused/i);
 });
 
 test("a stale scalp policy remains visibly blocked until winner-baseline migration", () => {

@@ -27,6 +27,7 @@ import {
   type RecentClosedScalpTrade,
 } from "@/lib/perps/scalpEngine";
 import type { PricePoint } from "@/lib/price/simulated";
+import { resolveScalpRolloutTimeout } from "@/lib/perps/scalpTimeoutPolicy";
 import {
   computeIndicatorSnapshot,
   type IndicatorSettings,
@@ -52,6 +53,13 @@ export type ScalpMonitorHealth = {
   message: string | null;
 };
 
+export type ScalpAgentTimeoutView = {
+  timedOut: boolean;
+  expiresAt: string | null;
+  remainingMs: number;
+  reason: string | null;
+};
+
 export type ScalpAgentOverlaySnapshot = {
   generatedAt: string;
   timeframe: "1";
@@ -69,6 +77,7 @@ export type ScalpAgentOverlaySnapshot = {
   scalpModeEnabled: boolean;
   isActiveAsset: boolean;
   monitorHealth: ScalpMonitorHealth | null;
+  agentTimeout: ScalpAgentTimeoutView;
   indicators: IndicatorSnapshot;
   thresholds: {
     minimumConfidence: number;
@@ -201,9 +210,11 @@ export function buildScalpAgentOverlaySnapshot(input: {
   scalpModeEnabled: boolean;
   isActiveAsset: boolean;
   monitorHealth?: ScalpMonitorHealth | null;
+  agentTimeout?: ScalpAgentTimeoutView | null;
   recentClosedTrade?: RecentClosedScalpTrade | null;
   now?: Date;
 }): ScalpAgentOverlaySnapshot {
+  const now = input.now ?? new Date();
   const indicators = computeIndicatorSnapshot(input.points, input.indicatorSettings);
   const priceAction = analyzeScalpPriceAction(input.points, input.profile);
   const rawSignal = detectAdaptiveScalpSignal({
@@ -219,7 +230,18 @@ export function buildScalpAgentOverlaySnapshot(input: {
     profile: input.profile,
     recentClosedTrade: input.recentClosedTrade,
   });
-  const profilePassed = scalpProfileAllowsLiveEntries(input.profile);
+  const profileTimeout = resolveScalpRolloutTimeout(input.profile.policyRollout, now);
+  const timeoutCandidates = [
+    input.agentTimeout?.timedOut ? input.agentTimeout : null,
+    profileTimeout.timedOut ? {
+      ...profileTimeout,
+      reason: input.profile.policyRollout?.reason ?? "The learned scalp profile reached its loss limit.",
+    } : null,
+  ].filter((timeout): timeout is ScalpAgentTimeoutView => Boolean(timeout));
+  const agentTimeout = timeoutCandidates.sort((left, right) => (
+    Date.parse(right.expiresAt ?? "") - Date.parse(left.expiresAt ?? "")
+  ))[0] ?? { timedOut: false, expiresAt: null, remainingMs: 0, reason: null };
+  const profilePassed = scalpProfileAllowsLiveEntries(input.profile, now);
   const reasons: string[] = [];
   let state: ScalpAgentOverlaySnapshot["state"] = "watching";
   let headline = "Watching for a scalp setup";
@@ -243,6 +265,13 @@ export function buildScalpAgentOverlaySnapshot(input: {
         ? "The autonomous monitor heartbeat is stale; no new entry can be submitted."
         : "The autonomous monitor failed its latest safety check.")
     );
+  } else if (agentTimeout.timedOut) {
+    state = "blocked";
+    const minutesRemaining = Math.max(1, Math.ceil(agentTimeout.remainingMs / 60_000));
+    headline = `Scalp agent timeout · ${minutesRemaining}m remaining`;
+    reasons.push(
+      `${agentTimeout.reason ?? "A scalp entry layer reached its loss limit."} Every scalp entry layer resumes together at ${agentTimeout.expiresAt}.`
+    );
   } else if (!profilePassed) {
     state = "blocked";
     headline = "Scalp profile validation paused";
@@ -256,7 +285,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
     const secondsRemaining = Math.max(
       0,
       input.profile.cooldownSeconds - Math.floor(
-        ((input.now ?? new Date()).getTime() - input.recentClosedTrade.closedAt) / 1_000
+        (now.getTime() - input.recentClosedTrade.closedAt) / 1_000
       ),
     );
     reasons.push(`${Math.ceil(secondsRemaining / 60)} minute${Math.ceil(secondsRemaining / 60) === 1 ? "" : "s"} remain in the learned cooldown.`);
@@ -273,7 +302,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
     : `Price action ${priceAction.score.toFixed(2)} · ${getScalpTrendBias(input.points)} market`;
 
   return {
-    generatedAt: (input.now ?? new Date()).toISOString(),
+    generatedAt: now.toISOString(),
     timeframe: "1",
     state,
     headline,
@@ -289,6 +318,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
     scalpModeEnabled: input.scalpModeEnabled,
     isActiveAsset: input.isActiveAsset,
     monitorHealth: input.monitorHealth ?? null,
+    agentTimeout,
     indicators: {
       ...indicators,
       emaFast: round(indicators.emaFast),

@@ -22,6 +22,8 @@ export const scalpEntryPathSchema = z.enum([
 export const scalpPolicyRolloutSchema = z.object({
   status: z.enum(["probation", "validated", "paused"]),
   startedAt: z.string().datetime(),
+  timeoutStartedAt: z.string().datetime().nullable().optional(),
+  timeoutExpiresAt: z.string().datetime().nullable().optional(),
   baselineOutcomeCount: z.number().int().min(0),
   reviewedOutcomeCount: z.number().int().min(0),
   minimumValidationTrades: z.number().int().min(1),

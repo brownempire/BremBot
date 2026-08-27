@@ -1375,6 +1375,8 @@ test("monitor pauses scalp entries while the winner-derived profile fails valida
   profile.scalpProfile.policyRollout = {
     status: "paused",
     startedAt: "2026-08-19T12:00:00.000Z",
+    timeoutStartedAt: "2099-08-19T12:00:00.000Z",
+    timeoutExpiresAt: "2099-08-19T12:30:00.000Z",
     baselineOutcomeCount: 0,
     reviewedOutcomeCount: 10,
     minimumValidationTrades: 10,

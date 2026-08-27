@@ -7,6 +7,7 @@ import {
   SCALP_CONTINUATION_LIVE_ENABLED,
   SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_RANGE_REVERSAL_LIVE_ENABLED,
+  SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE,
   SCALP_REVERSAL_LIVE_ENABLED,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
   classifyScalpMarketRegime,
@@ -15,6 +16,7 @@ import {
   evaluateScalpBreakoutRetest,
   evaluateScalpRangeReversal,
   evaluateScalpTrendContinuation,
+  normalizeScalpLearningProfileForLiveOperation,
   scalpCandidatePathAllowsLiveSignal,
   type ScalpMarketRegime,
   type ScalpPriceAction,
@@ -343,6 +345,23 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
   assert.ok(evaluation.tags.includes("RANGE_BAND_REENTRY"));
   assert.ok(evaluation.tags.includes("RANGE_RSI_MACD_TURN"));
   assert.ok(evaluation.tags.includes("RANGE_CONFIRMING_CANDLE"));
+
+  const previouslyUnreachableProfile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
+  previouslyUnreachableProfile.minimumConfidence = 0.816;
+  previouslyUnreachableProfile.setupConfidenceAdjustments.rangeReversal = 0.15;
+  const operationalProfile = normalizeScalpLearningProfileForLiveOperation(previouslyUnreachableProfile);
+  assert.ok(
+    operationalProfile.minimumConfidence + operationalProfile.setupConfidenceAdjustments.rangeReversal
+      <= SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE,
+    "learning must never raise the range-entry requirement above its emitted confidence"
+  );
+  const learnedSignal = detectAdaptiveScalpSignal({
+    symbol: "SOL/USD",
+    points,
+    indicators: rangeIndicators,
+    profile: operationalProfile,
+  });
+  assert.equal(learnedSignal?.setupType, "range-reversal");
 
   const wideRangeEvaluation = evaluateScalpRangeReversal({
     points,

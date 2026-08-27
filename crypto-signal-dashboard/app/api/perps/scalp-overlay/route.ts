@@ -1,9 +1,10 @@
 import { buildScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
+import { getScalpCircuitState } from "@/lib/decision/scalpCircuitStore";
 import { getActiveDecisionLearningProfile, listTradeLearningOutcomes } from "@/lib/decision/learningStore";
 import { getActiveScalpAsset } from "@/lib/perps/automationConfig";
 import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
 import { getLastAutonomousMonitorRun } from "@/lib/perps/autonomousMonitor";
-import { getScalpLearningProfile } from "@/lib/perps/scalpEngine";
+import { getScalpLearningProfile, SCALP_POLICY_VERSION } from "@/lib/perps/scalpEngine";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import { fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
@@ -28,12 +29,13 @@ export async function GET(request: Request) {
   if (!market) return Response.json({ error: "Unsupported scalp overlay market" }, { status: 400 });
 
   try {
-    const [profile, config, points, outcomes, lastRun] = await Promise.all([
+    const [profile, config, points, outcomes, lastRun, circuitState] = await Promise.all([
       getActiveDecisionLearningProfile(walletAddress),
       getPerpsAutomationConfig(walletAddress),
       fetchCoinbaseMinuteCandles(market.product, 240),
       listTradeLearningOutcomes(walletAddress),
       getLastAutonomousMonitorRun(),
+      getScalpCircuitState(walletAddress, SCALP_POLICY_VERSION, { requireAuthoritative: true }),
     ]);
     const scalpProfile = getScalpLearningProfile(profile);
     const latestClosed = [...outcomes].reverse().find((outcome) => (
@@ -74,6 +76,16 @@ export async function GET(request: Request) {
           : walletResult?.status === "failed"
             ? walletResult.message
             : null,
+      },
+      agentTimeout: {
+        timedOut: circuitState.timedOut,
+        expiresAt: circuitState.timeoutExpiresAt,
+        remainingMs: circuitState.timeoutExpiresAt
+          ? Math.max(0, Date.parse(circuitState.timeoutExpiresAt) - Date.now())
+          : 0,
+        reason: circuitState.timedOut
+          ? `The ${circuitState.timeoutTriggerPath ?? "scalp"} layer reached its loss limit.`
+          : null,
       },
       recentClosedTrade: latestClosed
         ? {
