@@ -2,7 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { PerpsAutomationConfig } from "../lib/perps/automationConfig";
-import { AutonomousMonitorLeaseLostError, classifyProfitLockSideEffectFailure, computeTriggerPrices, detectScalpSignal, evaluateScalpAdverseEntryDrift, getScalpTradePlanningConfig, hasMatchingEntirePositionProfitLockStop, mergeCompleteJupiterTradeHistoryForLearning, ProfitLockSideEffectError, resolveAutonomousCollateralUsd, resolveProfitLockPositionProvenance, resolveRevalidatedScalpEntryPath, resolveScalpProbationCollateralPercent, runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl, runWithRenewingAutonomousMonitorLease, SCALP_SIGNAL_COOLDOWN_SECONDS, type AutonomousMonitorLeaseGuard, type AutonomousMonitorLeaseStore, type ProfitLockClaimSettlement, type ProfitLockSideEffectClaim } from "../lib/perps/autonomousMonitor";
+import {
+  AutonomousMonitorLeaseLostError,
+  classifyProfitLockSideEffectFailure,
+  computeTriggerPrices,
+  detectScalpSignal,
+  evaluateScalpAdverseEntryDrift,
+  evaluateScalpOneSecondEntryPoint,
+  getScalpTradePlanningConfig,
+  hasMatchingEntirePositionProfitLockStop,
+  mergeCompleteJupiterTradeHistoryForLearning,
+  monitorScalpOneSecondEntryPoint,
+  ProfitLockSideEffectError,
+  resolveAutonomousCollateralUsd,
+  resolveProfitLockPositionProvenance,
+  resolveRevalidatedScalpEntryPath,
+  resolveScalpProbationCollateralPercent,
+  runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl,
+  runWithRenewingAutonomousMonitorLease,
+  SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+  SCALP_SIGNAL_COOLDOWN_SECONDS,
+  type AutonomousMonitorLeaseGuard,
+  type AutonomousMonitorLeaseStore,
+  type ProfitLockClaimSettlement,
+  type ProfitLockSideEffectClaim,
+} from "../lib/perps/autonomousMonitor";
 import { SCALP_STOP_LOSS_ROE_PERCENT } from "../lib/perps/scalpExit";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
@@ -638,6 +662,57 @@ test("pre-submit scalp drift uses a bounded ATR-relative adverse tolerance", () 
   assert.ok(rejected.adverseMovePercent > rejected.tolerancePercent);
 });
 
+test("one-second entry evaluation requires direction confirmation without chasing beyond the ATR band", () => {
+  const waiting = evaluateScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    livePrice: 99.96,
+    atrPercent: 0.1,
+  });
+  const triggered = evaluateScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    livePrice: 100.01,
+    atrPercent: 0.1,
+  });
+  const chasing = evaluateScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    livePrice: 100.06,
+    atrPercent: 0.1,
+  });
+
+  assert.equal(waiting.triggered, false);
+  assert.equal(waiting.invalidated, false);
+  assert.equal(triggered.triggered, true);
+  assert.equal(chasing.triggered, false);
+  assert.equal(chasing.invalidated, false);
+});
+
+test("one-second entry monitor samples every second until a direction-confirming tick appears", async () => {
+  let clock = 0;
+  const waits: number[] = [];
+  const prices = [99.96, 100.01];
+  const result = await monitorScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    atrPercent: 0.1,
+    fetchPrice: async () => prices.shift() ?? null,
+    deadlineAt: 5_000,
+    now: () => clock,
+    wait: async (milliseconds) => {
+      waits.push(milliseconds);
+      clock += milliseconds;
+    },
+  });
+
+  assert.equal(result.status, "triggered");
+  assert.equal(result.price, 100.01);
+  assert.equal(result.observedAt, SCALP_ONE_SECOND_ENTRY_INTERVAL_MS);
+  assert.equal(result.samples, 2);
+  assert.deepEqual(waits, [SCALP_ONE_SECOND_ENTRY_INTERVAL_MS]);
+});
+
 test("scalp monitor journals the v8 path, uses real indicators, learned risk, and conservative fees", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
@@ -855,7 +930,7 @@ test("a rejected scalp route does not write a cooldown cursor", async () => {
   assert.equal(cursorWrites, 0);
 });
 
-test("an adverse live tick vetoes a scalp even when the completed-candle recheck is unchanged", async () => {
+test("an adverse one-second tick vetoes a scalp before final one-minute confirmation", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
@@ -873,8 +948,8 @@ test("an adverse live tick vetoes a scalp even when the completed-candle recheck
       candleReads += 1;
       return points;
     },
-    // The signal and revalidation see the exact same completed candle. Only
-    // the no-cache ticker observes the adverse move before submission.
+    // The completed-candle context arms monitoring, then the no-cache ticker
+    // invalidates the setup before the final one-minute confirmation read.
     fetchLivePrice: async () => 99,
     fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
     getUsdcBalance: async () => 100,
@@ -890,10 +965,133 @@ test("an adverse live tick vetoes a scalp even when the completed-candle recheck
     writeLastSignal: async () => undefined,
   });
 
-  assert.ok(candleReads >= 2, "the setup was revalidated with completed candles");
+  assert.equal(candleReads, 1, "an invalid one-second signal must not advance to final confirmation");
   assert.equal(result.results[0]?.code, "SCALP_ADVERSE_ENTRY_DRIFT", JSON.stringify(result.results));
-  assert.match(result.results[0]?.message ?? "", /live Coinbase price/i);
+  assert.match(result.results[0]?.message ?? "", /one-second Coinbase entry monitor/i);
   assert.equal(routeCalls, 0);
+});
+
+test("a one-second entry signal is followed by final one-minute confirmation before routing", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  const events: string[] = [];
+  let candleReads = 0;
+  let routedSignal: PerpsAgentSignal | null = null;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => {
+      candleReads += 1;
+      events.push(candleReads === 1 ? "one-minute-context" : "one-minute-final-confirmation");
+      return points;
+    },
+    monitorScalpEntryPoint: async (options) => {
+      events.push("one-second-entry-trigger");
+      return {
+        status: "triggered",
+        price: options.referencePrice + 0.01,
+        observedAt: 1_784_178_401_000,
+        samples: 2,
+        evaluation: evaluateScalpOneSecondEntryPoint({
+          side: options.side,
+          referencePrice: options.referencePrice,
+          livePrice: options.referencePrice + 0.01,
+          atrPercent: options.atrPercent,
+        }),
+      };
+    },
+    fetchLivePrice: async () => {
+      events.push("final-live-price");
+      return points.at(-1)!.v + 0.01;
+    },
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      events.push("route");
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
+  assert.deepEqual(events, [
+    "one-minute-context",
+    "one-second-entry-trigger",
+    "one-minute-final-confirmation",
+    "final-live-price",
+    "route",
+  ]);
+  const routed = routedSignal as PerpsAgentSignal | null;
+  assert.equal(routed?.marketContext?.spotPrice, points.at(-1)!.v + 0.01);
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("ONE_SECOND_ENTRY_TRIGGER"));
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("ONE_MINUTE_FINAL_CONFIRMATION"));
+  assert.match(routed?.summary ?? "", /one-second entry trigger.*final one-minute confirmation passed/i);
+});
+
+test("a one-second entry signal cannot route when final one-minute confirmation fails", async () => {
+  const points = qualifyingRangePoints();
+  const flatPoints = points.map((point) => ({
+    ...point,
+    o: 100,
+    h: 100.01,
+    l: 99.99,
+    v: 100,
+    volume: 100,
+  }));
+  const base = createConfig();
+  const config = createConfig({
+    settings: { ...base.settings, scalpModeEnabled: true },
+    params: { ...base.params, trendWindow: 24 },
+  });
+  let candleReads = 0;
+  let routeCalls = 0;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => (++candleReads === 1 ? points : flatPoints),
+    monitorScalpEntryPoint: async (options) => ({
+      status: "triggered",
+      price: options.referencePrice + 0.01,
+      observedAt: 1_784_178_401_000,
+      samples: 1,
+      evaluation: evaluateScalpOneSecondEntryPoint({
+        side: options.side,
+        referencePrice: options.referencePrice,
+        livePrice: options.referencePrice + 0.01,
+        atrPercent: options.atrPercent,
+      }),
+    }),
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(candleReads, 2);
+  assert.equal(routeCalls, 0);
+  assert.equal(result.results[0]?.code, "SCALP_REVALIDATION_FAILED", JSON.stringify(result.results));
 });
 
 test("scalp circuit ingests only positions opened after the v8 rollout and blocks the affected path", async () => {

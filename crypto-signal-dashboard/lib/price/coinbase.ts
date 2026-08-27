@@ -20,6 +20,17 @@ type CoinbaseCandle = [number, number, number, number, number, number];
 
 const COINBASE_API = "https://api.exchange.coinbase.com";
 
+export async function fetchCoinbaseLivePrice(product: string) {
+  const response = await fetch(`${COINBASE_API}/products/${product}/ticker`, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) return null;
+  const ticker = (await response.json()) as CoinbaseTicker;
+  const price = Number(ticker?.price);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
 async function fetchCoinbasePriceEntry(product: string) {
   const [tickerResponse, statsResponse] = await Promise.all([
     fetch(`${COINBASE_API}/products/${product}/ticker`, {

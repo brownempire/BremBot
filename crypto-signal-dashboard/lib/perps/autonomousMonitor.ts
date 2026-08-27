@@ -45,7 +45,7 @@ import {
   type JupiterPerpsPosition,
   type JupiterPerpsTransactionStatus,
 } from "@/lib/jupiterPerps";
-import { fetchCoinbaseMinuteCandles, fetchCoinbasePrices } from "@/lib/price/coinbase";
+import { fetchCoinbaseLivePrice, fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
 import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
 import {
@@ -135,6 +135,9 @@ const SCALP_CIRCUIT_OUTCOME_REPLAY_LIMIT = 1_000;
 const PROFIT_LOCK_STOP_CLAIM_TTL_MS = 7 * 24 * 60 * 60_000;
 const localProfitLockClaims = new Map<string, string>();
 export const SCALP_SIGNAL_COOLDOWN_SECONDS = SCALP_STANDARD_COOLDOWN_SECONDS;
+export const SCALP_ONE_SECOND_ENTRY_INTERVAL_MS = 1_000;
+export const SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS = 30_000;
+const SCALP_ONE_SECOND_ROUTE_RESERVE_MS = 15_000;
 
 export type ProfitLockSideEffectClaim = {
   key: string;
@@ -365,6 +368,7 @@ type MonitorDependencies = {
   getRuntimeOverride: typeof getPerpsRuntimeOverride;
   fetchCandles: typeof fetchCoinbaseMinuteCandles;
   fetchLivePrice: (product: string) => Promise<number | null>;
+  monitorScalpEntryPoint: typeof monitorScalpOneSecondEntryPoint;
   fetchSnapshot: typeof fetchJupiterPerpsAccountSnapshot;
   getUsdcBalance: typeof getWalletUsdcBalance;
   routeSignal: typeof routePerpsSignalFromAutonomousMonitor;
@@ -439,11 +443,8 @@ const defaultDependencies: MonitorDependencies = {
   listSessions: listPerpsSessions,
   getRuntimeOverride: getPerpsRuntimeOverride,
   fetchCandles: fetchCoinbaseMinuteCandles,
-  fetchLivePrice: async (product) => {
-    const payload = await fetchCoinbasePrices([product]);
-    const price = payload?.markets[product]?.price;
-    return typeof price === "number" && Number.isFinite(price) && price > 0 ? price : null;
-  },
+  fetchLivePrice: fetchCoinbaseLivePrice,
+  monitorScalpEntryPoint: monitorScalpOneSecondEntryPoint,
   fetchSnapshot: fetchJupiterPerpsAccountSnapshot,
   getUsdcBalance: getWalletUsdcBalance,
   routeSignal: routePerpsSignalFromAutonomousMonitor,
@@ -931,6 +932,122 @@ export function evaluateScalpAdverseEntryDrift(input: {
     allowed: Number.isFinite(adverseMovePercent) && adverseMovePercent <= tolerancePercent,
     adverseMovePercent: Number(adverseMovePercent.toFixed(6)),
     tolerancePercent: Number(tolerancePercent.toFixed(6)),
+  };
+}
+
+export type ScalpOneSecondEntryPointEvaluation = ReturnType<typeof evaluateScalpOneSecondEntryPoint>;
+
+export function evaluateScalpOneSecondEntryPoint(input: {
+  side: "long" | "short";
+  referencePrice: number;
+  livePrice: number;
+  atrPercent: number | null | undefined;
+}) {
+  const drift = evaluateScalpAdverseEntryDrift(input);
+  const signedMovePercent = input.referencePrice > 0
+    ? (input.livePrice - input.referencePrice) / input.referencePrice * 100
+    : Number.POSITIVE_INFINITY;
+  const directionalMovePercent = input.side === "long" ? signedMovePercent : -signedMovePercent;
+  // A live entry must confirm the completed-candle direction without chasing
+  // farther than the same ATR-relative band used by the adverse-drift guard.
+  const triggered = drift.allowed
+    && Number.isFinite(directionalMovePercent)
+    && directionalMovePercent >= 0
+    && directionalMovePercent <= drift.tolerancePercent;
+  return {
+    triggered,
+    invalidated: !drift.allowed,
+    directionalMovePercent: Number(directionalMovePercent.toFixed(6)),
+    adverseMovePercent: drift.adverseMovePercent,
+    tolerancePercent: drift.tolerancePercent,
+  };
+}
+
+export type ScalpOneSecondEntryMonitorResult = {
+  status: "triggered" | "invalidated" | "expired" | "unavailable";
+  price: number | null;
+  observedAt: number | null;
+  samples: number;
+  evaluation: ScalpOneSecondEntryPointEvaluation | null;
+};
+
+export async function monitorScalpOneSecondEntryPoint(options: {
+  side: "long" | "short";
+  referencePrice: number;
+  atrPercent: number | null | undefined;
+  fetchPrice: () => Promise<number | null>;
+  deadlineAt?: number;
+  maxWaitMs?: number;
+  intervalMs?: number;
+  now?: () => number;
+  wait?: (milliseconds: number) => Promise<void>;
+  assertActive?: () => void;
+}): Promise<ScalpOneSecondEntryMonitorResult> {
+  const now = options.now ?? Date.now;
+  const wait = options.wait ?? ((milliseconds: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  }));
+  const intervalMs = Math.max(1, options.intervalMs ?? SCALP_ONE_SECOND_ENTRY_INTERVAL_MS);
+  const startedAt = now();
+  const deadlineAt = Math.min(
+    options.deadlineAt ?? Number.POSITIVE_INFINITY,
+    startedAt + Math.max(0, options.maxWaitMs ?? SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS)
+  );
+  let samples = 0;
+  let sawUsablePrice = false;
+  let lastPrice: number | null = null;
+  let lastObservedAt: number | null = null;
+  let lastEvaluation: ScalpOneSecondEntryPointEvaluation | null = null;
+
+  while (now() <= deadlineAt) {
+    options.assertActive?.();
+    const sampleStartedAt = now();
+    const price = await options.fetchPrice().catch(() => null);
+    const observedAt = now();
+    samples += 1;
+    if (typeof price === "number" && Number.isFinite(price) && price > 0) {
+      sawUsablePrice = true;
+      lastPrice = price;
+      lastObservedAt = observedAt;
+      lastEvaluation = evaluateScalpOneSecondEntryPoint({
+        side: options.side,
+        referencePrice: options.referencePrice,
+        livePrice: price,
+        atrPercent: options.atrPercent,
+      });
+      if (lastEvaluation.invalidated) {
+        return {
+          status: "invalidated",
+          price,
+          observedAt,
+          samples,
+          evaluation: lastEvaluation,
+        };
+      }
+      if (lastEvaluation.triggered) {
+        return {
+          status: "triggered",
+          price,
+          observedAt,
+          samples,
+          evaluation: lastEvaluation,
+        };
+      }
+    }
+
+    const remainingMs = deadlineAt - now();
+    if (remainingMs <= 0) break;
+    const elapsedMs = Math.max(0, now() - sampleStartedAt);
+    await wait(Math.min(remainingMs, Math.max(0, intervalMs - elapsedMs)));
+    options.assertActive?.();
+  }
+
+  return {
+    status: sawUsablePrice ? "expired" : "unavailable",
+    price: lastPrice,
+    observedAt: lastObservedAt,
+    samples,
+    evaluation: lastEvaluation,
   };
 }
 
@@ -2087,7 +2204,48 @@ export async function runAutonomousPerpsMonitor(
       let entryPrice = (strategyClass === "scalp" ? scalpPoints : windowPoints).at(-1)?.v ?? 0;
       let executionScalpMetadata = scalpMetadata;
       let executionSignalConfidence = signal.confidence;
+      let oneSecondEntryPoint: ScalpOneSecondEntryMonitorResult | null = null;
       if (strategyClass === "scalp" && scalpEntryPath) {
+        const completedCandleEntryReference = entryPrice;
+        const currentMinuteEndsAt = (Math.floor(Date.now() / 60_000) + 1) * 60_000;
+        const routeBudgetDeadline = Date.parse(startedAt)
+          + 55_000
+          - SCALP_ONE_SECOND_ROUTE_RESERVE_MS;
+        oneSecondEntryPoint = await deps.monitorScalpEntryPoint({
+          side,
+          referencePrice: completedCandleEntryReference,
+          atrPercent: plan.atrPercent,
+          fetchPrice: () => deps.fetchLivePrice(`${asset}-USD`),
+          deadlineAt: Math.min(currentMinuteEndsAt - 1_000, routeBudgetDeadline),
+          maxWaitMs: SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS,
+          intervalMs: SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+          assertActive: leaseGuard?.assertOwned,
+        });
+        if (oneSecondEntryPoint.status !== "triggered" || oneSecondEntryPoint.price === null) {
+          const evaluation = oneSecondEntryPoint.evaluation;
+          const reason = oneSecondEntryPoint.status === "invalidated" && evaluation
+            ? `The one-second Coinbase entry monitor observed a ${evaluation.adverseMovePercent.toFixed(3)}% counter-directional move beyond its ${evaluation.tolerancePercent.toFixed(3)}% ATR-relative limit.`
+            : oneSecondEntryPoint.status === "unavailable"
+              ? "The one-second Coinbase entry monitor could not obtain a usable live price before final one-minute confirmation."
+              : "No direction-confirming one-second entry point appeared before the live confirmation window expired.";
+          scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
+          results.push(skip(
+            config,
+            asset,
+            oneSecondEntryPoint.status === "invalidated"
+              ? "SCALP_ADVERSE_ENTRY_DRIFT"
+              : oneSecondEntryPoint.status === "unavailable"
+                ? "SCALP_ONE_SECOND_ENTRY_UNAVAILABLE"
+                : "SCALP_ONE_SECOND_ENTRY_TIMEOUT",
+            reason
+          ));
+          continue;
+        }
+        entryPrice = oneSecondEntryPoint.price;
+
+        // The live tick originates the entry. Completed one-minute candles are
+        // fetched only after that trigger and remain the authoritative final
+        // strategy confirmation before any order can be routed.
         let freshPoints: PricePoint[];
         try {
           freshPoints = await deps.fetchCandles(
@@ -2174,23 +2332,50 @@ export async function runAutonomousPerpsMonitor(
           results.push(skip(config, asset, "SCALP_LIVE_PRICE_UNAVAILABLE", reason));
           continue;
         }
-        const drift = evaluateScalpAdverseEntryDrift({
+        const finalEntryPoint = evaluateScalpOneSecondEntryPoint({
           side,
-          referencePrice: entryPrice,
+          referencePrice: completedCandleEntryReference,
           livePrice,
           atrPercent: plan.atrPercent,
         });
-        if (!drift.allowed) {
-          const reason = `The live Coinbase price moved ${drift.adverseMovePercent.toFixed(3)}% adversely beyond the completed-candle entry reference, exceeding the ${drift.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`;
+        if (!finalEntryPoint.triggered) {
+          const reason = finalEntryPoint.invalidated
+            ? `The live Coinbase price moved ${finalEntryPoint.adverseMovePercent.toFixed(3)}% against the one-second signal before final one-minute confirmation, exceeding the ${finalEntryPoint.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`
+            : `The live Coinbase price left the direction-confirming ${finalEntryPoint.tolerancePercent.toFixed(3)}% entry band before final one-minute confirmation completed.`;
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
-          results.push(skip(config, asset, "SCALP_ADVERSE_ENTRY_DRIFT", reason));
+          results.push(skip(config, asset, "SCALP_ONE_SECOND_ENTRY_MOVED", reason));
           continue;
         }
         entryPrice = livePrice;
         routingIndicators = freshIndicators;
         routingIndicatorScore = scoreIndicatorSnapshot(freshIndicators, signal.direction, indicatorSettings);
-        executionScalpMetadata = freshEvaluation.signal;
+        const confirmedTags = [
+          ...freshEvaluation.signal!.priceActionTags,
+          "ONE_SECOND_ENTRY_TRIGGER",
+          "ONE_MINUTE_FINAL_CONFIRMATION",
+        ];
+        executionScalpMetadata = {
+          ...freshEvaluation.signal!,
+          priceActionTags: [...new Set(confirmedTags)],
+        };
         executionSignalConfidence = freshEvaluation.signal!.confidence;
+        if (scalpCandidateRecord) {
+          scalpCandidateRecord = await deps.saveScalpCandidate({
+            ...scalpCandidateRecord,
+            metrics: {
+              ...scalpCandidateRecord.metrics,
+              oneSecondEntryPrice: oneSecondEntryPoint.price,
+              oneSecondEntryObservedAt: oneSecondEntryPoint.observedAt ?? Date.now(),
+              oneSecondEntrySamples: oneSecondEntryPoint.samples,
+              oneMinuteConfirmationPrice: livePrice,
+            },
+            tags: [...new Set([
+              ...scalpCandidateRecord.tags,
+              "ONE_SECOND_ENTRY_TRIGGER",
+              "ONE_MINUTE_FINAL_CONFIRMATION",
+            ])],
+          });
+        }
       }
       if (strategyClass === "scalp" && executionScalpMetadata) {
         const exceptionalScalpLeverage = isExceptionalScalpLeverageSetup({
@@ -2292,17 +2477,20 @@ export async function runAutonomousPerpsMonitor(
       });
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
+      const scalpEntryTimingSummary = strategyClass === "scalp" && oneSecondEntryPoint?.status === "triggered"
+        ? `One-second entry trigger observed at ${new Date(oneSecondEntryPoint.observedAt ?? Date.now()).toISOString()} and final one-minute confirmation passed. `
+        : "";
       leaseGuard?.assertOwned();
       const routed = await deps.routeSignal(config.walletAddress, {
         signalId: signal.id,
         symbol: signal.symbol,
         summary: pendingScalpReversal
-          ? `Confirmed scalp reversal replacement after the original position closed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+          ? `${scalpEntryTimingSummary}Confirmed scalp reversal replacement after the original position closed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
           : allowConcurrentPosition
-            ? `Protected opposite-side scalp entry while the existing position remains independently managed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+            ? `${scalpEntryTimingSummary}Protected opposite-side scalp entry while the existing position remains independently managed. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
           : invertDirection
-          ? `Opposite-direction scalp experiment ${experimentTradeNumber}/${directionExperiment?.maxTrades}: detector selected ${detectedDirection === "bullish" ? "long" : "short"}; executing ${side}. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
-          : `${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
+          ? `${scalpEntryTimingSummary}Opposite-direction scalp experiment ${experimentTradeNumber}/${directionExperiment?.maxTrades}: detector selected ${detectedDirection === "bullish" ? "long" : "short"}; executing ${side}. ${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`
+          : `${scalpEntryTimingSummary}${signal.summary} Server monitor ${new Date(signal.timestamp).toISOString()}.`,
         direction: executionDirection,
         signalConfidence: executionSignalConfidence,
         asset,

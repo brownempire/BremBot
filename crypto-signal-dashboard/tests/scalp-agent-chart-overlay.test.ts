@@ -190,6 +190,7 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(chart, /\["Volume"\]/);
   assert.match(chart, /shape: bullish \? "arrow_up" : "arrow_down"/);
   assert.match(chart, /data-testid="scalp-chart-status"/);
+  assert.match(chart, /1s entry · 1m confirm/);
   assert.match(chart, /data-minimized=\{scalpPanelMinimized \? "true" : "false"\}/);
   assert.match(chart, /onPointerDown=\{beginScalpPanelDrag\}/);
   assert.match(chart, /aria-label=\{scalpPanelMinimized \? "Maximize scalp setup window" : "Minimize scalp setup window"\}/);
