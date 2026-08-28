@@ -4,6 +4,7 @@ import test from "node:test";
 import { classifyScalpCandidateFirstTouch } from "../lib/decision/scalpCandidateStore";
 import {
   SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES,
+  SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES,
   SCALP_OUTCOME_RETRAIN_BATCH_SIZE,
   SCALP_OUTCOME_STRONG_CLASS_SAMPLES,
   evaluateValidatedScalpOutcomePrediction,
@@ -84,7 +85,7 @@ test("shadow first-touch labeling distinguishes TP, hard SL, and staircase exits
   }), "profitable-staircase");
 });
 
-test("outcome challenger waits for 50 labels and 100 examples per class before validation", () => {
+test("outcome challenger waits for 50 labels, 100 directional outcomes, and 20 neutral examples", () => {
   const classes = ["full-tp", "profitable-staircase", "full-sl", "neutral"] as const;
   const small = Array.from({ length: 49 }, (_, index) => candidate(index, classes[index % 4]!));
   const insufficient = trainScalpOutcomeModel({ candidates: small, outcomes: [], trainedAt: new Date(0) });
@@ -105,16 +106,24 @@ test("outcome challenger waits for 50 labels and 100 examples per class before v
   });
   assert.equal(shadow.status, "shadow");
   assert.equal(shadow.minimumClassSamples, SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES);
+  assert.equal(shadow.minimumNeutralSamples, SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES);
   assert.equal(shadow.strongBaselineClassSamples, SCALP_OUTCOME_STRONG_CLASS_SAMPLES);
 
+  const minimumCoverageClasses = Array.from({ length: 20 }, () => [
+    "full-tp", "full-tp", "full-tp", "full-tp", "full-tp",
+    "profitable-staircase", "profitable-staircase", "profitable-staircase", "profitable-staircase", "profitable-staircase",
+    "full-sl", "full-sl", "full-sl", "full-sl", "full-sl",
+    "neutral",
+  ] as const).flat();
   const validated = trainScalpOutcomeModel({
-    candidates: Array.from({ length: 400 }, (_, index) => candidate(index, classes[index % 4]!)),
+    candidates: minimumCoverageClasses.map((outcomeClass, index) => candidate(index, outcomeClass)),
     outcomes: [],
     trainedAt: new Date(0),
   });
   assert.equal(validated.status, "validated");
   assert.equal(validated.validation.chronological, true);
   assert.equal(validated.validation.passed, true);
+  assert.equal(validated.classCounts.neutral, 20);
   const prediction = predictScalpCandidateOutcome(validated, candidate(500, "full-tp"));
   assert.equal(prediction.calibrated, true);
   assert.ok(prediction.fullTp > prediction.fullSl);

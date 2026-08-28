@@ -183,6 +183,7 @@ export const scalpLearningProfileSchema = z.object({
       neutral: z.number().int().min(0),
     }),
     minimumClassSamples: z.number().int().min(1),
+    minimumNeutralSamples: z.number().int().min(1).default(20),
     strongBaselineClassSamples: z.number().int().min(1),
     retrainBatchSize: z.number().int().min(1),
     featureNames: z.array(z.string().trim().min(1)),

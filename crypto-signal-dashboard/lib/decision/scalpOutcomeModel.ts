@@ -8,6 +8,7 @@ import type {
 export const SCALP_OUTCOME_MODEL_VERSION = "scalp-outcomes-v1";
 export const SCALP_OUTCOME_RETRAIN_BATCH_SIZE = 50;
 export const SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES = 100;
+export const SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES = 20;
 export const SCALP_OUTCOME_STRONG_CLASS_SAMPLES = 200;
 export const SCALP_OUTCOME_MINIMUM_PROFITABLE_PROBABILITY = 0.5;
 export const SCALP_OUTCOME_MAXIMUM_FULL_SL_PROBABILITY = 0.35;
@@ -265,6 +266,7 @@ export function trainScalpOutcomeModel(input: {
       newLabelsSinceTraining,
       classCounts,
       minimumClassSamples: SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES,
+      minimumNeutralSamples: SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES,
       strongBaselineClassSamples: SCALP_OUTCOME_STRONG_CLASS_SAMPLES,
       retrainBatchSize: SCALP_OUTCOME_RETRAIN_BATCH_SIZE,
       featureNames: [...SCALP_OUTCOME_FEATURES],
@@ -293,6 +295,7 @@ export function trainScalpOutcomeModel(input: {
     newLabelsSinceTraining: 0,
     classCounts,
     minimumClassSamples: SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES,
+    minimumNeutralSamples: SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES,
     strongBaselineClassSamples: SCALP_OUTCOME_STRONG_CLASS_SAMPLES,
     retrainBatchSize: SCALP_OUTCOME_RETRAIN_BATCH_SIZE,
     featureNames: [...SCALP_OUTCOME_FEATURES],
@@ -308,7 +311,10 @@ export function trainScalpOutcomeModel(input: {
     },
   };
   const measured = evaluate(provisional, validation);
-  const hasClassCoverage = KEYS.every((key) => classCounts[key] >= SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES);
+  const hasClassCoverage = classCounts.fullTp >= SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES
+    && classCounts.profitableStaircase >= SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES
+    && classCounts.fullSl >= SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES
+    && classCounts.neutral >= SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES;
   const validationPassed = hasClassCoverage
     && validation.length >= 40
     && measured.accuracy >= 0.4
@@ -320,10 +326,10 @@ export function trainScalpOutcomeModel(input: {
     brierScore: Number(measured.brierScore.toFixed(6)),
     passed: validationPassed,
     reasons: validationPassed
-      ? ["The challenger passed strict chronological validation with at least 100 examples in every outcome class."]
+      ? ["The challenger passed strict chronological validation with at least 100 full-TP, profitable-staircase, and full-SL examples plus 20 neutral examples."]
       : [hasClassCoverage
           ? "The challenger remains shadow-only because chronological accuracy or calibration did not pass."
-          : "The challenger remains shadow-only until every outcome class has at least 100 examples; 200 per class is the strong-baseline target."],
+          : "The challenger remains shadow-only until full TP, profitable staircase, and full SL each have 100 examples and neutral has 20; 200 per class remains the strong-baseline target."],
   };
   return provisional;
 }
