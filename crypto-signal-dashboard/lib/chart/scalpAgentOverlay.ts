@@ -1,4 +1,4 @@
-import type { ScalpLearningProfile, ScalpSetupType } from "@/lib/decision/learningTypes";
+import type { ScalpCandidate, ScalpLearningProfile, ScalpSetupType } from "@/lib/decision/learningTypes";
 import {
   analyzeScalpPriceAction,
   classifyScalpMarketRegime,
@@ -41,6 +41,8 @@ export type ScalpOverlayMarker = {
   setupType: ScalpSetupType;
   score: number;
   confidence: number;
+  kind: "candidate" | "confirmed" | "executed";
+  profitableProbability: number | null;
   tags: string[];
 };
 
@@ -78,6 +80,7 @@ export type ScalpAgentOverlaySnapshot = {
   isActiveAsset: boolean;
   monitorHealth: ScalpMonitorHealth | null;
   agentTimeout: ScalpAgentTimeoutView;
+  outcomeModel: ScalpLearningProfile["outcomeModel"] | null;
   indicators: IndicatorSnapshot;
   thresholds: {
     minimumConfidence: number;
@@ -170,8 +173,33 @@ function historicalMarkers(
   symbol: string,
   points: PricePoint[],
   profile: ScalpLearningProfile,
-  settings: IndicatorSettings
+  settings: IndicatorSettings,
+  candidates: ScalpCandidate[] = []
 ) {
+  const recorded = candidates
+    .filter((candidate) => candidate.setupType != null)
+    .filter((candidate) => candidate.asset === symbol.replace("COINBASE:", "").replace("USD", ""))
+    .map((candidate): ScalpOverlayMarker => ({
+      time: Math.floor(Date.parse(candidate.observedAt) / 1_000),
+      price: candidate.referencePrice,
+      direction: candidate.side === "long" ? "bullish" : "bearish",
+      setupType: candidate.setupType!,
+      score: typeof candidate.metrics.score === "number" ? candidate.metrics.score : 0,
+      confidence: 0,
+      kind: candidate.executionId
+        ? "executed"
+        : candidate.tags.includes("ONE_MINUTE_FINAL_CONFIRMATION")
+          ? "confirmed"
+          : "candidate",
+      profitableProbability: candidate.prediction
+        ? candidate.prediction.fullTp + candidate.prediction.profitableStaircase
+        : null,
+      tags: candidate.tags,
+    }))
+    .filter((marker) => Number.isFinite(marker.time))
+    .sort((left, right) => left.time - right.time)
+    .slice(-20);
+  if (recorded.length > 0) return recorded;
   const markers: ScalpOverlayMarker[] = [];
   // Historical markers must use the same complete 145-minute regime context as
   // the live monitor. Starting earlier can manufacture an apparently eligible
@@ -196,6 +224,8 @@ function historicalMarkers(
       setupType: signal.setupType,
       score: signal.priceActionScore,
       confidence: signal.confidence,
+      kind: "candidate",
+      profitableProbability: null,
       tags: signal.priceActionTags,
     });
   }
@@ -212,6 +242,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
   monitorHealth?: ScalpMonitorHealth | null;
   agentTimeout?: ScalpAgentTimeoutView | null;
   recentClosedTrade?: RecentClosedScalpTrade | null;
+  candidates?: ScalpCandidate[];
   now?: Date;
 }): ScalpAgentOverlaySnapshot {
   const now = input.now ?? new Date();
@@ -297,9 +328,16 @@ export function buildScalpAgentOverlaySnapshot(input: {
   }
 
   const signal = liveSignal ?? rawSignal;
+  const modelStatus = input.profile.outcomeModel
+    ? input.profile.outcomeModel.status === "validated"
+      ? `validated outcome model · ${input.profile.outcomeModel.labeledSampleCount} labels`
+      : input.profile.outcomeModel.status === "shadow"
+        ? `shadow outcome model · ${input.profile.outcomeModel.labeledSampleCount} labels`
+        : `outcome learner · ${input.profile.outcomeModel.labeledSampleCount}/${input.profile.outcomeModel.retrainBatchSize} labels`
+    : "outcome learner initializing";
   const detail = signal
-    ? `Score ${signal.priceActionScore.toFixed(2)} · Confidence ${(signal.confidence * 100).toFixed(0)}%${state === "ready" ? " · eligible" : " · blocked"}`
-    : `Price action ${priceAction.score.toFixed(2)} · ${getScalpTrendBias(input.points)} market`;
+    ? `Setup score ${signal.priceActionScore.toFixed(2)} · detector heuristic ${(signal.confidence * 100).toFixed(0)}%${state === "ready" ? " · eligible" : " · blocked"} · ${modelStatus}`
+    : `Price action ${priceAction.score.toFixed(2)} · ${getScalpTrendBias(input.points)} market · ${modelStatus}`;
 
   return {
     generatedAt: now.toISOString(),
@@ -319,6 +357,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
     isActiveAsset: input.isActiveAsset,
     monitorHealth: input.monitorHealth ?? null,
     agentTimeout,
+    outcomeModel: input.profile.outcomeModel ?? null,
     indicators: {
       ...indicators,
       emaFast: round(indicators.emaFast),
@@ -364,6 +403,6 @@ export function buildScalpAgentOverlaySnapshot(input: {
       longBollingerMaximum: input.profile.longBollingerMaximum,
       shortBollingerMinimum: input.profile.shortBollingerMinimum,
     },
-    markers: historicalMarkers(input.symbol, input.points, input.profile, input.indicatorSettings),
+    markers: historicalMarkers(input.symbol, input.points, input.profile, input.indicatorSettings, input.candidates),
   };
 }

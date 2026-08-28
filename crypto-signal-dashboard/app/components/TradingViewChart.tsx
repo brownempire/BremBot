@@ -655,7 +655,7 @@ export function TradingViewChart({
             { time: marker.time, price: marker.price },
             {
               shape: bullish ? "arrow_up" : "arrow_down",
-              text: `${bullish ? "LONG" : "SHORT"} ${marker.setupType.replace(/-/g, " ")} · ${(marker.confidence * 100).toFixed(0)}%`,
+              text: `${marker.kind.toUpperCase()} → ${bullish ? "LONG" : "SHORT"} after ${marker.setupType.replace(/-/g, " ")} · setup score ${marker.score.toFixed(2)}${marker.profitableProbability === null ? "" : ` · P(profit) ${(marker.profitableProbability * 100).toFixed(0)}%`}`,
               lock: true,
               disableSelection: true,
               disableSave: true,

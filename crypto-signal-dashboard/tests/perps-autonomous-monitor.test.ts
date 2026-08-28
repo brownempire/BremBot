@@ -689,10 +689,10 @@ test("one-second entry evaluation requires direction confirmation without chasin
   assert.equal(chasing.invalidated, false);
 });
 
-test("one-second entry monitor samples every second until a direction-confirming tick appears", async () => {
+test("one-second entry monitor requires three confirming samples instead of entering on one tick", async () => {
   let clock = 0;
   const waits: number[] = [];
-  const prices = [99.96, 100.01];
+  const prices = [99.96, 100.01, 100.02, 100.01];
   const result = await monitorScalpOneSecondEntryPoint({
     side: "long",
     referencePrice: 100,
@@ -708,9 +708,68 @@ test("one-second entry monitor samples every second until a direction-confirming
 
   assert.equal(result.status, "triggered");
   assert.equal(result.price, 100.01);
-  assert.equal(result.observedAt, SCALP_ONE_SECOND_ENTRY_INTERVAL_MS);
-  assert.equal(result.samples, 2);
-  assert.deepEqual(waits, [SCALP_ONE_SECOND_ENTRY_INTERVAL_MS]);
+  assert.equal(result.observedAt, SCALP_ONE_SECOND_ENTRY_INTERVAL_MS * 3);
+  assert.equal(result.samples, 4);
+  assert.equal(result.confirmations, 3);
+  assert.deepEqual(waits, [
+    SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+    SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+    SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+  ]);
+});
+
+test("one-second entry monitor does not confirm while the live spread is too wide", async () => {
+  let clock = 0;
+  const result = await monitorScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    atrPercent: 0.1,
+    fetchPrice: async () => null,
+    fetchSample: async () => ({
+      price: 100.01,
+      bid: 99.9,
+      ask: 100.1,
+      volume: 1,
+      observedAt: clock,
+      spreadBps: 20,
+    }),
+    maxWaitMs: 2_000,
+    intervalMs: 1_000,
+    now: () => clock,
+    wait: async (milliseconds) => { clock += milliseconds; },
+  });
+
+  assert.equal(result.status, "expired");
+  assert.equal(result.confirmations, 0);
+  assert.equal(result.spreadBps, 20);
+});
+
+test("one-second entry monitor rejects strongly opposing aggressive trade flow", async () => {
+  let clock = 0;
+  const result = await monitorScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    atrPercent: 0.1,
+    fetchPrice: async () => null,
+    fetchSample: async () => ({
+      price: 100.01,
+      bid: 100,
+      ask: 100.01,
+      volume: 1,
+      observedAt: clock,
+      spreadBps: 1,
+      tradeImbalance: -0.8,
+      tradeCount: 50,
+    }),
+    maxWaitMs: 2_000,
+    intervalMs: 1_000,
+    now: () => clock,
+    wait: async (milliseconds) => { clock += milliseconds; },
+  });
+
+  assert.equal(result.status, "expired");
+  assert.equal(result.confirmations, 0);
+  assert.equal(result.tradeImbalance, -0.8);
 });
 
 test("scalp monitor journals the v8 path, uses real indicators, learned risk, and conservative fees", async () => {
@@ -729,6 +788,7 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
     listSessions: async () => [createSession()],
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => points,
+    fetchLivePrice: async () => points.at(-1)?.v ?? null,
     fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
     getUsdcBalance: async () => 100,
     routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
@@ -4162,6 +4222,7 @@ test("scalp monitor can route an opposite-side entry while independently managin
     listSessions: async () => [createSession()],
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => points,
+    fetchLivePrice: async () => points.at(-1)?.v ?? null,
     fetchSnapshot: async () => ({
       positions: [createOpenPosition(1, {
         id: "existing-short",
@@ -4218,6 +4279,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
     listSessions: async () => [createSession()],
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => points,
+    fetchLivePrice: async () => points.at(-1)?.v ?? null,
     fetchSnapshot: async () => ({ positions: [createOpenPosition(1)], pendingTriggers: [], recentTrades: [] }),
     getUsdcBalance: async () => 100,
     routeSignal: (async () => {

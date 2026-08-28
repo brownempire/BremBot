@@ -125,21 +125,21 @@ test("policy migration is explicitly live on probation without claiming zero-sam
   );
 });
 
-test("five-trade learning batches preserve probation until ten profitable post-fee outcomes validate it", () => {
-  const outcomes = Array.from({ length: 10 }, (_, index) => scalpOutcome(index, 1));
+test("fifty-outcome batches prevent small samples from changing live thresholds", () => {
+  const outcomes = Array.from({ length: 50 }, (_, index) => scalpOutcome(index, 1));
   const baseline = scalpTrainer.createAuditedScalpBaseline([]);
   if (!baseline.policyRollout) throw new Error("Expected rollout metadata.");
   baseline.policyRollout.startedAt = "2026-08-19T11:59:00.000Z";
-  const firstBatch = scalpTrainer.updateScalpLearningProfile(baseline, outcomes.slice(0, 5));
+  const held = scalpTrainer.updateScalpLearningProfile(baseline, outcomes.slice(0, 49));
 
-  assert.equal(firstBatch.learnedFromClosedTrades, 5);
-  assert.equal(firstBatch.policyRollout?.status, "probation");
-  assert.equal(firstBatch.validation.passed, false);
-  assert.equal(firstBatch.policyRollout?.reviewedOutcomeCount, 5);
-  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(firstBatch), true);
+  assert.equal(held.learnedFromClosedTrades, 0);
+  assert.equal(held.policyRollout?.status, "probation");
+  assert.equal(held.validation.passed, false);
+  assert.equal(held.policyRollout?.reviewedOutcomeCount, 0);
+  assert.equal(scalpEngine.scalpProfileAllowsLiveEntries(held), true);
 
-  const validated = scalpTrainer.updateScalpLearningProfile(firstBatch, outcomes);
-  assert.equal(validated.learnedFromClosedTrades, 10);
+  const validated = scalpTrainer.updateScalpLearningProfile(held, outcomes);
+  assert.equal(validated.learnedFromClosedTrades, 50);
   assert.equal(validated.policyRollout?.status, "validated");
   assert.equal(validated.validation.passed, true);
   assert.ok(validated.validation.expectancyUsd > 0);
@@ -148,12 +148,11 @@ test("five-trade learning batches preserve probation until ten profitable post-f
 });
 
 test("a completed negative probation sample pauses live entry instead of auto-passing", () => {
-  const outcomes = Array.from({ length: 10 }, (_, index) => scalpOutcome(index, index < 3 ? 1 : -1));
+  const outcomes = Array.from({ length: 50 }, (_, index) => scalpOutcome(index, index < 10 ? 1 : -1));
   const baseline = scalpTrainer.createAuditedScalpBaseline([]);
   if (!baseline.policyRollout) throw new Error("Expected rollout metadata.");
   baseline.policyRollout.startedAt = "2026-08-19T11:59:00.000Z";
-  const firstBatch = scalpTrainer.updateScalpLearningProfile(baseline, outcomes.slice(0, 5));
-  const failed = scalpTrainer.updateScalpLearningProfile(firstBatch, outcomes, {
+  const failed = scalpTrainer.updateScalpLearningProfile(baseline, outcomes, {
     evaluatedAt: new Date("2026-08-19T12:30:00.000Z"),
   });
 
@@ -167,13 +166,13 @@ test("a completed negative probation sample pauses live entry instead of auto-pa
 });
 
 test("v8 scalp learning tracks processed outcome IDs so a late older outcome cannot shift its cursor", () => {
-  const original = Array.from({ length: 9 }, (_, index) => scalpOutcome(index, 1));
+  const original = Array.from({ length: 99 }, (_, index) => scalpOutcome(index, 1));
   const baseline = scalpTrainer.createAuditedScalpBaseline([]);
   if (!baseline.policyRollout) throw new Error("Expected rollout metadata.");
   baseline.policyRollout.startedAt = "2026-08-19T11:59:00.000Z";
 
-  const firstBatch = scalpTrainer.updateScalpLearningProfile(baseline, original.slice(0, 5));
-  assert.deepEqual(new Set(firstBatch.processedPolicyOutcomeIds), new Set(original.slice(0, 5).map((item) => item.outcomeId)));
+  const firstBatch = scalpTrainer.updateScalpLearningProfile(baseline, original.slice(0, 50));
+  assert.deepEqual(new Set(firstBatch.processedPolicyOutcomeIds), new Set(original.slice(0, 50).map((item) => item.outcomeId)));
 
   const late = {
     ...scalpOutcome(99, -1),
@@ -185,7 +184,7 @@ test("v8 scalp learning tracks processed outcome IDs so a late older outcome can
     ...original,
     late,
   ]);
-  assert.equal(afterLateBatch.processedPolicyOutcomeIds.length, 10);
+  assert.equal(afterLateBatch.processedPolicyOutcomeIds.length, 100);
   assert.ok(afterLateBatch.processedPolicyOutcomeIds.includes(late.outcomeId));
   assert.deepEqual(
     new Set(afterLateBatch.processedPolicyOutcomeIds),

@@ -1,5 +1,6 @@
 import { buildScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
 import { getScalpCircuitState } from "@/lib/decision/scalpCircuitStore";
+import { listScalpCandidates } from "@/lib/decision/scalpCandidateStore";
 import { getActiveDecisionLearningProfile, listTradeLearningOutcomes } from "@/lib/decision/learningStore";
 import { getActiveScalpAsset } from "@/lib/perps/automationConfig";
 import { getPerpsAutomationConfig } from "@/lib/perps/automationConfigStore";
@@ -29,11 +30,12 @@ export async function GET(request: Request) {
   if (!market) return Response.json({ error: "Unsupported scalp overlay market" }, { status: 400 });
 
   try {
-    const [profile, config, points, outcomes, lastRun, circuitState] = await Promise.all([
+    const [profile, config, points, outcomes, candidates, lastRun, circuitState] = await Promise.all([
       getActiveDecisionLearningProfile(walletAddress),
       getPerpsAutomationConfig(walletAddress),
       fetchCoinbaseMinuteCandles(market.product, 240),
       listTradeLearningOutcomes(walletAddress),
+      listScalpCandidates({ walletAddress, observedAfter: Date.now() - 24 * 60 * 60_000 }),
       getLastAutonomousMonitorRun(),
       getScalpCircuitState(walletAddress, SCALP_POLICY_VERSION, { requireAuthoritative: true }),
     ]);
@@ -95,6 +97,7 @@ export async function GET(request: Request) {
             netPnlUsd: latestClosed.netPnlUsd,
           }
         : null,
+      candidates,
     });
     return Response.json(snapshot, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

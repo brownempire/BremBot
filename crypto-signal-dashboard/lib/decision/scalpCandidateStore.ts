@@ -4,6 +4,7 @@ import {
   scalpCandidateSchema,
   type ScalpCandidate,
   type ScalpCandidateForwardLabel,
+  type ScalpOutcomeClass,
 } from "@/lib/decision/learningTypes";
 import type { PricePoint } from "@/lib/price/simulated";
 import { getRedisClient } from "@/lib/server/redis";
@@ -182,6 +183,59 @@ function percent(numerator: number, denominator: number) {
   return denominator > 0 ? numerator / denominator * 100 : 0;
 }
 
+function candidateBarrier(candidate: ScalpCandidate, name: "shadowTakeProfitMovePercent" | "shadowStopLossMovePercent") {
+  const configured = candidate.metrics[name];
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) return configured;
+  const atr = candidate.metrics.atrPercent;
+  const baseAtr = typeof atr === "number" && Number.isFinite(atr) && atr > 0 ? atr : 0.18;
+  return name === "shadowTakeProfitMovePercent"
+    ? Math.min(0.8, Math.max(0.12, baseAtr * 1.25))
+    : Math.min(0.6, Math.max(0.1, baseAtr * 0.9));
+}
+
+/**
+ * Applies deterministic, direction-normalized barrier labels to every setup,
+ * including rejected shadow candidates. If TP and SL are both crossed inside
+ * one minute candle, the conservative label is full-SL because tick order is
+ * unknowable from OHLC data. A profitable-staircase label requires a favorable
+ * arm on an earlier candle followed by a retreat through its protected floor.
+ */
+export function classifyScalpCandidateFirstTouch(input: {
+  candidate: ScalpCandidate;
+  points: PricePoint[];
+}): ScalpOutcomeClass | null {
+  const observedAt = Date.parse(input.candidate.observedAt);
+  const reference = input.candidate.referencePrice;
+  const long = input.candidate.side === "long";
+  const takeProfitMove = candidateBarrier(input.candidate, "shadowTakeProfitMovePercent");
+  const stopLossMove = candidateBarrier(input.candidate, "shadowStopLossMovePercent");
+  const takeProfit = reference * (1 + (long ? 1 : -1) * takeProfitMove / 100);
+  const stopLoss = reference * (1 + (long ? -1 : 1) * stopLossMove / 100);
+  const armMove = Math.max(0.05, takeProfitMove * 0.5);
+  const protectedMove = Math.max(0.02, armMove * 0.7);
+  const armPrice = reference * (1 + (long ? 1 : -1) * armMove / 100);
+  const protectedPrice = reference * (1 + (long ? 1 : -1) * protectedMove / 100);
+  let armed = false;
+  const points = input.points
+    .filter((point) => point.t > observedAt && point.t <= observedAt + 60 * 60_000)
+    .sort((left, right) => left.t - right.t);
+  if (points.length === 0) return null;
+  for (const point of points) {
+    const high = pointHigh(point);
+    const low = pointLow(point);
+    const tpHit = long ? high >= takeProfit : low <= takeProfit;
+    const slHit = long ? low <= stopLoss : high >= stopLoss;
+    if (tpHit && slHit) return "full-sl";
+    if (slHit) return "full-sl";
+    if (tpHit) return "full-tp";
+    const armedThisCandle = long ? high >= armPrice : low <= armPrice;
+    const protectedExitHit = long ? low <= protectedPrice : high >= protectedPrice;
+    if (armed && protectedExitHit) return "profitable-staircase";
+    if (armedThisCandle) armed = true;
+  }
+  return "neutral";
+}
+
 export function computeScalpCandidateForwardLabels(input: {
   candidate: ScalpCandidate;
   points: PricePoint[];
@@ -242,7 +296,15 @@ export async function labelScalpCandidateHorizons(input: {
     points: input.points,
     evaluatedAt: input.evaluatedAt,
   });
-  return saveScalpCandidate({ ...candidate, labels: { ...candidate.labels, ...labels } });
+  const outcomeClass = labels["60"]
+    ? classifyScalpCandidateFirstTouch({ candidate, points: input.points })
+    : candidate.outcomeClass ?? null;
+  return saveScalpCandidate({
+    ...candidate,
+    labels: { ...candidate.labels, ...labels },
+    outcomeClass,
+    outcomeSource: outcomeClass ? "shadow-first-touch" : candidate.outcomeSource ?? null,
+  });
 }
 
 export async function labelMatureScalpCandidates(input: {
@@ -266,8 +328,16 @@ export async function labelMatureScalpCandidates(input: {
     const changed = Object.keys(labels).some((horizon) => (
       candidate.labels[horizon as keyof typeof candidate.labels] === undefined
     ));
+    const outcomeClass = labels["60"]
+      ? classifyScalpCandidateFirstTouch({ candidate, points: input.points })
+      : candidate.outcomeClass ?? null;
     updated.push(changed
-      ? await saveScalpCandidate({ ...candidate, labels: { ...candidate.labels, ...labels } })
+      ? await saveScalpCandidate({
+          ...candidate,
+          labels: { ...candidate.labels, ...labels },
+          outcomeClass,
+          outcomeSource: outcomeClass ? "shadow-first-touch" : candidate.outcomeSource ?? null,
+        })
       : candidate);
   }
   return updated;

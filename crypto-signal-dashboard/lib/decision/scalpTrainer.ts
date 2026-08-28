@@ -17,7 +17,10 @@ function clamp(value: number, min: number, max: number) {
 
 const MIN_PROFITABLE_BASELINE_TRADES = 5;
 const MIN_BASELINE_VALIDATION_TRADES = 4;
-export const SCALP_INCREMENTAL_LEARNING_BATCH_SIZE = 5;
+// Closed trades are recorded immediately, but live thresholds are only
+// reconsidered in auditable batches. Small streaks must not silently move the
+// detector again.
+export const SCALP_INCREMENTAL_LEARNING_BATCH_SIZE = 50;
 export const SCALP_POLICY_PROBATION_MIN_TRADES = 10;
 export const SCALP_POLICY_PROBATION_MIN_PROFIT_FACTOR = 1.15;
 

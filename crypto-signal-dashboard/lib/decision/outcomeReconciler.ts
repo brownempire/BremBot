@@ -9,6 +9,7 @@ import {
 } from "@/lib/decision/learningTypes";
 import type { JupiterPerpsAccountSnapshot, JupiterPerpsTrade } from "@/lib/jupiterPerps";
 import type { PerpsUserExecution } from "@/lib/perps/sessionTypes";
+import type { PerpsProfitLockState } from "@/lib/perps/profitLock";
 
 const ENTRY_MATCH_TOLERANCE_MS = 60_000;
 const LEGACY_OUTLIER_OPENED_AT_MS = Date.parse("2026-07-20T23:04:22Z");
@@ -47,6 +48,47 @@ function inferExitReason(execution: PerpsUserExecution, trade: JupiterPerpsTrade
     if (Math.abs(trade.price - execution.stopLossPrice) <= tolerance) return "stop-loss";
   }
   return /close|decrease/.test(label) ? "manual" : "unknown";
+}
+
+export function inferScalpExitProvenance(input: {
+  exitReason: TradeLearningOutcome["exitReason"];
+  netPnlUsd: number;
+  action?: string | null;
+  orderType?: string | null;
+  transactionId?: string | null;
+  profitLockState?: PerpsProfitLockState | null;
+}) {
+  const label = `${input.action ?? ""} ${input.orderType ?? ""}`.toLowerCase();
+  const profitLockMechanism = input.netPnlUsd > 0 && input.profitLockState?.activeTier
+    ? input.profitLockState.closeTxid && input.profitLockState.closeTxid === input.transactionId
+      ? "staircase-market-close" as const
+      : input.profitLockState.onChainStopTier
+        ? "staircase-stop" as const
+        : "staircase-market-close" as const
+    : null;
+  const exitMechanism: NonNullable<TradeLearningOutcome["exitMechanism"]> = input.exitReason === "take-profit"
+    ? "full-tp"
+    : input.exitReason === "liquidation"
+      ? "liquidation"
+      : profitLockMechanism
+        ? profitLockMechanism
+      : input.netPnlUsd > 0 && input.exitReason === "stop-loss"
+        ? "staircase-stop"
+        : input.netPnlUsd > 0 && /profit.?lock|staircase/.test(label)
+          ? "staircase-market-close"
+          : input.exitReason === "stop-loss"
+            ? "hard-sl"
+            : input.exitReason === "manual"
+              ? "manual"
+              : "unknown";
+  const outcomeClass: NonNullable<TradeLearningOutcome["outcomeClass"]> = exitMechanism === "full-tp"
+    ? "full-tp"
+    : exitMechanism === "staircase-stop" || exitMechanism === "staircase-market-close"
+      ? "profitable-staircase"
+      : exitMechanism === "hard-sl" || exitMechanism === "liquidation"
+        ? "full-sl"
+        : "neutral";
+  return { exitMechanism, outcomeClass };
 }
 
 function findDecision(execution: PerpsUserExecution, decisions: TradeDecisionRecord[]) {
@@ -124,6 +166,7 @@ export async function reconcileTradeLearningOutcomes(input: {
   snapshot: JupiterPerpsAccountSnapshot;
   replaceWalletHistory?: boolean;
   requireAuthoritative?: boolean;
+  profitLockStates?: PerpsProfitLockState[];
 }) {
   const executions = [...new Map(
     input.executions
@@ -186,6 +229,23 @@ export async function reconcileTradeLearningOutcomes(input: {
       ?? (execution.strategyClass === "scalp" ? "scalp" as const : null);
     const eligibility = resolveTrainingEligibility({ execution, signalType, netPnlUsd });
     const entryReference = entryTrade.txHash?.trim() || entryTrade.id;
+    const exitReason = inferExitReason(execution, finalExit);
+    const profitLockState = input.profitLockStates?.find((state) => (
+      state.positionPubkey === execution.positionPubkey
+      && (!state.episodeId || state.episodeId === execution.executionId)
+    )) ?? null;
+    const exitProvenance = inferScalpExitProvenance({
+      exitReason,
+      netPnlUsd,
+      action: finalExit.action,
+      orderType: finalExit.orderType,
+      transactionId: finalExit.txHash,
+      profitLockState,
+    });
+    const entryPrice = entryTrade.price ?? decision?.payload.marketContext.spotPrice ?? null;
+    const targetPriceMovePercent = entryPrice && execution.takeProfitPrice
+      ? Math.abs(execution.takeProfitPrice - entryPrice) / entryPrice * 100
+      : null;
 
     outcomes.push({
       outcomeId: `${input.walletAddress}:${execution.executionId}`,
@@ -201,7 +261,7 @@ export async function reconcileTradeLearningOutcomes(input: {
       openedAt: execution.createdAt,
       closedAt: new Date(closedAtMs).toISOString(),
       positionPubkey: execution.positionPubkey,
-      entryPrice: entryTrade.price ?? decision?.payload.marketContext.spotPrice ?? null,
+      entryPrice,
       exitPrice: finalExit.price,
       collateralUsd: execution.collateralUsd,
       sizeUsd: execution.sizeUsd,
@@ -213,7 +273,23 @@ export async function reconcileTradeLearningOutcomes(input: {
       netPnlUsd: Number(netPnlUsd.toFixed(6)),
       returnOnCollateralPercent: Number(((netPnlUsd / execution.collateralUsd) * 100).toFixed(6)),
       durationMinutes: Number((Math.max(0, closedAtMs - openedAtMs) / 60_000).toFixed(2)),
-      exitReason: inferExitReason(execution, finalExit),
+      exitReason,
+      ...exitProvenance,
+      profitLockTier: profitLockState?.activeTier ?? null,
+      peakRoePercent: profitLockState?.peakRoePercent ?? null,
+      maximumFavorableExcursionPercent: profitLockState && execution.leverage > 0
+        ? Number((Math.max(0, profitLockState.peakRoePercent) / execution.leverage).toFixed(6))
+        : null,
+      maximumAdverseExcursionPercent: null,
+      timeToTakeProfitSeconds: exitReason === "take-profit"
+        ? Math.max(0, closedAtMs - openedAtMs) / 1_000
+        : null,
+      targetPriceMovePercent: targetPriceMovePercent === null
+        ? null
+        : Number(targetPriceMovePercent.toFixed(6)),
+      detectorVersion: strategy?.scalpPolicyVersion
+        ? `scalp-policy-v${strategy.scalpPolicyVersion}`
+        : null,
       signalConfidence: decision?.payload.signalConfidence ?? execution.decisionConfidence ?? null,
       signalType,
       trendWindow: strategy?.trendWindow ?? null,

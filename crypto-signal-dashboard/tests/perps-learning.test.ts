@@ -484,7 +484,7 @@ test("each newly closed trade incrementally updates the active wallet profile", 
   assert.equal((await learningStore.getActiveDecisionLearningProfile(walletAddress))?.profileId, result.profile.profileId);
 });
 
-test("scalp learning waits for five closed trades while Smart learning remains isolated", async () => {
+test("scalp learning waits for fifty closed trades while Smart learning remains isolated", async () => {
   const walletAddress = "learning-wallet-strategy-isolation";
   const baseline = await trainer.trainWalletDecisionProfile({
     walletAddress,
@@ -559,12 +559,9 @@ test("scalp learning waits for five closed trades while Smart learning remains i
   assert.equal(afterScalp.profile.scalpProfile?.minimumConfidence, baseline.profile.scalpProfile?.minimumConfidence);
   assert.equal(afterScalp.profile.scalpProfile?.learnedFromClosedTrades, baseline.profile.scalpProfile?.learnedFromClosedTrades);
 
-  await learningStore.saveTradeLearningOutcomes([
-    makeOutcome(2, "scalp"),
-    makeOutcome(3, "scalp"),
-    makeOutcome(4, "scalp"),
-    makeOutcome(5, "scalp"),
-  ]);
+  await learningStore.saveTradeLearningOutcomes(
+    Array.from({ length: 49 }, (_, offset) => makeOutcome(offset + 2, "scalp"))
+  );
   const afterScalpBatch = await trainer.trainWalletDecisionProfile({
     walletAddress,
     config: null,
@@ -574,10 +571,10 @@ test("scalp learning waits for five closed trades while Smart learning remains i
   assert.ok((afterScalpBatch.profile.scalpProfile?.minimumConfidence ?? 0) > (baseline.profile.scalpProfile?.minimumConfidence ?? 0));
   assert.ok((afterScalpBatch.profile.scalpProfile?.riskMultiplier ?? 1) < 1);
   assert.equal(afterScalpBatch.profile.scalpProfile?.cooldownSeconds, 420);
-  assert.equal(afterScalpBatch.profile.scalpProfile?.learnedFromClosedTrades, 5);
+  assert.equal(afterScalpBatch.profile.scalpProfile?.learnedFromClosedTrades, 50);
 
   const scalpSnapshot = structuredClone(afterScalpBatch.profile.scalpProfile);
-  await learningStore.saveTradeLearningOutcomes([makeOutcome(6, "trend")]);
+  await learningStore.saveTradeLearningOutcomes([makeOutcome(51, "trend")]);
   const afterSmart = await trainer.trainWalletDecisionProfile({
     walletAddress,
     config: null,

@@ -45,7 +45,12 @@ import {
   type JupiterPerpsPosition,
   type JupiterPerpsTransactionStatus,
 } from "@/lib/jupiterPerps";
-import { fetchCoinbaseLivePrice, fetchCoinbaseMinuteCandles } from "@/lib/price/coinbase";
+import {
+  fetchCoinbaseLiveMarketSample,
+  fetchCoinbaseLivePrice,
+  fetchCoinbaseMinuteCandles,
+  type CoinbaseLiveMarketSample,
+} from "@/lib/price/coinbase";
 import type { PricePoint } from "@/lib/price/simulated";
 import { computeSignalMetrics, detectSignals, type Signal } from "@/lib/signal/engine";
 import {
@@ -75,12 +80,17 @@ import {
   type DecisionLearningProfile,
   type ScalpCandidate,
   type ScalpEntryPath,
+  type ScalpLearningProfile,
   type TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
 import {
   labelMatureScalpCandidates,
   saveScalpCandidate,
 } from "@/lib/decision/scalpCandidateStore";
+import {
+  evaluateValidatedScalpOutcomePrediction,
+  predictScalpCandidateOutcome,
+} from "@/lib/decision/scalpOutcomeModel";
 import {
   deriveScalpEntryPath,
   getScalpCircuitDecision,
@@ -368,6 +378,7 @@ type MonitorDependencies = {
   getRuntimeOverride: typeof getPerpsRuntimeOverride;
   fetchCandles: typeof fetchCoinbaseMinuteCandles;
   fetchLivePrice: (product: string) => Promise<number | null>;
+  fetchLiveSample: (product: string) => Promise<CoinbaseLiveMarketSample | null>;
   monitorScalpEntryPoint: typeof monitorScalpOneSecondEntryPoint;
   fetchSnapshot: typeof fetchJupiterPerpsAccountSnapshot;
   getUsdcBalance: typeof getWalletUsdcBalance;
@@ -389,6 +400,7 @@ type MonitorDependencies = {
     snapshot: Awaited<ReturnType<typeof fetchJupiterPerpsAccountSnapshot>>,
     options?: { requireCompleteTradeHistory?: boolean; agentWalletAddress?: string }
   ) => Promise<number>;
+  listProfitLockStates: (walletAddress: string) => Promise<PerpsProfitLockState[]>;
   autoTrain: (walletAddress: string, config: PerpsAutomationConfig) => Promise<void>;
   ensureScalpPolicyProfile: (walletAddress: string) => Promise<DecisionLearningProfile>;
   disableScalpMode: (walletAddress: string) => Promise<PerpsAutomationConfig | null>;
@@ -444,6 +456,7 @@ const defaultDependencies: MonitorDependencies = {
   getRuntimeOverride: getPerpsRuntimeOverride,
   fetchCandles: fetchCoinbaseMinuteCandles,
   fetchLivePrice: fetchCoinbaseLivePrice,
+  fetchLiveSample: fetchCoinbaseLiveMarketSample,
   monitorScalpEntryPoint: monitorScalpOneSecondEntryPoint,
   fetchSnapshot: fetchJupiterPerpsAccountSnapshot,
   getUsdcBalance: getWalletUsdcBalance,
@@ -469,9 +482,10 @@ const defaultDependencies: MonitorDependencies = {
   getScalpCircuitDecision,
   recordScalpCircuitOutcomes,
   reconcileLearningHistory: async (walletAddress, snapshot, options) => {
-    const [executions, decisions] = await Promise.all([
+    const [executions, decisions, profitLockStates] = await Promise.all([
       listUserPerpsExecutionsAuthoritative(walletAddress),
       listAllTradeDecisionRecordsAuthoritative(walletAddress),
+      defaultDependencies.listProfitLockStates(walletAddress),
     ]);
     const activeProfile = await getActiveDecisionLearningProfileAuthoritative(walletAddress);
     const requiresCleanRebuild = (activeProfile?.outcomeDataVersion ?? 1) < CURRENT_OUTCOME_RECONCILIATION_VERSION;
@@ -491,8 +505,23 @@ const defaultDependencies: MonitorDependencies = {
       snapshot: learningSnapshot,
       replaceWalletHistory: requiresCleanRebuild,
       requireAuthoritative: true,
+      profitLockStates,
     });
     return outcomes.length;
+  },
+  listProfitLockStates: async (walletAddress) => {
+    const redis = await getRedisClient();
+    if (!redis) return [];
+    const values = await redis.hGetAll(PROFIT_LOCK_STATE_KEY);
+    return Object.entries(values).flatMap(([field, raw]) => {
+      if (field !== walletAddress && !field.startsWith(`${walletAddress}:`)) return [];
+      try {
+        const state = JSON.parse(raw) as PerpsProfitLockState;
+        return state.positionPubkey ? [state] : [];
+      } catch {
+        return [];
+      }
+    });
   },
   autoTrain: async (walletAddress, config) => {
     await trainWalletDecisionProfile({
@@ -794,6 +823,7 @@ function scalpCandidateMetrics(
   const horizon = (minutes: 5 | 15 | 60) => horizons.find((item) => item.minutes === minutes);
   return {
     score: evaluation.candidate.score,
+    atrPercent: indicators.atrPercent,
     volatilityPercent,
     netMove145mPercent: evaluation.candidate.regime.netMove145mPercent,
     range145mPercent: evaluation.candidate.regime.range145mPercent,
@@ -816,6 +846,8 @@ function scalpCandidateMetrics(
     volumeRatio: indicators.volumeRatio,
     bollingerBandwidthPercent: indicators.bollingerBandwidthPercent,
     bollingerPosition: indicators.bollingerPosition,
+    shadowTakeProfitMovePercent: clamp((indicators.atrPercent ?? 0.18) * 1.25, 0.12, 0.8),
+    shadowStopLossMovePercent: clamp((indicators.atrPercent ?? 0.18) * 0.9, 0.1, 0.6),
   };
 }
 
@@ -826,6 +858,7 @@ async function persistScalpCandidate(input: {
   evaluation: ScalpCandidateEvaluation;
   indicators: IndicatorSnapshot;
   volatilityPercent: number;
+  outcomeModel?: ScalpLearningProfile["outcomeModel"];
 }) {
   const diagnostic = input.evaluation.candidate;
   if (!diagnostic.direction || !diagnostic.timestamp || !diagnostic.entryPrice || diagnostic.entryPrice <= 0) {
@@ -833,7 +866,7 @@ async function persistScalpCandidate(input: {
   }
   const entryPath = toScalpEntryPath(diagnostic.path);
   const signal = input.evaluation.signal;
-  return input.deps.saveScalpCandidate({
+  const saved = await input.deps.saveScalpCandidate({
     candidateId: `${input.walletAddress}:${SCALP_POLICY_VERSION}:${input.asset}:${diagnostic.timestamp}:${entryPath}:${diagnostic.direction}`,
     walletAddress: input.walletAddress,
     policyVersion: SCALP_POLICY_VERSION,
@@ -850,6 +883,11 @@ async function persistScalpCandidate(input: {
     executionId: null,
     metrics: scalpCandidateMetrics(input.evaluation, input.indicators, input.volatilityPercent),
     tags: diagnostic.tags,
+  });
+  if (!input.outcomeModel || input.outcomeModel.status === "insufficient-data") return saved;
+  return input.deps.saveScalpCandidate({
+    ...saved,
+    prediction: predictScalpCandidateOutcome(input.outcomeModel, saved),
   });
 }
 
@@ -968,6 +1006,10 @@ export type ScalpOneSecondEntryMonitorResult = {
   price: number | null;
   observedAt: number | null;
   samples: number;
+  confirmations?: number;
+  requiredConfirmations?: number;
+  spreadBps?: number | null;
+  tradeImbalance?: number | null;
   evaluation: ScalpOneSecondEntryPointEvaluation | null;
 };
 
@@ -976,12 +1018,17 @@ export async function monitorScalpOneSecondEntryPoint(options: {
   referencePrice: number;
   atrPercent: number | null | undefined;
   fetchPrice: () => Promise<number | null>;
+  fetchSample?: () => Promise<CoinbaseLiveMarketSample | null>;
   deadlineAt?: number;
   maxWaitMs?: number;
   intervalMs?: number;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
   assertActive?: () => void;
+  requiredConfirmations?: number;
+  confirmationWindow?: number;
+  maximumSpreadBps?: number;
+  maximumOpposingTradeImbalance?: number;
 }): Promise<ScalpOneSecondEntryMonitorResult> {
   const now = options.now ?? Date.now;
   const wait = options.wait ?? ((milliseconds: number) => new Promise<void>((resolve) => {
@@ -998,17 +1045,29 @@ export async function monitorScalpOneSecondEntryPoint(options: {
   let lastPrice: number | null = null;
   let lastObservedAt: number | null = null;
   let lastEvaluation: ScalpOneSecondEntryPointEvaluation | null = null;
+  let lastSpreadBps: number | null = null;
+  let lastTradeImbalance: number | null = null;
+  const requiredConfirmations = Math.max(1, options.requiredConfirmations ?? 3);
+  const confirmationWindow = Math.max(requiredConfirmations, options.confirmationWindow ?? 5);
+  const maximumSpreadBps = Math.max(0, options.maximumSpreadBps ?? 12);
+  const maximumOpposingTradeImbalance = clamp(options.maximumOpposingTradeImbalance ?? 0.35, 0, 1);
+  const confirmationHistory: boolean[] = [];
 
   while (now() <= deadlineAt) {
     options.assertActive?.();
     const sampleStartedAt = now();
-    const price = await options.fetchPrice().catch(() => null);
+    const marketSample = options.fetchSample
+      ? await options.fetchSample().catch(() => null)
+      : null;
+    const price = marketSample?.price ?? await options.fetchPrice().catch(() => null);
     const observedAt = now();
     samples += 1;
     if (typeof price === "number" && Number.isFinite(price) && price > 0) {
       sawUsablePrice = true;
       lastPrice = price;
       lastObservedAt = observedAt;
+      lastSpreadBps = marketSample?.spreadBps ?? null;
+      lastTradeImbalance = marketSample?.tradeImbalance ?? null;
       lastEvaluation = evaluateScalpOneSecondEntryPoint({
         side: options.side,
         referencePrice: options.referencePrice,
@@ -1021,15 +1080,31 @@ export async function monitorScalpOneSecondEntryPoint(options: {
           price,
           observedAt,
           samples,
+          confirmations: confirmationHistory.filter(Boolean).length,
+          requiredConfirmations,
+          spreadBps: lastSpreadBps,
+          tradeImbalance: lastTradeImbalance,
           evaluation: lastEvaluation,
         };
       }
-      if (lastEvaluation.triggered) {
+      const spreadAllowed = lastSpreadBps === null || lastSpreadBps <= maximumSpreadBps;
+      const flowAllowed = lastTradeImbalance === null
+        || (options.side === "long"
+          ? lastTradeImbalance >= -maximumOpposingTradeImbalance
+          : lastTradeImbalance <= maximumOpposingTradeImbalance);
+      confirmationHistory.push(lastEvaluation.triggered && spreadAllowed && flowAllowed);
+      if (confirmationHistory.length > confirmationWindow) confirmationHistory.shift();
+      const confirmations = confirmationHistory.filter(Boolean).length;
+      if (confirmations >= requiredConfirmations) {
         return {
           status: "triggered",
           price,
           observedAt,
           samples,
+          confirmations,
+          requiredConfirmations,
+          spreadBps: lastSpreadBps,
+          tradeImbalance: lastTradeImbalance,
           evaluation: lastEvaluation,
         };
       }
@@ -1047,6 +1122,10 @@ export async function monitorScalpOneSecondEntryPoint(options: {
     price: lastPrice,
     observedAt: lastObservedAt,
     samples,
+    confirmations: confirmationHistory.filter(Boolean).length,
+    requiredConfirmations,
+    spreadBps: lastSpreadBps,
+    tradeImbalance: lastTradeImbalance,
     evaluation: lastEvaluation,
   };
 }
@@ -1744,7 +1823,6 @@ export async function runAutonomousPerpsMonitor(
         });
       }
       if (positionLifecycleBusy) continue;
-      if (openPositions.length === 0) await deps.clearProfitLockState(config.walletAddress);
       if (scalpAgentLayerEnabled) {
         // Scalp v8 circuit accounting and fee estimates must be based on the
         // authoritative, freshly reconciled outcome set. Never admit a new
@@ -1756,6 +1834,9 @@ export async function runAutonomousPerpsMonitor(
       } else {
         await deps.reconcileLearningHistory(config.walletAddress, snapshot).catch(() => 0);
       }
+      // Keep the just-closed position's staircase tier and peak available until
+      // outcome reconciliation has copied that exit provenance into training.
+      if (openPositions.length === 0) await deps.clearProfitLockState(config.walletAddress);
       if (scalpAgentLayerEnabled) {
         // Initialize the stable rollout first, then consume/review authoritative
         // scalp outcomes independently of Smart Trade execution mode.
@@ -1930,9 +2011,24 @@ export async function runAutonomousPerpsMonitor(
             evaluation: scalpEvaluation,
             indicators,
             volatilityPercent: scalpVolatilityPercent,
+            outcomeModel: scalpProfile.outcomeModel,
           })
         : null;
-      const scalpSignal = scalpEvaluation?.signal ?? null;
+      const outcomePrediction = scalpCandidateRecord?.prediction;
+      const outcomeAdmission = evaluateValidatedScalpOutcomePrediction({
+        modelStatus: scalpProfile.outcomeModel?.status,
+        prediction: outcomePrediction,
+      });
+      const profitableProbability = outcomeAdmission.profitableProbability;
+      const outcomeModelRejected = !outcomeAdmission.allowed;
+      if (outcomeModelRejected && scalpCandidateRecord && outcomePrediction) {
+        scalpCandidateRecord = await rejectPersistedScalpCandidate(
+          deps,
+          scalpCandidateRecord,
+          `The validated outcome model estimated ${(profitableProbability! * 100).toFixed(1)}% profitable follow-through and ${(outcomePrediction.fullSl * 100).toFixed(1)}% full-SL risk.`
+        );
+      }
+      const scalpSignal = outcomeModelRejected ? null : scalpEvaluation?.signal ?? null;
       let directionExperiment = scalpAgentLayerEnabled
         ? await deps.getDirectionExperiment(config.walletAddress)
         : null;
@@ -2207,7 +2303,6 @@ export async function runAutonomousPerpsMonitor(
       let oneSecondEntryPoint: ScalpOneSecondEntryMonitorResult | null = null;
       if (strategyClass === "scalp" && scalpEntryPath) {
         const completedCandleEntryReference = entryPrice;
-        const currentMinuteEndsAt = (Math.floor(Date.now() / 60_000) + 1) * 60_000;
         const routeBudgetDeadline = Date.parse(startedAt)
           + 55_000
           - SCALP_ONE_SECOND_ROUTE_RESERVE_MS;
@@ -2216,7 +2311,13 @@ export async function runAutonomousPerpsMonitor(
           referencePrice: completedCandleEntryReference,
           atrPercent: plan.atrPercent,
           fetchPrice: () => deps.fetchLivePrice(`${asset}-USD`),
-          deadlineAt: Math.min(currentMinuteEndsAt - 1_000, routeBudgetDeadline),
+          fetchSample: overrides.fetchLivePrice && !overrides.fetchLiveSample
+            ? undefined
+            : () => deps.fetchLiveSample(`${asset}-USD`),
+          // A signal near a candle boundary still receives the full live
+          // persistence window. The completed-candle refetch below determines
+          // which minute is the authoritative final confirmation.
+          deadlineAt: routeBudgetDeadline,
           maxWaitMs: SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS,
           intervalMs: SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
           assertActive: leaseGuard?.assertOwned,
@@ -2307,6 +2408,7 @@ export async function runAutonomousPerpsMonitor(
             evaluation: freshEvaluation,
             indicators: freshIndicators,
             volatilityPercent: computeVolatilityPercent(freshScalpPoints),
+            outcomeModel: scalpProfile.outcomeModel,
           });
           scalpEntryPath = freshPath;
         }
@@ -2367,6 +2469,9 @@ export async function runAutonomousPerpsMonitor(
               oneSecondEntryPrice: oneSecondEntryPoint.price,
               oneSecondEntryObservedAt: oneSecondEntryPoint.observedAt ?? Date.now(),
               oneSecondEntrySamples: oneSecondEntryPoint.samples,
+              oneSecondEntryConfirmations: oneSecondEntryPoint.confirmations ?? 0,
+              oneSecondEntrySpreadBps: oneSecondEntryPoint.spreadBps ?? null,
+              oneSecondEntryTradeImbalance: oneSecondEntryPoint.tradeImbalance ?? null,
               oneMinuteConfirmationPrice: livePrice,
             },
             tags: [...new Set([
@@ -2475,6 +2580,23 @@ export async function runAutonomousPerpsMonitor(
         takeProfitUsd: scalpExitPlan?.netProfitTargetUsd,
         estimatedRoundTripFeeRate: strategyClass === "scalp" ? estimatedScalpFeeRate : undefined,
       });
+      if (strategyClass === "scalp" && scalpCandidateRecord) {
+        const plannedTakeProfitMovePercent = entryPrice > 0 && triggers.takeProfitPrice
+          ? Math.abs(triggers.takeProfitPrice - entryPrice) / entryPrice * 100
+          : null;
+        const plannedStopLossMovePercent = entryPrice > 0 && triggers.stopLossPrice
+          ? Math.abs(triggers.stopLossPrice - entryPrice) / entryPrice * 100
+          : null;
+        scalpCandidateRecord = await deps.saveScalpCandidate({
+          ...scalpCandidateRecord,
+          metrics: {
+            ...scalpCandidateRecord.metrics,
+            plannedLeverage: plan.leverage,
+            shadowTakeProfitMovePercent: plannedTakeProfitMovePercent,
+            shadowStopLossMovePercent: plannedStopLossMovePercent,
+          },
+        });
+      }
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
       const scalpEntryTimingSummary = strategyClass === "scalp" && oneSecondEntryPoint?.status === "triggered"

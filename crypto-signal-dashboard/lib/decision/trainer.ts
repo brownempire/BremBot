@@ -16,6 +16,8 @@ import type {
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
 import { CURRENT_OUTCOME_RECONCILIATION_VERSION } from "@/lib/decision/learningTypes";
+import { listScalpCandidates } from "@/lib/decision/scalpCandidateStore";
+import { trainScalpOutcomeModel } from "@/lib/decision/scalpOutcomeModel";
 import { makeOperatorTrainingBaselineProfile } from "@/lib/decision/operatorTrainingBaseline";
 import { OPERATOR_TRAINING_BASELINE } from "@/lib/decision/operatorTrainingBaselineConstants";
 import { BASE_INDICATOR_SETTINGS } from "@/lib/signal/indicators";
@@ -703,7 +705,7 @@ export async function trainWalletDecisionProfile(input: {
 
 /**
  * Redis-authoritative scalp-only updater used by live admission. It deliberately
- * leaves every Smart Trade field untouched while applying the five-outcome
+ * leaves every Smart Trade field untouched while applying the fifty-outcome
  * scalp batch and the ten-trade rollout review. A failed read, write, or
  * post-write verification throws so the monitor cannot trade on stale policy.
  */
@@ -724,7 +726,10 @@ export async function trainWalletScalpProfileAuthoritative(input: {
     throw new Error("The authoritative active profile is missing its scalp policy.");
   }
 
-  const storedOutcomes = await listTradeLearningOutcomesAuthoritative(input.walletAddress);
+  const [storedOutcomes, scalpCandidates] = await Promise.all([
+    listTradeLearningOutcomesAuthoritative(input.walletAddress),
+    listScalpCandidates({ walletAddress: input.walletAddress }),
+  ]);
   const eligibleScalpOutcomes = storedOutcomes
     .filter((outcome) => (
       outcome.trainingEligible !== false
@@ -744,7 +749,14 @@ export async function trainWalletScalpProfileAuthoritative(input: {
     .slice(-1_000)
     .filter((outcome) => !processedPolicyOutcomeIds.has(outcome.outcomeId))
     .length;
-  if (!input.force && unseenOutcomeCount < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE) {
+  const outcomeModel = trainScalpOutcomeModel({
+    candidates: scalpCandidates,
+    outcomes: eligibleScalpOutcomes,
+    previous: active.scalpProfile.outcomeModel,
+    force: input.force,
+  });
+  const outcomeModelChanged = JSON.stringify(outcomeModel) !== JSON.stringify(active.scalpProfile.outcomeModel);
+  if (!input.force && unseenOutcomeCount < SCALP_INCREMENTAL_LEARNING_BATCH_SIZE && !outcomeModelChanged) {
     return {
       profile: active,
       activated: false,
@@ -759,7 +771,10 @@ export async function trainWalletScalpProfileAuthoritative(input: {
     };
   }
 
-  const scalpProfile = updateScalpLearningProfile(active.scalpProfile, eligibleScalpOutcomes);
+  const scalpProfile = {
+    ...updateScalpLearningProfile(active.scalpProfile, eligibleScalpOutcomes),
+    outcomeModel,
+  };
   const next = {
     ...active,
     profileId: `learn_${crypto.randomUUID()}`,

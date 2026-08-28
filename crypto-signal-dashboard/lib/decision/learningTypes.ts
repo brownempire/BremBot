@@ -2,6 +2,23 @@ import { z } from "zod";
 
 export const CURRENT_OUTCOME_RECONCILIATION_VERSION = 2;
 
+export const scalpOutcomeClassSchema = z.enum([
+  "full-tp",
+  "profitable-staircase",
+  "full-sl",
+  "neutral",
+]);
+
+export const scalpExitMechanismSchema = z.enum([
+  "full-tp",
+  "staircase-stop",
+  "staircase-market-close",
+  "hard-sl",
+  "liquidation",
+  "manual",
+  "unknown",
+]);
+
 export const learningAssetSchema = z.enum(["SOL", "ETH", "BTC"]);
 
 export const scalpSetupTypeSchema = z.enum([
@@ -60,6 +77,15 @@ export const tradeLearningOutcomeSchema = z.object({
   returnOnCollateralPercent: z.number().finite(),
   durationMinutes: z.number().finite().min(0),
   exitReason: z.enum(["take-profit", "stop-loss", "liquidation", "manual", "unknown"]),
+  exitMechanism: scalpExitMechanismSchema.optional(),
+  outcomeClass: scalpOutcomeClassSchema.optional(),
+  profitLockTier: z.string().trim().min(1).nullable().optional(),
+  peakRoePercent: z.number().finite().nullable().optional(),
+  maximumFavorableExcursionPercent: z.number().finite().min(0).nullable().optional(),
+  maximumAdverseExcursionPercent: z.number().finite().min(0).nullable().optional(),
+  timeToTakeProfitSeconds: z.number().finite().min(0).nullable().optional(),
+  targetPriceMovePercent: z.number().finite().min(0).nullable().optional(),
+  detectorVersion: z.string().trim().min(1).nullable().optional(),
   signalConfidence: z.number().finite().min(0).max(1).nullable(),
   signalType: z.enum(["trend", "breakout", "scalp"]).nullable(),
   trendWindow: z.number().finite().min(1).nullable(),
@@ -144,6 +170,39 @@ export const scalpLearningProfileSchema = z.object({
     reason: z.string().trim().min(1),
   }).nullable().default(null),
   policyRollout: scalpPolicyRolloutSchema.nullable().optional(),
+  outcomeModel: z.object({
+    modelVersion: z.string().trim().min(1),
+    status: z.enum(["insufficient-data", "shadow", "validated"]),
+    trainedAt: z.string().datetime().nullable(),
+    labeledSampleCount: z.number().int().min(0),
+    newLabelsSinceTraining: z.number().int().min(0),
+    classCounts: z.object({
+      fullTp: z.number().int().min(0),
+      profitableStaircase: z.number().int().min(0),
+      fullSl: z.number().int().min(0),
+      neutral: z.number().int().min(0),
+    }),
+    minimumClassSamples: z.number().int().min(1),
+    strongBaselineClassSamples: z.number().int().min(1),
+    retrainBatchSize: z.number().int().min(1),
+    featureNames: z.array(z.string().trim().min(1)),
+    featureScales: z.array(z.number().finite().positive()),
+    centroids: z.object({
+      fullTp: z.array(z.number().finite()),
+      profitableStaircase: z.array(z.number().finite()),
+      fullSl: z.array(z.number().finite()),
+      neutral: z.array(z.number().finite()),
+    }),
+    validation: z.object({
+      trainingSize: z.number().int().min(0),
+      validationSize: z.number().int().min(0),
+      accuracy: z.number().finite().min(0).max(1),
+      brierScore: z.number().finite().min(0),
+      chronological: z.literal(true),
+      passed: z.boolean(),
+      reasons: z.array(z.string()),
+    }),
+  }).optional(),
   validation: learningValidationSchema,
 });
 
@@ -176,6 +235,16 @@ export const scalpCandidateSchema = z.object({
   decisionId: z.string().trim().min(1).nullable().optional(),
   executionId: z.string().trim().min(1).nullable().optional(),
   metrics: z.record(z.union([z.number().finite(), z.null()])).default({}),
+  outcomeClass: scalpOutcomeClassSchema.nullable().optional(),
+  outcomeSource: z.enum(["executed-trade", "shadow-first-touch"]).nullable().optional(),
+  prediction: z.object({
+    modelVersion: z.string().trim().min(1),
+    calibrated: z.boolean(),
+    fullTp: z.number().finite().min(0).max(1),
+    profitableStaircase: z.number().finite().min(0).max(1),
+    fullSl: z.number().finite().min(0).max(1),
+    neutral: z.number().finite().min(0).max(1),
+  }).nullable().optional(),
   tags: z.array(z.string().trim().min(1)).default([]),
   labels: z.object({
     "5": scalpCandidateForwardLabelSchema.optional(),
@@ -250,4 +319,6 @@ export type ScalpEntryPath = z.infer<typeof scalpEntryPathSchema>;
 export type ScalpPolicyRollout = z.infer<typeof scalpPolicyRolloutSchema>;
 export type ScalpCandidate = z.infer<typeof scalpCandidateSchema>;
 export type ScalpCandidateForwardLabel = z.infer<typeof scalpCandidateForwardLabelSchema>;
+export type ScalpOutcomeClass = z.infer<typeof scalpOutcomeClassSchema>;
+export type ScalpExitMechanism = z.infer<typeof scalpExitMechanismSchema>;
 export type LearningAsset = z.infer<typeof learningAssetSchema>;

@@ -8,6 +8,10 @@ export type CoinbasePricePayload = {
 
 type CoinbaseTicker = {
   price?: string;
+  bid?: string;
+  ask?: string;
+  volume?: string;
+  time?: string;
   open?: string;
   open_24h?: string;
 };
@@ -17,18 +21,75 @@ type CoinbaseStats = {
 };
 
 type CoinbaseCandle = [number, number, number, number, number, number];
+type CoinbaseTrade = { side?: "buy" | "sell"; size?: string };
 
 const COINBASE_API = "https://api.exchange.coinbase.com";
 
-export async function fetchCoinbaseLivePrice(product: string) {
-  const response = await fetch(`${COINBASE_API}/products/${product}/ticker`, {
+export type CoinbaseLiveMarketSample = {
+  price: number;
+  bid: number | null;
+  ask: number | null;
+  volume: number | null;
+  observedAt: number;
+  spreadBps: number | null;
+  /** Signed aggressive-flow imbalance: +1 buy pressure, -1 sell pressure. */
+  tradeImbalance?: number | null;
+  tradeCount?: number;
+};
+
+export async function fetchCoinbaseLiveMarketSample(product: string): Promise<CoinbaseLiveMarketSample | null> {
+  const request = (path: string) => fetch(`${COINBASE_API}${path}`, {
     cache: "no-store",
     headers: { Accept: "application/json" },
   });
+  const [response, tradesResponse] = await Promise.all([
+    request(`/products/${product}/ticker`),
+    request(`/products/${product}/trades?limit=50`).catch(() => null),
+  ]);
   if (!response.ok) return null;
   const ticker = (await response.json()) as CoinbaseTicker;
   const price = Number(ticker?.price);
-  return Number.isFinite(price) && price > 0 ? price : null;
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const bidValue = Number(ticker?.bid);
+  const askValue = Number(ticker?.ask);
+  const volumeValue = Number(ticker?.volume);
+  const bid = Number.isFinite(bidValue) && bidValue > 0 ? bidValue : null;
+  const ask = Number.isFinite(askValue) && askValue > 0 ? askValue : null;
+  const midpoint = bid && ask ? (bid + ask) / 2 : null;
+  const spreadBps = midpoint && ask! >= bid!
+    ? (ask! - bid!) / midpoint * 10_000
+    : null;
+  const timestamp = Date.parse(ticker?.time ?? "");
+  const trades = tradesResponse?.ok
+    ? await tradesResponse.json().catch(() => []) as CoinbaseTrade[]
+    : [];
+  // Coinbase Exchange reports the maker side. A maker sell is therefore an
+  // aggressive buy, and a maker buy is an aggressive sell.
+  let aggressiveBuyVolume = 0;
+  let aggressiveSellVolume = 0;
+  trades.forEach((trade) => {
+    const size = Number(trade.size);
+    if (!Number.isFinite(size) || size <= 0) return;
+    if (trade.side === "sell") aggressiveBuyVolume += size;
+    if (trade.side === "buy") aggressiveSellVolume += size;
+  });
+  const totalAggressiveVolume = aggressiveBuyVolume + aggressiveSellVolume;
+  return {
+    price,
+    bid,
+    ask,
+    volume: Number.isFinite(volumeValue) && volumeValue >= 0 ? volumeValue : null,
+    observedAt: Number.isFinite(timestamp) ? timestamp : Date.now(),
+    spreadBps: spreadBps === null ? null : Number(spreadBps.toFixed(6)),
+    tradeImbalance: totalAggressiveVolume > 0
+      ? Number(((aggressiveBuyVolume - aggressiveSellVolume) / totalAggressiveVolume).toFixed(6))
+      : null,
+    tradeCount: trades.length,
+  };
+}
+
+export async function fetchCoinbaseLivePrice(product: string) {
+  return (await fetchCoinbaseLiveMarketSample(product))?.price ?? null;
 }
 
 async function fetchCoinbasePriceEntry(product: string) {
