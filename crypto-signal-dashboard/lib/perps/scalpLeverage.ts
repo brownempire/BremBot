@@ -3,6 +3,7 @@ import type { ScalpEntryPath } from "@/lib/decision/learningTypes";
 export const SCALP_MINIMUM_LEVERAGE = 25;
 export const SCALP_NORMAL_MAXIMUM_LEVERAGE = 40;
 export const SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE = 50;
+export const SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE = 0.88;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -18,7 +19,7 @@ export function isExceptionalScalpLeverageSetup(input: {
   volumeRatio: number | null;
 }) {
   const scoreQualified = input.confidence >= 0.85
-    && input.priceActionScore >= 0.9;
+    && input.priceActionScore >= SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE;
   if (!scoreQualified) return false;
 
   if (input.entryPath === "reversal" || input.entryPath === "range-reversal") {

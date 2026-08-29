@@ -18,9 +18,11 @@ import {
   resolveProfitLockPositionProvenance,
   resolveRevalidatedScalpEntryPath,
   resolveScalpProbationCollateralPercent,
+  resolveScalpNextCandleConfirmationDeadline,
   runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl,
   runWithRenewingAutonomousMonitorLease,
   SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+  SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS,
   SCALP_SIGNAL_COOLDOWN_SECONDS,
   type AutonomousMonitorLeaseGuard,
   type AutonomousMonitorLeaseStore,
@@ -146,6 +148,12 @@ const runAutonomousPerpsMonitor = (
       message: "No pending recovery.",
     }),
     listPendingScalpProtectionRecoveryWallets: async () => [],
+    monitorScalpEntryPoint: (options) => monitorScalpOneSecondEntryPoint({
+      ...options,
+      // Historical fixtures exercise the production monitor behavior without
+      // binding their archived candle timestamps to the wall clock.
+      deadlineAt: undefined,
+    }),
     fetchLivePrice: async (product) => latestFetchedPriceByProduct.get(product) ?? null,
     getProfitLockPositionProvenance: async (address, positionPubkey) => {
       const configs = await overrides.listConfigs?.() ?? [];
@@ -404,7 +412,7 @@ function qualifyingRangeLearningProfile() {
   return profile;
 }
 
-test("enabled exceptional liquidity-sweep layer still requires prior-candle persistence", () => {
+test("enabled exceptional liquidity-sweep layer still respects the exceptional ADX ceiling", () => {
   const points = exceptionalBullishSweepPoints();
   const priceAction = analyzeScalpPriceAction(points, DEFAULT_SCALP_LEARNING_PROFILE);
   const signal = detectAdaptiveScalpSignal({
@@ -423,7 +431,7 @@ test("enabled exceptional liquidity-sweep layer still requires prior-candle pers
   assert.equal(signal, null);
 });
 
-test("enabled exceptional layer applies the same persistence rule to bearish sweeps", () => {
+test("a completed exceptional bearish sweep arms next-candle live confirmation", () => {
   const points = exceptionalBullishSweepPoints().map((point) => ({
     ...point,
     v: 200 - point.v,
@@ -450,7 +458,9 @@ test("enabled exceptional layer applies the same persistence rule to bearish swe
   assert.equal(priceAction.direction, "bearish");
   assert.equal(priceAction.setupType, "liquidity-sweep");
   assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
-  assert.equal(signal, null);
+  assert.ok(signal);
+  assert.equal(signal.direction, "bearish");
+  assert.ok(signal.priceActionTags.includes("NEXT_CANDLE_10S_CONFIRMATION_REQUIRED"));
 });
 
 test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
@@ -480,13 +490,13 @@ test("ADX above 40 still rejects a non-exceptional confirmed reversal", () => {
     profile,
   });
 
-  assert.equal(priceAction.strong, false);
+  assert.equal(priceAction.strong, true);
   assert.equal(priceAction.confirmed, true);
   assert.ok(priceAction.score < SCALP_EXCEPTIONAL_REVERSAL_SCORE);
   assert.equal(signal, null);
 });
 
-test("a persisted reversal at the ADX 40 ceiling passes the new safety layer", () => {
+test("a completed reversal signal candle at the ADX 40 ceiling passes the safety layer", () => {
   const priceAction = analyzeScalpPriceAction(exceptionalBullishSweepPoints(), DEFAULT_SCALP_LEARNING_PROFILE);
   const safety = evaluateScalpReversalSafety({
     priceAction,
@@ -503,7 +513,7 @@ test("a persisted reversal at the ADX 40 ceiling passes the new safety layer", (
   assert.deepEqual(safety.reasons, []);
 });
 
-test("a profitable opposite-side scalp cannot bypass missing structural persistence", () => {
+test("a profitable opposite-side scalp cannot bypass the exceptional ADX ceiling", () => {
   const points = exceptionalBullishSweepPoints();
   const latestTimestamp = points.at(-1)!.t;
   const signal = detectAdaptiveScalpSignal({
@@ -617,7 +627,8 @@ test("pre-submit revalidation accepts a same-direction path transition but rejec
       ...breakout!,
       priceActionTags: [
         "INDICATORS_CONFIRMED_TREND_CONTINUATION",
-        "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+        "SIGNAL_CANDLE_CONFIRMED",
+        "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
         "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
         "CONTINUATION_CONFIRMATION_CONSENSUS",
       ],
@@ -687,6 +698,32 @@ test("one-second entry evaluation requires direction confirmation without chasin
   assert.equal(triggered.triggered, true);
   assert.equal(chasing.triggered, false);
   assert.equal(chasing.invalidated, false);
+});
+
+test("next-candle confirmation is restricted to its first ten seconds", async () => {
+  const signalCandleStartedAt = 1_785_600_000_000;
+  const deadline = resolveScalpNextCandleConfirmationDeadline(signalCandleStartedAt);
+  assert.equal(
+    deadline,
+    signalCandleStartedAt + 60_000 + SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS
+  );
+
+  let fetchCalls = 0;
+  const result = await monitorScalpOneSecondEntryPoint({
+    side: "long",
+    referencePrice: 100,
+    atrPercent: 0.1,
+    fetchPrice: async () => {
+      fetchCalls += 1;
+      return 100.01;
+    },
+    deadlineAt: deadline,
+    now: () => deadline + 1,
+  });
+
+  assert.equal(result.status, "expired");
+  assert.equal(result.samples, 0);
+  assert.equal(fetchCalls, 0);
 });
 
 test("one-second entry monitor requires three confirming samples instead of entering on one tick", async () => {
@@ -1048,11 +1085,11 @@ test("a one-second entry signal is followed by final one-minute confirmation bef
     getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
     fetchCandles: async () => {
       candleReads += 1;
-      events.push(candleReads === 1 ? "one-minute-context" : "one-minute-final-confirmation");
+      events.push(candleReads === 1 ? "signal-candle-context" : "signal-candle-final-revalidation");
       return points;
     },
     monitorScalpEntryPoint: async (options) => {
-      events.push("one-second-entry-trigger");
+      events.push("next-candle-10s-trigger");
       return {
         status: "triggered",
         price: options.referencePrice + 0.01,
@@ -1087,17 +1124,17 @@ test("a one-second entry signal is followed by final one-minute confirmation bef
 
   assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
   assert.deepEqual(events, [
-    "one-minute-context",
-    "one-second-entry-trigger",
-    "one-minute-final-confirmation",
+    "signal-candle-context",
+    "next-candle-10s-trigger",
+    "signal-candle-final-revalidation",
     "final-live-price",
     "route",
   ]);
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(routed?.marketContext?.spotPrice, points.at(-1)!.v + 0.01);
-  assert.ok(routed?.strategyContext?.priceActionTags?.includes("ONE_SECOND_ENTRY_TRIGGER"));
-  assert.ok(routed?.strategyContext?.priceActionTags?.includes("ONE_MINUTE_FINAL_CONFIRMATION"));
-  assert.match(routed?.summary ?? "", /one-second entry trigger.*final one-minute confirmation passed/i);
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("NEXT_CANDLE_10S_CONFIRMED"));
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("SIGNAL_CANDLE_FINAL_REVALIDATION"));
+  assert.match(routed?.summary ?? "", /signal candle and next-candle 10-second confirmation passed/i);
 });
 
 test("a one-second entry signal cannot route when final one-minute confirmation fails", async () => {

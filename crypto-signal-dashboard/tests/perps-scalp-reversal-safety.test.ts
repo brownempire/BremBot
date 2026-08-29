@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
+  SCALP_STRONG_REVERSAL_SCORE,
   evaluateScalpReversalSafety,
   type ScalpPriceAction,
 } from "../lib/perps/scalpEngine";
@@ -14,7 +15,7 @@ function priceAction(direction: "bullish" | "bearish", score: number, confirmed:
     direction,
     setupType: "liquidity-sweep",
     score,
-    strong: score >= 0.856,
+    strong: score >= SCALP_STRONG_REVERSAL_SCORE,
     confirmed,
     tags: ["PRICE_LIQUIDITY_SWEEP_RECLAIM", "PRICE_RECLAIM", "PRICE_MOMENTUM_TURN"],
     sweepPercent: 0.1,
@@ -45,7 +46,7 @@ test("the live exceptional-reversal layer is enabled", () => {
   assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, true);
 });
 
-test("today's losing long is rejected by persistence, volume, and directional contradiction", () => {
+test("today's losing long is rejected by volume and directional contradiction", () => {
   const result = evaluateScalpReversalSafety({
     priceAction: priceAction("bullish", 1, true),
     previousPriceAction: priceAction("bullish", 1, false),
@@ -64,12 +65,12 @@ test("today's losing long is rejected by persistence, volume, and directional co
   });
 
   assert.equal(result.qualified, false);
-  assert.match(result.reasons.join(" "), /two completed candles/);
+  assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
   assert.match(result.reasons.join(" "), /volume/i);
   assert.match(result.reasons.join(" "), /both oppose/i);
 });
 
-test("today's losing short is rejected by persistence, ADX, volume, and bullish contradiction", () => {
+test("today's losing short is rejected by ADX, volume, and bullish contradiction", () => {
   const result = evaluateScalpReversalSafety({
     priceAction: priceAction("bearish", 0.96, true),
     previousPriceAction: priceAction("bearish", 0.76, false),
@@ -88,7 +89,7 @@ test("today's losing short is rejected by persistence, ADX, volume, and bullish 
   });
 
   assert.equal(result.qualified, false);
-  assert.match(result.reasons.join(" "), /two completed candles/);
+  assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
   assert.match(result.reasons.join(" "), /ADX/);
   assert.match(result.reasons.join(" "), /volume/i);
   assert.match(result.reasons.join(" "), /both oppose/i);
@@ -113,16 +114,16 @@ test("the third pre-v7 short loss is rejected because bullish EMA/DMI and thin v
   });
 
   assert.equal(result.qualified, false);
-  assert.match(result.reasons.join(" "), /two completed candles/);
+  assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
   assert.match(result.reasons.join(" "), /volume/i);
   assert.match(result.reasons.join(" "), /both oppose/i);
 });
 
-test("a persisted, liquid, directionally confirmed reversal can pass safety diagnostics", () => {
+test("one completed, liquid, directionally confirmed reversal candle can arm live confirmation", () => {
   const current = priceAction("bullish", 0.82, true);
   const result = evaluateScalpReversalSafety({
     priceAction: current,
-    previousPriceAction: { ...current, score: 0.7 },
+    previousPriceAction: { ...current, score: 0.7, confirmed: false },
     indicators: baseIndicators,
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
   });

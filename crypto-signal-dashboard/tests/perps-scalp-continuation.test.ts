@@ -3,11 +3,16 @@ import test from "node:test";
 
 import {
   DEFAULT_SCALP_LEARNING_PROFILE,
+  SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE,
+  SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE,
   SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
+  SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE,
   SCALP_CONTINUATION_LIVE_ENABLED,
   SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_RANGE_REVERSAL_LIVE_ENABLED,
   SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE,
+  SCALP_EXCEPTIONAL_REVERSAL_SCORE,
+  SCALP_STRONG_REVERSAL_SCORE,
   SCALP_REVERSAL_LIVE_ENABLED,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
   classifyScalpMarketRegime,
@@ -118,12 +123,18 @@ test("multi-horizon regime classification recognizes a 0.62% move instead of cal
   assert.ok(regime.horizons.every((horizon) => horizon.atrPercent > 0));
 });
 
-test("continuation execution uses a 0.64 current floor and 0.58 prior-candle persistence", () => {
+test("operator-selected scalp score rails are active", () => {
+  assert.equal(SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE, 0.58);
   assert.equal(DEFAULT_SCALP_LEARNING_PROFILE.minimumPriceActionScore, 0.58);
-  assert.equal(SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE, 0.64);
+  assert.equal(SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE, 0.6);
+  assert.equal(SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE, 0.68);
+  assert.equal(SCALP_STRONG_REVERSAL_SCORE, 0.77);
+  assert.equal(DEFAULT_SCALP_LEARNING_PROFILE.strongReversalScore, 0.77);
+  assert.equal(SCALP_EXCEPTIONAL_REVERSAL_SCORE, 0.88);
+  assert.equal(SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE, 0.68);
 
   const belowFloor = evaluateScalpTrendContinuation({
-    priceAction: { ...confirmedBullishPriceAction, score: 0.62 },
+    priceAction: { ...confirmedBullishPriceAction, score: 0.59 },
     previousPriceAction: confirmedBullishPriceAction,
     points: pullbackRetestCandles(),
     trendBias: "bullish",
@@ -132,10 +143,10 @@ test("continuation execution uses a 0.64 current floor and 0.58 prior-candle per
     regime: bullishRegime,
   });
   assert.equal(belowFloor.qualified, false);
-  assert.match(belowFloor.reasons.join(" "), /0\.62 is below.*0\.64/);
+  assert.match(belowFloor.reasons.join(" "), /0\.59 is below.*0\.60/);
 
   const improvingCandidate = evaluateScalpTrendContinuation({
-    priceAction: { ...confirmedBullishPriceAction, score: 0.64 },
+    priceAction: { ...confirmedBullishPriceAction, score: 0.6 },
     previousPriceAction: { ...confirmedBullishPriceAction, score: 0.58 },
     points: pullbackRetestCandles(),
     trendBias: "bullish",
@@ -145,7 +156,7 @@ test("continuation execution uses a 0.64 current floor and 0.58 prior-candle per
   });
   assert.equal(improvingCandidate.qualified, true);
   assert.equal(evaluateScalpTrendContinuation({
-    priceAction: { ...confirmedBullishPriceAction, score: 0.64 },
+    priceAction: { ...confirmedBullishPriceAction, score: 0.6 },
     previousPriceAction: { ...confirmedBullishPriceAction, score: 0.58 },
     points: pullbackRetestCandles(),
     trendBias: "bullish",
@@ -154,7 +165,7 @@ test("continuation execution uses a 0.64 current floor and 0.58 prior-candle per
     regime: bullishRegime,
   }).qualified, true, "the learned reversal score must not silently raise the continuation floor");
 
-  const unconfirmedPriorCandle = evaluateScalpTrendContinuation({
+  const unconfirmedPriorCandleIsReplacedByLiveConfirmation = evaluateScalpTrendContinuation({
     priceAction: confirmedBullishPriceAction,
     previousPriceAction: { ...confirmedBullishPriceAction, confirmed: false },
     points: pullbackRetestCandles(),
@@ -163,8 +174,7 @@ test("continuation execution uses a 0.64 current floor and 0.58 prior-candle per
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
     regime: bullishRegime,
   });
-  assert.equal(unconfirmedPriorCandle.qualified, false);
-  assert.match(unconfirmedPriorCandle.reasons.join(" "), /two completed candles/);
+  assert.equal(unconfirmedPriorCandleIsReplacedByLiveConfirmation.qualified, true);
 });
 
 test("every independently confirmed scalp path is authorized for live routing", () => {
@@ -226,7 +236,7 @@ test("a continuation uses three-of-four indicator consensus plus hard structural
   assert.match(evaluate(confirmedBullishIndicators, candlesFromCloses(Array.from({ length: 16 }, (_, index) => 100 + index * 0.03))).reasons.join(" "), /pullback/);
 });
 
-test("the two post-v7 losing continuations remain blocked by the live floor and persistence", () => {
+test("the two post-v7 losing continuations remain blocked by missing pullback structure", () => {
   for (const [score, netMove] of [[0.62, 5.7], [0.6, 3.44]] as const) {
     const points = trendingCandles(netMove);
     const regime = classifyScalpMarketRegime(points);
@@ -243,8 +253,8 @@ test("the two post-v7 losing continuations remain blocked by the live floor and 
     assert.equal(regime.exhausted, true);
     assert.ok(regime.netMove145mPercent > SCALP_MAX_145M_NET_OR_RANGE_PERCENT);
     assert.equal(evaluation.qualified, false);
-    assert.match(evaluation.reasons.join(" "), /0\.64/);
-    assert.match(evaluation.reasons.join(" "), /two completed candles/);
+    assert.match(evaluation.reasons.join(" "), /pullback/i);
+    assert.doesNotMatch(evaluation.reasons.join(" "), /two completed candles/);
     assert.doesNotMatch(evaluation.reasons.join(" "), /exhaustion/);
   }
 });
@@ -276,7 +286,7 @@ test("a genuine breakout, retest, and resumption emits an independently tagged s
   assert.equal(structural.direction, "bullish");
   assert.ok(structural.tags.includes("PRICE_BREAKOUT_RETEST"));
   assert.ok(structural.tags.includes("BREAKOUT_ATR_CONFIRMED"));
-  assert.ok(structural.score >= 0.72 && structural.score <= 0.86);
+  assert.ok(structural.score >= 0.68 && structural.score <= 0.86);
   const wideRangeStructural = evaluateScalpBreakoutRetest({
     points,
     indicators: confirmedBullishIndicators,

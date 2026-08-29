@@ -70,7 +70,7 @@ test("scalp chart snapshot uses the live indicator periods and exposes a failed 
   assert.equal(snapshot.thresholds.longRsiMaximum, profile.longRsiMaximum);
   assert.equal(snapshot.thresholds.maximumAdx, profile.maximumAdx);
   assert.equal(snapshot.thresholds.exceptionalReversalBypassEnabled, true);
-  assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.64);
+  assert.equal(snapshot.thresholds.minimumContinuationPriceActionScore, 0.6);
   assert.equal(snapshot.thresholds.continuationLongBollingerMaximum, 0.72);
   assert.equal(snapshot.thresholds.continuationShortBollingerMinimum, 0.28);
   assert.equal(snapshot.thresholds.maximum145mNetOrRangePercent, 2);

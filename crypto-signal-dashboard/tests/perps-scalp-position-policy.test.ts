@@ -5,6 +5,7 @@ import type { JupiterPerpsPosition } from "../lib/jupiterPerps";
 import {
   evaluateScalpPositionPolicy,
   SCALP_MAX_CONCURRENT_POSITIONS,
+  SCALP_REVERSAL_MINIMUM_PRICE_ACTION_SCORE,
 } from "../lib/perps/scalpPositionPolicy";
 
 function position(side: "long" | "short", unrealizedPnl: number, accountRef = `position-${side}`): JupiterPerpsPosition {
@@ -71,6 +72,7 @@ test("a qualifying opposite scalp can coexist with one independently managed pos
 });
 
 test("exceptional opposite scalp reverses only when projected economics justify replacement", () => {
+  assert.equal(SCALP_REVERSAL_MINIMUM_PRICE_ACTION_SCORE, 0.88);
   const reversal = evaluateScalpPositionPolicy({
     openPositions: [position("short", -1.5)],
     ...exceptionalLong,

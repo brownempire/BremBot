@@ -188,7 +188,7 @@ function historicalMarkers(
       confidence: 0,
       kind: candidate.executionId
         ? "executed"
-        : candidate.tags.includes("ONE_MINUTE_FINAL_CONFIRMATION")
+        : candidate.tags.includes("NEXT_CANDLE_10S_CONFIRMED")
           ? "confirmed"
           : "candidate",
       profitableProbability: candidate.prediction
@@ -308,8 +308,9 @@ export function buildScalpAgentOverlaySnapshot(input: {
     headline = "Scalp profile validation paused";
     reasons.push(input.profile.validation.reasons[0] ?? "The learned profile has not passed loss-history validation.");
   } else if (liveSignal) {
-    state = "ready";
-    headline = `${liveSignal.direction === "bullish" ? "Bullish" : "Bearish"} ${liveSignal.setupType.replace(/-/g, " ")} ready`;
+    state = "watching";
+    headline = `${liveSignal.direction === "bullish" ? "Bullish" : "Bearish"} ${liveSignal.setupType.replace(/-/g, " ")} candidate`;
+    reasons.push("The signal candle qualified; the first 10 seconds of the next candle must confirm its direction before entry.");
   } else if (rawSignal && input.recentClosedTrade) {
     state = "blocked";
     headline = "Qualifying setup is in cooldown";
@@ -336,7 +337,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
         : `outcome learner · ${input.profile.outcomeModel.labeledSampleCount}/${input.profile.outcomeModel.retrainBatchSize} labels`
     : "outcome learner initializing";
   const detail = signal
-    ? `Setup score ${signal.priceActionScore.toFixed(2)} · detector heuristic ${(signal.confidence * 100).toFixed(0)}%${state === "ready" ? " · eligible" : " · blocked"} · ${modelStatus}`
+    ? `Setup score ${signal.priceActionScore.toFixed(2)} · detector heuristic ${(signal.confidence * 100).toFixed(0)}% · awaiting next-candle confirmation · ${modelStatus}`
     : `Price action ${priceAction.score.toFixed(2)} · ${getScalpTrendBias(input.points)} market · ${modelStatus}`;
 
   return {

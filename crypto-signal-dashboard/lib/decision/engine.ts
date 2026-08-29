@@ -8,6 +8,7 @@ import type {
 } from "@/lib/decision/types";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import {
+  SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE,
   SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE,
   SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
@@ -57,7 +58,8 @@ function resolveScalpDecisionPath(tags: Set<string>): ScalpDecisionPath {
 function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<string>) {
   if (path === "continuation") {
     return includesAll(tags, [
-      "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+      "SIGNAL_CANDLE_CONFIRMED",
+      "NEXT_CANDLE_10S_CONFIRMED",
       "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
       "CONTINUATION_CONFIRMATION_CONSENSUS",
       "SCALP_EXHAUSTION_GUARD_PASSED",
@@ -65,6 +67,7 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   }
   if (path === "breakout-retest") {
     return includesAll(tags, [
+      "NEXT_CANDLE_10S_CONFIRMED",
       "PRICE_BREAKOUT",
       "PRICE_BREAKOUT_RETEST",
       "PRICE_BREAKOUT_RESUMPTION",
@@ -74,6 +77,7 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   }
   if (path === "range-reversal") {
     return includesAll(tags, [
+      "NEXT_CANDLE_10S_CONFIRMED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
       "RANGE_RSI_MACD_TURN",
@@ -83,7 +87,8 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   }
   if (path === "reversal") {
     return includesAll(tags, [
-      "REVERSAL_TWO_CANDLE_CONFIRMATION",
+      "SIGNAL_CANDLE_CONFIRMED",
+      "NEXT_CANDLE_10S_CONFIRMED",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ]);
   }
@@ -257,7 +262,7 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
       ? SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE
       : entryPath === "breakout-retest"
         ? SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE
-        : Math.max(0.58, learningProfile?.scalpProfile?.minimumPriceActionScore ?? 0.58);
+        : SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE;
     const scoreQualified = (context?.priceActionScore ?? 0) >= minimumPathScore;
     // Scalp leverage is an execution policy, independent from legacy Smart
     // learning-profile ranges that may still be persisted as 2-20x.

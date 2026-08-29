@@ -146,7 +146,8 @@ const PROFIT_LOCK_STOP_CLAIM_TTL_MS = 7 * 24 * 60 * 60_000;
 const localProfitLockClaims = new Map<string, string>();
 export const SCALP_SIGNAL_COOLDOWN_SECONDS = SCALP_STANDARD_COOLDOWN_SECONDS;
 export const SCALP_ONE_SECOND_ENTRY_INTERVAL_MS = 1_000;
-export const SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS = 30_000;
+export const SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS = 10_000;
+export const SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS = SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS;
 const SCALP_ONE_SECOND_ROUTE_RESERVE_MS = 15_000;
 
 export type ProfitLockSideEffectClaim = {
@@ -975,6 +976,10 @@ export function evaluateScalpAdverseEntryDrift(input: {
 
 export type ScalpOneSecondEntryPointEvaluation = ReturnType<typeof evaluateScalpOneSecondEntryPoint>;
 
+export function resolveScalpNextCandleConfirmationDeadline(signalCandleStartedAt: number) {
+  return signalCandleStartedAt + 60_000 + SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS;
+}
+
 export function evaluateScalpOneSecondEntryPoint(input: {
   side: "long" | "short";
   referencePrice: number;
@@ -1040,6 +1045,7 @@ export async function monitorScalpOneSecondEntryPoint(options: {
     options.deadlineAt ?? Number.POSITIVE_INFINITY,
     startedAt + Math.max(0, options.maxWaitMs ?? SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS)
   );
+  const windowAlreadyClosed = startedAt > deadlineAt;
   let samples = 0;
   let sawUsablePrice = false;
   let lastPrice: number | null = null;
@@ -1118,7 +1124,7 @@ export async function monitorScalpOneSecondEntryPoint(options: {
   }
 
   return {
-    status: sawUsablePrice ? "expired" : "unavailable",
+    status: windowAlreadyClosed || sawUsablePrice ? "expired" : "unavailable",
     price: lastPrice,
     observedAt: lastObservedAt,
     samples,
@@ -2303,9 +2309,13 @@ export async function runAutonomousPerpsMonitor(
       let oneSecondEntryPoint: ScalpOneSecondEntryMonitorResult | null = null;
       if (strategyClass === "scalp" && scalpEntryPath) {
         const completedCandleEntryReference = entryPrice;
+        const signalCandleStartedAt = scalpPoints.at(-1)?.t ?? 0;
         const routeBudgetDeadline = Date.parse(startedAt)
           + 55_000
           - SCALP_ONE_SECOND_ROUTE_RESERVE_MS;
+        const nextCandleConfirmationDeadline = resolveScalpNextCandleConfirmationDeadline(
+          signalCandleStartedAt
+        );
         oneSecondEntryPoint = await deps.monitorScalpEntryPoint({
           side,
           referencePrice: completedCandleEntryReference,
@@ -2314,10 +2324,9 @@ export async function runAutonomousPerpsMonitor(
           fetchSample: overrides.fetchLivePrice && !overrides.fetchLiveSample
             ? undefined
             : () => deps.fetchLiveSample(`${asset}-USD`),
-          // A signal near a candle boundary still receives the full live
-          // persistence window. The completed-candle refetch below determines
-          // which minute is the authoritative final confirmation.
-          deadlineAt: routeBudgetDeadline,
+          // Replace the former second completed-candle requirement with the
+          // first ten live seconds of the immediately following candle.
+          deadlineAt: Math.min(routeBudgetDeadline, nextCandleConfirmationDeadline),
           maxWaitMs: SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS,
           intervalMs: SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
           assertActive: leaseGuard?.assertOwned,
@@ -2327,8 +2336,8 @@ export async function runAutonomousPerpsMonitor(
           const reason = oneSecondEntryPoint.status === "invalidated" && evaluation
             ? `The one-second Coinbase entry monitor observed a ${evaluation.adverseMovePercent.toFixed(3)}% counter-directional move beyond its ${evaluation.tolerancePercent.toFixed(3)}% ATR-relative limit.`
             : oneSecondEntryPoint.status === "unavailable"
-              ? "The one-second Coinbase entry monitor could not obtain a usable live price before final one-minute confirmation."
-              : "No direction-confirming one-second entry point appeared before the live confirmation window expired.";
+              ? "The one-second Coinbase entry monitor could not obtain a usable live price during the next candle's 10-second confirmation window."
+              : "The next candle did not confirm the completed signal candle during its first 10 seconds.";
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
           results.push(skip(
             config,
@@ -2344,9 +2353,10 @@ export async function runAutonomousPerpsMonitor(
         }
         entryPrice = oneSecondEntryPoint.price;
 
-        // The live tick originates the entry. Completed one-minute candles are
-        // fetched only after that trigger and remain the authoritative final
-        // strategy confirmation before any order can be routed.
+        // The completed signal candle establishes the setup and the next
+        // candle's live 10-second window establishes directional persistence.
+        // Refetch completed candles after the trigger to ensure the originating
+        // setup still resolves to the same direction and an authorized path.
         let freshPoints: PricePoint[];
         try {
           freshPoints = await deps.fetchCandles(
@@ -2442,8 +2452,8 @@ export async function runAutonomousPerpsMonitor(
         });
         if (!finalEntryPoint.triggered) {
           const reason = finalEntryPoint.invalidated
-            ? `The live Coinbase price moved ${finalEntryPoint.adverseMovePercent.toFixed(3)}% against the one-second signal before final one-minute confirmation, exceeding the ${finalEntryPoint.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`
-            : `The live Coinbase price left the direction-confirming ${finalEntryPoint.tolerancePercent.toFixed(3)}% entry band before final one-minute confirmation completed.`;
+            ? `The live Coinbase price moved ${finalEntryPoint.adverseMovePercent.toFixed(3)}% against the signal during next-candle confirmation, exceeding the ${finalEntryPoint.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`
+            : `The live Coinbase price left the direction-confirming ${finalEntryPoint.tolerancePercent.toFixed(3)}% entry band before submission.`;
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
           results.push(skip(config, asset, "SCALP_ONE_SECOND_ENTRY_MOVED", reason));
           continue;
@@ -2453,8 +2463,8 @@ export async function runAutonomousPerpsMonitor(
         routingIndicatorScore = scoreIndicatorSnapshot(freshIndicators, signal.direction, indicatorSettings);
         const confirmedTags = [
           ...freshEvaluation.signal!.priceActionTags,
-          "ONE_SECOND_ENTRY_TRIGGER",
-          "ONE_MINUTE_FINAL_CONFIRMATION",
+          "NEXT_CANDLE_10S_CONFIRMED",
+          "SIGNAL_CANDLE_FINAL_REVALIDATION",
         ];
         executionScalpMetadata = {
           ...freshEvaluation.signal!,
@@ -2476,8 +2486,8 @@ export async function runAutonomousPerpsMonitor(
             },
             tags: [...new Set([
               ...scalpCandidateRecord.tags,
-              "ONE_SECOND_ENTRY_TRIGGER",
-              "ONE_MINUTE_FINAL_CONFIRMATION",
+              "NEXT_CANDLE_10S_CONFIRMED",
+              "SIGNAL_CANDLE_FINAL_REVALIDATION",
             ])],
           });
         }
@@ -2600,7 +2610,7 @@ export async function runAutonomousPerpsMonitor(
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
       const scalpEntryTimingSummary = strategyClass === "scalp" && oneSecondEntryPoint?.status === "triggered"
-        ? `One-second entry trigger observed at ${new Date(oneSecondEntryPoint.observedAt ?? Date.now()).toISOString()} and final one-minute confirmation passed. `
+        ? `The completed signal candle and next-candle 10-second confirmation passed at ${new Date(oneSecondEntryPoint.observedAt ?? Date.now()).toISOString()}. `
         : "";
       leaseGuard?.assertOwned();
       const routed = await deps.routeSignal(config.walletAddress, {

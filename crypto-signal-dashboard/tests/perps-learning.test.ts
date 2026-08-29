@@ -133,7 +133,7 @@ test("stale scalp policy is refreshed without changing the Smart learning profil
   assert.equal(refreshed.profile.scalpProfile?.minimumConfidence, 0.77);
   assert.equal(refreshed.profile.scalpProfile?.cooldownSeconds, 420);
   assert.equal(refreshed.profile.scalpProfile?.minimumPriceActionScore, 0.58);
-  assert.equal(refreshed.profile.scalpProfile?.strongReversalScore, 0.856);
+  assert.equal(refreshed.profile.scalpProfile?.strongReversalScore, 0.77);
   assert.equal(refreshed.profile.scalpProfile?.longRsiMaximum, 40.62);
   assert.equal(refreshed.profile.scalpProfile?.shortRsiMinimum, 58.85);
   assert.equal(refreshed.profile.scalpProfile?.longBollingerMaximum, 0.14);
@@ -314,8 +314,9 @@ test("operator activation re-enables a conservative winner-derived scalp baselin
     new Date("2026-08-05T05:00:00.000Z"),
     { maximumMinimumPriceActionScore: 0.618 }
   );
-  assert.equal(profile.minimumPriceActionScore, 0.82);
-  assert.equal(cappedProfile.minimumPriceActionScore, 0.618);
+  assert.equal(profile.minimumPriceActionScore, 0.58);
+  assert.equal(cappedProfile.minimumPriceActionScore, 0.58);
+  assert.equal(profile.strongReversalScore, 0.77);
   assert.equal(cappedProfile.validation.passed, true);
 });
 

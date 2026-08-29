@@ -8,7 +8,10 @@ import {
   computeIndicatorSnapshot,
   type IndicatorSnapshot,
 } from "@/lib/signal/indicators";
-import { SCALP_NORMAL_MAXIMUM_LEVERAGE } from "@/lib/perps/scalpLeverage";
+import {
+  SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE,
+  SCALP_NORMAL_MAXIMUM_LEVERAGE,
+} from "@/lib/perps/scalpLeverage";
 import { resolveScalpRolloutTimeout } from "@/lib/perps/scalpTimeoutPolicy";
 
 export {
@@ -21,18 +24,19 @@ export {
 // candidate never starts this timer: the cooldown begins only when an actual
 // scalp trade closes.
 export const SCALP_STANDARD_COOLDOWN_SECONDS = 7 * 60;
-export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = 0.9;
+export const SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE = 0.58;
+export const SCALP_STRONG_REVERSAL_SCORE = 0.77;
+export const SCALP_EXCEPTIONAL_REVERSAL_SCORE = SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE;
 export const SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED: boolean = true;
 export const SCALP_EXCEPTIONAL_REVERSAL_MAX_ADX = 45;
 export const SCALP_REVERSAL_MIN_VOLUME_RATIO = 0.75;
 export const SCALP_REVERSAL_MAX_ADX = 40;
 export const SCALP_CONTINUATION_MIN_ADX = 20;
 export const SCALP_CONTINUATION_MAX_ADX = 45;
-export const SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE = 0.64;
-export const SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE = 0.72;
-export const SCALP_CONTINUATION_PREVIOUS_MIN_PRICE_ACTION_SCORE = 0.58;
+export const SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE = 0.6;
+export const SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE = 0.68;
 export const SCALP_CONTINUATION_MIN_CONFIRMATION_GROUPS = 3;
-export const SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE = 0.72;
+export const SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE = 0.68;
 export const SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE = 0.82;
 export const SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT = 0.45;
 export const SCALP_CONTINUATION_MIN_ATR_PERCENT = 0.1;
@@ -80,8 +84,8 @@ export const DEFAULT_SCALP_LEARNING_PROFILE: ScalpLearningProfile = {
   minimumAtrPercent: 0.02,
   minimumBandwidthPercent: 0.1,
   minimumVolumeRatio: 1.037,
-  minimumPriceActionScore: 0.58,
-  strongReversalScore: 0.856,
+  minimumPriceActionScore: SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE,
+  strongReversalScore: SCALP_STRONG_REVERSAL_SCORE,
   minimumSweepPercent: 0.04,
   minimumReclaimPercent: 0.08,
   setupConfidenceAdjustments: {
@@ -387,6 +391,10 @@ export function normalizeScalpLearningProfileForLiveOperation(
   profile: ScalpLearningProfile
 ): ScalpLearningProfile {
   const scalpProfile = structuredClone(profile);
+  // The operator-selected detector score rails are fixed live policy. Keep
+  // persisted learned profiles from silently restoring older, stricter values.
+  scalpProfile.minimumPriceActionScore = SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE;
+  scalpProfile.strongReversalScore = SCALP_STRONG_REVERSAL_SCORE;
   // A completed range-reversal state emits a fixed 0.82 confidence. Never let
   // learning raise its required confidence above that reachable value.
   const reachableRangeAdjustment = Math.floor(
@@ -458,7 +466,7 @@ export function evaluateScalpReversalSafety(options: {
   indicators: IndicatorSnapshot;
   profile: ScalpLearningProfile;
 }): ScalpReversalSafetyEvaluation {
-  const { priceAction, previousPriceAction, indicators, profile } = options;
+  const { priceAction, indicators, profile } = options;
   const direction = priceAction.direction;
   const reasons: string[] = [];
   const genuineDefinedLevelSweep = priceAction.setupType === "liquidity-sweep"
@@ -470,12 +478,9 @@ export function evaluateScalpReversalSafety(options: {
   if (!genuineDefinedLevelSweep) {
     reasons.push("Live reversal requires a defined-level liquidity sweep, reclaim, directional turn, and two reclaimed closes.");
   }
-  const persisted = direction !== null
-    && priceAction.confirmed
-    && previousPriceAction.direction === direction
-    && previousPriceAction.confirmed
-    && previousPriceAction.score >= profile.minimumPriceActionScore;
-  if (!persisted) reasons.push("The reversal has not remained confirmed across two completed candles.");
+  if (direction === null || !priceAction.confirmed) {
+    reasons.push("The completed signal candle has not confirmed the reversal momentum and reclaim.");
+  }
 
   if (indicators.volumeRatio === null || indicators.volumeRatio < SCALP_REVERSAL_MIN_VOLUME_RATIO) {
     reasons.push(`Closed-candle volume must reach ${SCALP_REVERSAL_MIN_VOLUME_RATIO.toFixed(2)}× its recent average.`);
@@ -509,7 +514,7 @@ export function evaluateScalpTrendContinuation(options: {
   profile: ScalpLearningProfile;
   regime?: ScalpMarketRegime;
 }): ScalpTrendContinuationEvaluation {
-  const { priceAction, previousPriceAction, points, trendBias, indicators, profile } = options;
+  const { priceAction, points, trendBias, indicators } = options;
   const regime = options.regime ?? (points ? classifyScalpMarketRegime(points) : null);
   const direction = priceAction.direction;
   const bullish = direction === "bullish";
@@ -519,11 +524,6 @@ export function evaluateScalpTrendContinuation(options: {
     reasons.push(`Price-action score ${priceAction.score.toFixed(2)} is below the live continuation floor ${continuationFloor.toFixed(2)}.`);
   }
   if (!direction || !priceAction.confirmed) reasons.push("Momentum and reclaim have not confirmed a direction.");
-  const persisted = direction !== null
-    && previousPriceAction?.direction === direction
-    && previousPriceAction.confirmed
-    && previousPriceAction.score >= SCALP_CONTINUATION_PREVIOUS_MIN_PRICE_ACTION_SCORE;
-  if (!persisted) reasons.push("Continuation must persist in the same direction across two completed candles.");
   if (direction && trendBias !== direction) reasons.push(`The ${trendBias} trend does not align with the ${direction} setup.`);
   if (SCALP_EXHAUSTION_BLOCK_ENABLED && regime?.exhausted) {
     reasons.push(`The 145-minute move or range exceeds the ${SCALP_MAX_145M_NET_OR_RANGE_PERCENT.toFixed(0)}% exhaustion limit.`);
@@ -628,7 +628,6 @@ function hasPullbackRetestResumption(
   const recent = points.slice(-10);
   const latest = recent.at(-1)!;
   const previous = recent.at(-2)!;
-  const beforePrevious = recent.at(-3)!;
   const structureWindow = recent.slice(0, -3);
   const swingIndex = structureWindow.reduce((selected, point, index) => {
     const candidate = direction === "bullish" ? candleHigh(point) : candleLow(point);
@@ -657,11 +656,9 @@ function hasPullbackRetestResumption(
     : 0;
   const resumed = direction === "bullish"
     ? latest.v > previous.v
-      && previous.v > beforePrevious.v
       && latest.v > (latest.o ?? previous.v)
       && latest.v > indicators.emaFast
     : latest.v < previous.v
-      && previous.v < beforePrevious.v
       && latest.v < (latest.o ?? previous.v)
       && latest.v < indicators.emaFast;
   return hadCounterCandle && retestedEma && pullbackPercent >= 0.03 && resumed;
@@ -927,11 +924,11 @@ export function analyzeScalpPriceAction(
     : selected.double
       ? "double-reversal"
       : "v-reversal";
-  const reclaimHeld = direction === "bullish"
-    ? recent.slice(-2).every((point) => point.v > referenceLow)
-    : recent.slice(-2).every((point) => point.v < referenceHigh);
+  const signalCandleReclaimed = direction === "bullish"
+    ? latest.v > referenceLow
+    : latest.v < referenceHigh;
   const confirmed = selected.momentum
-    && (!selected.sweep || reclaimHeld);
+    && (!selected.sweep || signalCandleReclaimed);
   return {
     direction,
     setupType,
@@ -1140,7 +1137,8 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
               : "INDICATORS_CONFIRMED_PRICE_ACTION",
         ...(trendContinuation
           ? [
-              "CONTINUATION_TWO_CANDLE_CONFIRMATION",
+              "SIGNAL_CANDLE_CONFIRMED",
+              "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
               "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
               "CONTINUATION_CONFIRMATION_CONSENSUS",
               ...continuationEvaluation.confirmationTags,
@@ -1148,7 +1146,7 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
                 ? ["CONTINUATION_PROBATION"]
                 : ["CONTINUATION_STANDARD"]),
             ]
-          : ["REVERSAL_TWO_CANDLE_CONFIRMATION"]),
+          : ["SIGNAL_CANDLE_CONFIRMED", "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED"]),
         "SCALP_EXHAUSTION_GUARD_PASSED",
       ]
       : [...rangeReversal.tags, "SCALP_EXHAUSTION_GUARD_PASSED"];

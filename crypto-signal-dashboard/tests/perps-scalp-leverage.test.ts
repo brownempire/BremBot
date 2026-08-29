@@ -5,6 +5,7 @@ import {
   isExceptionalScalpLeverageSetup,
   resolveScalpTradeLeverage,
   SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE,
+  SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE,
   SCALP_MINIMUM_LEVERAGE,
   SCALP_NORMAL_MAXIMUM_LEVERAGE,
 } from "../lib/perps/scalpLeverage";
@@ -42,6 +43,7 @@ test("only an independently exceptional setup can enter the 40-50x tier", () => 
   assert.equal(resolveScalpTradeLeverage({ learnedLeverage: 20, learnedFloor: 2, learnedCap: 20, exceptional }), 50);
   assert.equal(resolveScalpTradeLeverage({ learnedLeverage: 20, learnedFloor: 2, learnedCap: 20, exceptional: ordinary }), 40);
   assert.equal(SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE, 50);
+  assert.equal(SCALP_EXCEPTIONAL_MINIMUM_PRICE_ACTION_SCORE, 0.88);
 });
 
 test("exceptional reversal leverage requires complete live ADX and volume evidence", () => {
