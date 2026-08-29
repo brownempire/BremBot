@@ -123,9 +123,9 @@ test("regular Perps and Scalp Agent can be enabled independently", () => {
   assert.equal(isPerpsAutomationEnabled(regularOnly), true);
 });
 
-test("regular Perps and Scalp Agent must share a token when both are enabled", () => {
+test("regular Perps and Scalp Agent can independently select different tokens", () => {
   const input = createInput();
-  assert.equal(perpsAutomationConfigWriteSchema.safeParse({
+  const parsed = perpsAutomationConfigWriteSchema.safeParse({
     ...input,
     settings: {
       ...input.settings,
@@ -137,7 +137,21 @@ test("regular Perps and Scalp Agent must share a token when both are enabled", (
       scalpActiveSlotId: "slot-eth",
     },
     expectedRevision: 0,
-  }).success, false);
+  });
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  assert.equal(getActiveRegularPerpsAsset({
+    ...parsed.data,
+    walletAddress,
+    revision: 1,
+    updatedAt: new Date().toISOString(),
+  }), "SOL");
+  assert.equal(getActiveScalpAsset({
+    ...parsed.data,
+    walletAddress,
+    revision: 1,
+    updatedAt: new Date().toISOString(),
+  }), "ETH");
 });
 
 test("saved zero stop losses migrate to the fixed 25% ROE safeguard", () => {

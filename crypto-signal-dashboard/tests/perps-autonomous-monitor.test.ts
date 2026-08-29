@@ -813,7 +813,12 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
-    settings: { ...base.settings, scalpModeEnabled: true },
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
     params: { ...base.params, trendWindow: 24 },
   });
   const candidates: ScalpCandidate[] = [];
@@ -904,6 +909,98 @@ test("Scalp Agent can route while regular Perps Auto-Trade is off", async () => 
 
   assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
   assert.equal(routedStrategy, "scalp");
+});
+
+test("regular one-minute settings cannot block an independently enabled Scalp Agent", async () => {
+  const points = qualifyingRangePoints();
+  const base = createConfig();
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: "slot-sol",
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+    params: { ...base.params, trendWindow: 1 },
+  });
+  const routedStrategies: Array<PerpsAgentSignal["strategyClass"]> = [];
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async () => points,
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedStrategies.push(signal.strategyClass);
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    getLearningProfile: async () => qualifyingRangeLearningProfile(),
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
+  assert.deepEqual(routedStrategies, ["scalp"]);
+  assert.equal(result.results[1]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN");
+});
+
+test("regular Perps and Scalp Agent scan their independently selected assets", async () => {
+  const base = createConfig();
+  const flatScalpPoints = qualifyingRangePoints().map((point) => ({
+    ...point,
+    o: 100,
+    h: 100.01,
+    l: 99.99,
+    v: 100,
+    volume: 100,
+  }));
+  const smartPoints = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
+    t: 1_784_174_800_000 + index * 60_000,
+    v: value,
+  }));
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: "slot-sol",
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-eth",
+    },
+  });
+  const fetchedProducts: string[] = [];
+  let routedSignal: PerpsAgentSignal | null = null;
+
+  const result = await runAutonomousPerpsMonitor({
+    listConfigs: async () => [config],
+    listSessions: async () => [createSession()],
+    getRuntimeOverride: async () => ({ killSwitchOverride: false, updatedAt: new Date().toISOString() }),
+    fetchCandles: async (product) => {
+      fetchedProducts.push(product);
+      return product === "ETH-USD" ? flatScalpPoints : smartPoints;
+    },
+    fetchSnapshot: async () => ({ positions: [], pendingTriggers: [], recentTrades: [] }),
+    getUsdcBalance: async () => 100,
+    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
+      routedSignal = signal;
+      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    }) as unknown as RouteSignal,
+    reconcileNoOpenPosition: async () => [],
+    getAgentWallet: () => "agent-wallet",
+    isWalletAllowed: () => true,
+    readLastSignal: async () => null,
+    writeLastSignal: async () => undefined,
+  });
+
+  assert.equal(result.results[0]?.asset, "ETH");
+  assert.equal(result.results[1]?.asset, "SOL");
+  assert.ok(fetchedProducts.includes("ETH-USD"));
+  assert.ok(fetchedProducts.includes("SOL-USD"));
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.asset, "SOL");
+  assert.equal((routedSignal as PerpsAgentSignal | null)?.strategyClass, "smart");
 });
 
 test("Scalp Agent off prevents scalp candidates from being read by regular Perps", async () => {
@@ -997,7 +1094,12 @@ test("a rejected scalp route does not write a cooldown cursor", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
-    settings: { ...base.settings, scalpModeEnabled: true },
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
     params: { ...base.params, trendWindow: 24 },
   });
   let routeCalls = 0;
@@ -1031,7 +1133,12 @@ test("an adverse one-second tick vetoes a scalp before final one-minute confirma
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
-    settings: { ...base.settings, scalpModeEnabled: true },
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
     params: { ...base.params, trendWindow: 24 },
   });
   let routeCalls = 0;
@@ -1149,7 +1256,12 @@ test("a one-second entry signal cannot route when final one-minute confirmation 
   }));
   const base = createConfig();
   const config = createConfig({
-    settings: { ...base.settings, scalpModeEnabled: true },
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
     params: { ...base.params, trendWindow: 24 },
   });
   let candleReads = 0;
@@ -1260,7 +1372,13 @@ test("scalp circuit ingests only positions opened after the v8 rollout and block
 test("set-parameters monitoring persists one stable v8 rollout boundary before circuit accounting", async () => {
   const base = createConfig();
   const config = createConfig({
-    settings: { ...base.settings, scalpModeEnabled: true, perpsExecutionMode: "set-parameters" },
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+      perpsExecutionMode: "set-parameters",
+    },
   });
   const points = Array.from({ length: 70 }, (_, index) => ({
     t: 1_784_174_800_000 + index * 60_000,
@@ -1389,7 +1507,14 @@ test("set-parameters scalp learning fails closed when its authoritative updater 
 
 test("scalp admission fails closed when the authoritative circuit outcome batch cannot be persisted", async () => {
   const base = createConfig();
-  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+  });
   let routeCalls = 0;
   const candidates: ScalpCandidate[] = [];
   const result = await runAutonomousPerpsMonitor({
@@ -1445,7 +1570,14 @@ test("scalp admission requires a complete paginated Jupiter trade history", asyn
   ), /only 0 of 3 trades/);
 
   const base = createConfig();
-  const config = createConfig({ settings: { ...base.settings, scalpModeEnabled: true } });
+  const config = createConfig({
+    settings: {
+      ...base.settings,
+      perpsActiveSlotId: null,
+      scalpModeEnabled: true,
+      scalpActiveSlotId: "slot-sol",
+    },
+  });
   let routed = 0;
   let requiredCompleteHistory = false;
   const result = await runAutonomousPerpsMonitor({
@@ -1740,7 +1872,7 @@ test("a successfully taken smart trade leaves Scalp Mode enabled", async () => {
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
+  assert.ok(result.results.some((item) => item.status === "executed"), JSON.stringify(result.results));
   assert.equal(disabledWallet, null);
   assert.equal(routedStrategy, "smart");
 });
@@ -1793,7 +1925,7 @@ test("a stale v8 direction experiment cannot suppress an otherwise eligible Smar
     },
   });
 
-  assert.equal(result.results[0]?.status, "executed");
+  assert.ok(result.results.some((item) => item.status === "executed"), JSON.stringify(result.results));
   assert.equal(routeCalls, 1);
   assert.equal(disableCalls, 0);
   assert.equal(cancelCalls, 1);
@@ -1832,8 +1964,7 @@ test("a generated smart signal that is skipped leaves Scalp Mode enabled", async
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "skipped");
-  assert.equal(result.results[0]?.code, "DECISION_LAYER_SKIP");
+  assert.ok(result.results.some((item) => item.code === "DECISION_LAYER_SKIP"), JSON.stringify(result.results));
   assert.equal(disableCalls, 0);
 });
 
@@ -1870,12 +2001,12 @@ test("a rejected Smart signal cursor cannot start a cooldown", async () => {
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.status, "executed");
+  assert.ok(result.results.some((item) => item.status === "executed"), JSON.stringify(result.results));
   assert.equal(routeCalls, 1);
   assert.equal(disableCalls, 0);
 });
 
-test("a completed trade close starts the shared seven-minute Smart and scalp cooldown", async () => {
+test("the Scalp Agent post-close cooldown cannot block regular Perps", async () => {
   let routeCalls = 0;
   const baseTime = 1_784_174_800_000;
   const points = [100, 100.2, 100.4, 100.8, 101.4, 102].map((value, index) => ({
@@ -1908,9 +2039,8 @@ test("a completed trade close starts the shared seven-minute Smart and scalp coo
     }) as never,
   });
 
-  assert.equal(result.results[0]?.code, "SMART_SIGNAL_COOLDOWN");
-  assert.match(result.results[0]?.message ?? "", /seven-minute post-close cooldown/i);
-  assert.equal(routeCalls, 0);
+  assert.ok(result.results.some((item) => item.status === "executed"), JSON.stringify(result.results));
+  assert.equal(routeCalls, 1);
 });
 
 function createSession(): PerpsAutomationSession {
@@ -3736,7 +3866,7 @@ test("server monitor fails closed when an agent position is already open", async
   });
 
   assert.equal(routeCalls, 0);
-  assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
+  assert.equal(result.results[0]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN");
 });
 
 test("server monitor closes the first-tier profit lock at 10% even with pending TP and SL", async () => {
@@ -4243,14 +4373,14 @@ test("parameter candidates are skipped when the RSI indicator reaches the config
   assert.equal(savedCursor, 0, "a rejected Smart candidate does not start the post-close cooldown");
 });
 
-test("scalp monitor can route an opposite-side entry while independently managing the current position", async () => {
+test("an open position pauses both regular Perps and Scalp entry layers", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
     settings: { ...base.settings, scalpModeEnabled: true },
     params: { ...base.params, trendWindow: 24 },
   });
-  let routedSignal: PerpsAgentSignal | null = null;
+  let routeCalls = 0;
   let closeCalls = 0;
   let prunedPositionPubkeys: string[] = [];
 
@@ -4271,9 +4401,9 @@ test("scalp monitor can route an opposite-side entry while independently managin
       recentTrades: [],
     }),
     getUsdcBalance: async () => 100,
-    routeSignal: (async (_wallet: string, signal: PerpsAgentSignal) => {
-      routedSignal = signal;
-      return { ok: true, message: "submitted", execution: { status: "submitted" } };
+    routeSignal: (async () => {
+      routeCalls += 1;
+      return { ok: true, message: "unexpected" };
     }) as unknown as RouteSignal,
     closePosition: async () => {
       closeCalls += 1;
@@ -4292,12 +4422,9 @@ test("scalp monitor can route an opposite-side entry while independently managin
     writeLastSignal: async () => undefined,
   });
 
-  const routed = routedSignal as PerpsAgentSignal | null;
-  assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results[0]));
-  assert.equal(routed?.strategyClass, "scalp");
-  assert.equal(routed?.direction, "bullish");
-  assert.equal(routed?.marketContext?.hasOpenPosition, true);
-  assert.equal(routed?.marketContext?.allowConcurrentPosition, true);
+  assert.equal(result.results[0]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN", JSON.stringify(result.results[0]));
+  assert.equal(result.results[1]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN", JSON.stringify(result.results[1]));
+  assert.equal(routeCalls, 0);
   assert.equal(closeCalls, 0);
   assert.deepEqual(prunedPositionPubkeys, ["existing-short"]);
 });
@@ -4333,7 +4460,7 @@ test("scalp monitor refuses a second same-side entry instead of merging Jupiter 
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.code, "SAME_SIDE_POSITION_OPEN", JSON.stringify(result.results[0]));
+  assert.equal(result.results[0]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN", JSON.stringify(result.results[0]));
   assert.equal(routeCalls, 0);
 });
 
@@ -4385,7 +4512,7 @@ test("unconfirmed exceptional reversal cannot close an existing position or crea
     writeLastSignal: async () => undefined,
   });
 
-  assert.equal(result.results[0]?.code, "POSITION_ALREADY_OPEN");
+  assert.equal(result.results[0]?.code, "ENTRY_LAYERS_PAUSED_POSITION_OPEN");
   assert.equal(closeCalls, 0);
   assert.equal(routeCalls, 0);
   assert.deepEqual(savedIntents, []);

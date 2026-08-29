@@ -1334,6 +1334,27 @@ function skip(config: PerpsAutomationConfig, asset: "SOL" | "ETH" | "BTC" | null
   return { walletAddress: config.walletAddress, asset, status: "skipped", code, message };
 }
 
+export type AutonomousPerpsLayerTarget = {
+  config: PerpsAutomationConfig;
+  asset: "SOL" | "ETH" | "BTC";
+  layer: "scalp" | "regular";
+};
+
+/**
+ * Build independent scan targets. Scalp runs first so enabling regular Perps
+ * cannot pre-empt a scalp setup; if Scalp does not submit, regular Perps still
+ * gets its own scan in the same cycle. A successful submission pauses the
+ * sibling target through the shared wallet-position admission lock.
+ */
+export function getAutonomousPerpsLayerTargets(config: PerpsAutomationConfig): AutonomousPerpsLayerTarget[] {
+  const scalpAsset = getActiveScalpAsset(config);
+  const regularAsset = getActiveRegularPerpsAsset(config);
+  return [
+    ...(scalpAsset ? [{ config, asset: scalpAsset, layer: "scalp" as const }] : []),
+    ...(regularAsset ? [{ config, asset: regularAsset, layer: "regular" as const }] : []),
+  ];
+}
+
 export async function runAutonomousPerpsMonitor(
   overrides: Partial<MonitorDependencies> = {},
   leaseGuard?: AutonomousMonitorLeaseGuard
@@ -1348,7 +1369,10 @@ export async function runAutonomousPerpsMonitor(
   ]);
   const globalKillSwitch = runtimeOverride.killSwitchOverride ?? getPerpsSessionConfig().globalKillSwitch;
   const enabledConfigs = configs.filter(isPerpsAutomationEnabled);
+  const enabledLayerTargets = enabledConfigs.flatMap(getAutonomousPerpsLayerTargets);
   const results: MonitorExecutionResult[] = [];
+  const entrySubmittedWallets = new Set<string>();
+  const positionManagedWallets = new Set<string>();
 
   // Recovery is independent of entry eligibility. Union durable guards with
   // every configured wallet so disabling/deleting an automation config cannot
@@ -1391,12 +1415,20 @@ export async function runAutonomousPerpsMonitor(
     }
   }
 
-  for (const config of enabledConfigs) {
+  for (const target of enabledLayerTargets) {
     leaseGuard?.assertOwned();
-    const asset = getActivePerpsAsset(config);
-    if (!asset) continue;
-    const regularPerpsLayerEnabled = getActiveRegularPerpsAsset(config) === asset;
-    const scalpAgentLayerEnabled = getActiveScalpAsset(config) === asset;
+    const { config, asset, layer } = target;
+    const regularPerpsLayerEnabled = layer === "regular";
+    const scalpAgentLayerEnabled = layer === "scalp";
+    if (entrySubmittedWallets.has(config.walletAddress)) {
+      results.push(skip(
+        config,
+        asset,
+        "ENTRY_LAYERS_PAUSED_POSITION_OPEN",
+        "The other autonomous Perps layer opened a position earlier in this monitor cycle. Both entry layers remain paused until the wallet is flat."
+      ));
+      continue;
+    }
     const session = getSessionForConfig(config, sessions);
     if (recoveryBlockedWallets.has(config.walletAddress)) continue;
     if (!session || session.sessionState !== "clocked_in") {
@@ -1443,10 +1475,23 @@ export async function runAutonomousPerpsMonitor(
         ));
         continue;
       }
+      if (openPositions.length > 0 && positionManagedWallets.has(config.walletAddress)) {
+        results.push(skip(
+          config,
+          asset,
+          "ENTRY_LAYERS_PAUSED_POSITION_OPEN",
+          "An autonomous Perps position is open. Both regular Perps and Scalp entry layers remain paused until the wallet is flat."
+        ));
+        continue;
+      }
       const activePositionPubkeys = openPositions
         .map((position) => position.accountRef)
         .filter((positionPubkey): positionPubkey is string => Boolean(positionPubkey));
       if (openPositions.length > 0) {
+        // Claim position management for this wallet before any side effect.
+        // If management throws, the sibling entry layer must not retry the
+        // same stop/close operation later in this monitor cycle.
+        positionManagedWallets.add(config.walletAddress);
         await deps.pruneProfitLockStates(config.walletAddress, activePositionPubkeys);
       }
       let prefetchedClosedScalpOutcomes: TradeLearningOutcome[] | null = null;
@@ -1475,13 +1520,11 @@ export async function runAutonomousPerpsMonitor(
         pendingScalpReversal
         && openPositions.some((position) => position.accountRef === pendingScalpReversal?.positionPubkey)
       ) {
-        results.push(skip(
-          config,
-          asset,
-          "SCALP_REVERSAL_CLOSE_PENDING",
-          "The exceptional opposite-side scalp signal submitted a close; the replacement entry will be reconsidered after Jupiter confirms that the original position is gone."
-        ));
-        continue;
+        // Position occupancy is now the only shared entry pause. Retire stale
+        // replacement intents rather than allowing one layer to close or
+        // replace a position while the other layer is paused.
+        await deps.clearPendingScalpReversal(config.walletAddress);
+        pendingScalpReversal = null;
       }
 
       let positionLifecycleBusy = false;
@@ -1829,6 +1872,16 @@ export async function runAutonomousPerpsMonitor(
         });
       }
       if (positionLifecycleBusy) continue;
+      if (openPositions.length > 0) {
+        const profitLockArmed = monitoredPositionMessages.some((item) => item.armed);
+        results.push(skip(
+          config,
+          asset,
+          profitLockArmed ? "POSITION_PROFIT_LOCK_ARMED" : "ENTRY_LAYERS_PAUSED_POSITION_OPEN",
+          `${monitoredPositionMessages.map((item) => item.message).join(" ")} Both regular Perps and Scalp entry layers remain paused until the wallet is flat.`
+        ));
+        continue;
+      }
       if (scalpAgentLayerEnabled) {
         // Scalp v8 circuit accounting and fee estimates must be based on the
         // authoritative, freshly reconciled outcome set. Never admit a new
@@ -1904,7 +1957,10 @@ export async function runAutonomousPerpsMonitor(
       const windowStart = latestTimestamp - effectiveParams.trendWindow * 60_000;
       const windowPoints = points.filter((point) => point.t >= windowStart);
       const scalpPoints = points.slice(-Math.max(SCALP_EXHAUSTION_LOOKBACK_MINUTES, 60));
-      if (windowPoints.length < 3) {
+      const layerHasSufficientMarketData = regularPerpsLayerEnabled
+        ? windowPoints.length >= 3
+        : scalpPoints.length >= 3;
+      if (!layerHasSufficientMarketData) {
         if (monitoredPositionMessages.length > 0) {
           results.push(skip(
             config,
@@ -1916,7 +1972,14 @@ export async function runAutonomousPerpsMonitor(
           ));
           continue;
         }
-        results.push(skip(config, asset, "INSUFFICIENT_MARKET_DATA", "Coinbase did not return enough completed minute candles."));
+        results.push(skip(
+          config,
+          asset,
+          "INSUFFICIENT_MARKET_DATA",
+          regularPerpsLayerEnabled
+            ? `Regular Perps requires at least three completed candles inside its ${effectiveParams.trendWindow}-minute trend window.`
+            : "Scalp Agent did not receive enough completed candles for its independent setup history."
+        ));
         continue;
       }
       const latestClosedOutcome = await deps.getLatestClosedOutcome(config.walletAddress)
@@ -2190,7 +2253,7 @@ export async function runAutonomousPerpsMonitor(
         : smartIndicatorScore!;
       let routingIndicators = indicators;
       let routingIndicatorScore = indicatorScore;
-      if (config.settings.mode === "buy-only" && signal.direction === "bearish") {
+      if (strategyClass === "smart" && config.settings.mode === "buy-only" && signal.direction === "bearish") {
         scalpCandidateRecord = await rejectPersistedScalpCandidate(
           deps,
           scalpCandidateRecord,
@@ -2728,6 +2791,7 @@ export async function runAutonomousPerpsMonitor(
           : routed.message,
         signalId: signal.id,
       });
+      if (routed.ok) entrySubmittedWallets.add(config.walletAddress);
     } catch (error) {
       if (error instanceof AutonomousMonitorLeaseLostError) throw error;
       results.push({

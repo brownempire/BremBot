@@ -44,18 +44,6 @@ export const perpsAutomationSettingsSchema = z.object({
     scalpActiveSlotId,
     scalpModeEnabled: Boolean(scalpActiveSlotId),
   };
-}).superRefine((settings, context) => {
-  if (
-    settings.perpsActiveSlotId
-    && settings.scalpActiveSlotId
-    && settings.perpsActiveSlotId !== settings.scalpActiveSlotId
-  ) {
-    context.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["scalpActiveSlotId"],
-      message: "Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.",
-    });
-  }
 });
 
 export const signalParamsSchema = z.object({

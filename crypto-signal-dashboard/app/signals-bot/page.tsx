@@ -5221,11 +5221,6 @@ function DashboardPage() {
       setAutoTradeSelectorWarning("Only one token can be active for Perps Auto-Trade at a time.");
       return;
     }
-    if (enabled && autoTradeSettings.scalpActiveSlotId && autoTradeSettings.scalpActiveSlotId !== slotId) {
-      setAutoTradeSelectorWarning("Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.");
-      return;
-    }
-
     const nextPerpsActiveSlotId = enabled ? slotId : null;
     const slot = autoTradeSettings.slots.find((item) => item.id === slotId);
     const token = slot ? getAutoTradeTokenOption(slot.token) : null;
@@ -5246,11 +5241,6 @@ function DashboardPage() {
       setAutoTradeSelectorWarning("Only one token can be active for Scalp Agent at a time.");
       return;
     }
-    if (enabled && autoTradeSettings.perpsActiveSlotId && autoTradeSettings.perpsActiveSlotId !== slotId) {
-      setAutoTradeSelectorWarning("Perps Auto-Trade and Scalp Agent must use the same token when both are enabled.");
-      return;
-    }
-
     const scalpActiveSlotId = enabled ? slotId : null;
     persistAutoTradeSettings({
       ...autoTradeSettings,
