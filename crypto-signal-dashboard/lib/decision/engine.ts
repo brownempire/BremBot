@@ -8,9 +8,6 @@ import type {
 } from "@/lib/decision/types";
 import type { DecisionLearningProfile } from "@/lib/decision/learningTypes";
 import {
-  SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE,
-  SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE,
-  SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE,
   SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED,
   SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_MAX_145M_NET_OR_RANGE_PERCENT,
@@ -71,7 +68,7 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
       "PRICE_BREAKOUT",
       "PRICE_BREAKOUT_RETEST",
       "PRICE_BREAKOUT_RESUMPTION",
-      "BREAKOUT_ATR_CONFIRMED",
+      "BREAKOUT_EVIDENCE_CONSENSUS",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ]);
   }
@@ -80,8 +77,9 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
       "NEXT_CANDLE_10S_CONFIRMED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
-      "RANGE_RSI_MACD_TURN",
+      "RANGE_MOMENTUM_TURN",
       "RANGE_CONFIRMING_CANDLE",
+      "RANGE_INDICATOR_SUPPORT",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ]);
   }
@@ -250,20 +248,15 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     const rawConfidence = typeof payload.signalConfidence === "number"
       ? payload.signalConfidence
       : context?.priceActionScore ?? 0;
-    // Detector confidence is intentionally not allowed to inflate a weaker
-    // observed price-action score into a lower risk grade.
-    const confidence = clamp(Math.min(rawConfidence, context?.priceActionScore ?? rawConfidence), 0, 1);
+    // The detector arbiter has already combined path structure and supporting
+    // evidence. Preserve that quality estimate instead of re-scoring it from
+    // one duplicated price-action component.
+    const confidence = clamp(rawConfidence, 0, 1);
     const concurrentPositionAllowed = payload.marketContext.hasOpenPosition
       && payload.marketContext.allowConcurrentPosition === true;
     const pausedExceptionalBypass = context?.indicatorBypass === true
       && !SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED;
     const completeSetupConfirmation = scalpPathHasCompleteConfirmation(entryPath, rawTags);
-    const minimumPathScore = entryPath === "continuation"
-      ? SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE
-      : entryPath === "breakout-retest"
-        ? SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE
-        : SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE;
-    const scoreQualified = (context?.priceActionScore ?? 0) >= minimumPathScore;
     // Scalp leverage is an execution policy, independent from legacy Smart
     // learning-profile ranges that may still be persisted as 2-20x.
     const leverageQualified = payload.requestedTrade.leverage >= SCALP_MINIMUM_LEVERAGE
@@ -296,7 +289,6 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     const shouldTrade = detectorQualified
       && !pausedExceptionalBypass
       && completeSetupConfirmation
-      && scoreQualified
       && leverageQualified
       && volatilityQualified
       && economicsQualified
@@ -320,7 +312,6 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
     }
     if (!detectorQualified) tags.add("scalp-detector-context-required");
     if (!completeSetupConfirmation) tags.add("scalp-setup-confirmation-required");
-    if (!scoreQualified) tags.add("scalp-path-score-veto");
     if (!leverageQualified) tags.add("scalp-leverage-cap-veto");
     if (!volatilityQualified) tags.add("scalp-volatility-veto");
     if (!economicsQualified) tags.add("scalp-post-fee-economics-veto");
@@ -339,10 +330,8 @@ export function evaluateTradeDecision(payload: TradeDecisionPayload, learningPro
         : pausedExceptionalBypass
           ? "The exceptional scalp indicator bypass remains paused."
           : !completeSetupConfirmation
-            ? `The ${entryPath} scalp candidate did not complete its required multi-candle confirmation sequence.`
-            : !scoreQualified
-                ? `The ${entryPath} price-action score did not reach its ${minimumPathScore.toFixed(2)} execution threshold.`
-                : !leverageQualified
+            ? `The ${entryPath} scalp candidate did not complete its required candle-structure and live confirmation sequence.`
+            : !leverageQualified
                   ? `The requested ${payload.requestedTrade.leverage.toFixed(1)}x leverage is outside the independent ${SCALP_MINIMUM_LEVERAGE.toFixed(0)}-${SCALP_EXCEPTIONAL_MAXIMUM_LEVERAGE.toFixed(0)}x scalp range.`
                   : !volatilityQualified
                     ? `The current ${typeof volatility === "number" ? volatility.toFixed(2) : "unknown"}% range exceeds the independent ${volatilityCeiling.toFixed(2)}% scalp regime ceiling.`

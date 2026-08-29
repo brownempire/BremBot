@@ -870,6 +870,9 @@ test("scalp monitor journals the v8 path, uses real indicators, learned risk, an
   assert.equal(labelCalls, 1);
   assert.equal(candidates.at(-1)?.disposition, "accepted");
   assert.equal(candidates.at(-1)?.entryPath, "breakout-retest");
+  assert.equal(candidates.at(-1)?.metrics.shadowLabelVersion, 2);
+  assert.equal(candidates.at(-1)?.metrics.shadowEstimatedFeeRate, 0.00205);
+  assert.ok((candidates.at(-1)?.metrics.shadowTakeProfitMovePercent ?? 0) >= 0.5);
   assert.equal(candidates.at(-1)?.executionId, "execution-v8");
 });
 

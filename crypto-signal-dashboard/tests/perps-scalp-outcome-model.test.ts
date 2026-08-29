@@ -36,6 +36,7 @@ function candidate(index: number, outcomeClass: ScalpOutcomeClass) {
     disposition: index % 3 ? "rejected" : "accepted",
     rejectionReasons: [],
     metrics: {
+      shadowLabelVersion: 2,
       score,
       atrPercent: 0.1 + score * 0.1,
       volatilityPercent: 0.5 + score,

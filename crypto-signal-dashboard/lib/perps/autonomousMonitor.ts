@@ -822,6 +822,9 @@ function scalpCandidateMetrics(
 ) {
   const horizons = evaluation.candidate.regime.horizons;
   const horizon = (minutes: 5 | 15 | 60) => horizons.find((item) => item.minutes === minutes);
+  const atrPercent = indicators.atrPercent ?? 0.18;
+  const shadowAtrMultiplier = evaluation.candidate.path === "reversal"
+    || evaluation.candidate.path === "range-reversal" ? 1.5 : 2;
   return {
     score: evaluation.candidate.score,
     atrPercent: indicators.atrPercent,
@@ -847,8 +850,13 @@ function scalpCandidateMetrics(
     volumeRatio: indicators.volumeRatio,
     bollingerBandwidthPercent: indicators.bollingerBandwidthPercent,
     bollingerPosition: indicators.bollingerPosition,
-    shadowTakeProfitMovePercent: clamp((indicators.atrPercent ?? 0.18) * 1.25, 0.12, 0.8),
-    shadowStopLossMovePercent: clamp((indicators.atrPercent ?? 0.18) * 0.9, 0.1, 0.6),
+    // Shadow candidates use the same minimum target and hard-stop geometry as
+    // a standard 40x live scalp. Accepted candidates are overwritten with the
+    // exact planned leverage/fee-aware trigger distances before routing.
+    shadowLabelVersion: 2,
+    shadowEstimatedFeeRate: ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE,
+    shadowTakeProfitMovePercent: clamp(atrPercent * shadowAtrMultiplier, 0.5, 1),
+    shadowStopLossMovePercent: Number((SCALP_STOP_LOSS_ROE_PERCENT / SCALP_TRADE_LEVERAGE).toFixed(6)),
   };
 }
 

@@ -5,13 +5,13 @@ import type {
   TradeLearningOutcome,
 } from "@/lib/decision/learningTypes";
 
-export const SCALP_OUTCOME_MODEL_VERSION = "scalp-outcomes-v1";
+export const SCALP_OUTCOME_MODEL_VERSION = "scalp-outcomes-v2-fee-aligned";
 export const SCALP_OUTCOME_RETRAIN_BATCH_SIZE = 50;
 export const SCALP_OUTCOME_MINIMUM_CLASS_SAMPLES = 100;
 export const SCALP_OUTCOME_MINIMUM_NEUTRAL_SAMPLES = 20;
 export const SCALP_OUTCOME_STRONG_CLASS_SAMPLES = 200;
-export const SCALP_OUTCOME_MINIMUM_PROFITABLE_PROBABILITY = 0.5;
-export const SCALP_OUTCOME_MAXIMUM_FULL_SL_PROBABILITY = 0.35;
+export const SCALP_OUTCOME_MINIMUM_PROFITABLE_PROBABILITY = 0.7;
+export const SCALP_OUTCOME_MAXIMUM_FULL_SL_PROBABILITY = 0.2;
 
 export function evaluateValidatedScalpOutcomePrediction(input: {
   modelStatus: "insufficient-data" | "shadow" | "validated" | null | undefined;
@@ -134,6 +134,10 @@ function observations(candidates: ScalpCandidate[], outcomes: TradeLearningOutco
   const result: Observation[] = candidates.flatMap((candidate) => {
     const actual = candidate.executionId ? actualByExecution.get(candidate.executionId) : null;
     if (actual) representedExecutions.add(actual.executionId);
+    // V1 rejected-candidate labels used smaller ATR-only barriers than live
+    // execution. Keep actual executed outcomes, but do not train the v2 model
+    // on those incompatible shadow labels.
+    if (!actual && finite(candidate.metrics.shadowLabelVersion) < 2) return [];
     const outcomeClass = actual
       ? classifyExecutedScalpOutcome(actual)
       : candidate.outcomeClass ?? null;
@@ -248,12 +252,14 @@ export function trainScalpOutcomeModel(input: {
 }): OutcomeModel {
   const labeled = observations(input.candidates, input.outcomes);
   const classCounts = counts(labeled);
-  const lastTrainedSampleCount = input.previous?.trainedAt
+  const previousIsCurrent = input.previous?.modelVersion === SCALP_OUTCOME_MODEL_VERSION;
+  const lastTrainedSampleCount = previousIsCurrent && input.previous?.trainedAt
     ? input.previous.labeledSampleCount
     : 0;
   const newLabelsSinceTraining = Math.max(0, labeled.length - lastTrainedSampleCount);
   if (
-    input.previous
+    previousIsCurrent
+    && input.previous
     && !input.force
     && newLabelsSinceTraining < SCALP_OUTCOME_RETRAIN_BATCH_SIZE
   ) return input.previous;

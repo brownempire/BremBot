@@ -46,7 +46,7 @@ test("the live exceptional-reversal layer is enabled", () => {
   assert.equal(SCALP_EXCEPTIONAL_REVERSAL_BYPASS_ENABLED, true);
 });
 
-test("today's losing long is rejected by volume and directional contradiction", () => {
+test("today's losing long is rejected by strong directional contradiction", () => {
   const result = evaluateScalpReversalSafety({
     priceAction: priceAction("bullish", 1, true),
     previousPriceAction: priceAction("bullish", 1, false),
@@ -66,11 +66,10 @@ test("today's losing long is rejected by volume and directional contradiction", 
 
   assert.equal(result.qualified, false);
   assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
-  assert.match(result.reasons.join(" "), /volume/i);
-  assert.match(result.reasons.join(" "), /both oppose/i);
+  assert.match(result.reasons.join(" "), /strongly oppose/i);
 });
 
-test("today's losing short is rejected by ADX, volume, and bullish contradiction", () => {
+test("today's losing short is rejected by strong bullish contradiction", () => {
   const result = evaluateScalpReversalSafety({
     priceAction: priceAction("bearish", 0.96, true),
     previousPriceAction: priceAction("bearish", 0.76, false),
@@ -90,12 +89,10 @@ test("today's losing short is rejected by ADX, volume, and bullish contradiction
 
   assert.equal(result.qualified, false);
   assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
-  assert.match(result.reasons.join(" "), /ADX/);
-  assert.match(result.reasons.join(" "), /volume/i);
-  assert.match(result.reasons.join(" "), /both oppose/i);
+  assert.match(result.reasons.join(" "), /strongly oppose/i);
 });
 
-test("the third pre-v7 short loss is rejected because bullish EMA/DMI and thin volume oppose it", () => {
+test("the third pre-v7 short loss is rejected because bullish EMA/DMI strongly oppose it", () => {
   const result = evaluateScalpReversalSafety({
     priceAction: priceAction("bearish", 0.94, true),
     previousPriceAction: priceAction("bearish", 0.7, false),
@@ -115,8 +112,7 @@ test("the third pre-v7 short loss is rejected because bullish EMA/DMI and thin v
 
   assert.equal(result.qualified, false);
   assert.doesNotMatch(result.reasons.join(" "), /two completed candles/);
-  assert.match(result.reasons.join(" "), /volume/i);
-  assert.match(result.reasons.join(" "), /both oppose/i);
+  assert.match(result.reasons.join(" "), /strongly oppose/i);
 });
 
 test("one completed, liquid, directionally confirmed reversal candle can arm live confirmation", () => {
@@ -131,7 +127,7 @@ test("one completed, liquid, directionally confirmed reversal candle can arm liv
   assert.deepEqual(result, { qualified: true, reasons: [] });
 });
 
-test("v and double pseudo-reversals cannot use the live reversal path without a defined-level sweep", () => {
+test("incomplete v and double reversals cannot use the live reversal path", () => {
   for (const setupType of ["v-reversal", "double-reversal"] as const) {
     const current = { ...priceAction("bullish", 0.9, true), setupType };
     const result = evaluateScalpReversalSafety({
@@ -142,6 +138,29 @@ test("v and double pseudo-reversals cannot use the live reversal path without a 
     });
 
     assert.equal(result.qualified, false);
-    assert.match(result.reasons.join(" "), /defined-level liquidity sweep/);
+    assert.match(result.reasons.join(" "), /completed sweep\/reclaim, double-reversal, or V-reversal structure/);
+  }
+});
+
+test("completed v and double reversals can independently arm live confirmation", () => {
+  const completed = [
+    {
+      setupType: "v-reversal" as const,
+      tags: ["PRICE_RECLAIM", "PRICE_MOMENTUM_TURN", "PRICE_WICK_REJECTION"],
+    },
+    {
+      setupType: "double-reversal" as const,
+      tags: ["PRICE_RECLAIM", "PRICE_MOMENTUM_TURN", "PRICE_DOUBLE_BOTTOM"],
+    },
+  ];
+  for (const structure of completed) {
+    const current = { ...priceAction("bullish", 0.72, true), ...structure };
+    const result = evaluateScalpReversalSafety({
+      priceAction: current,
+      previousPriceAction: { ...current, confirmed: false },
+      indicators: { ...baseIndicators, volumeRatio: 0.2 },
+      profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    });
+    assert.equal(result.qualified, true);
   }
 });

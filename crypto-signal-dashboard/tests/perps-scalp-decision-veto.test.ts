@@ -228,8 +228,9 @@ test("independent scalp veto accepts a statefully confirmed range reversal", () 
       "NEXT_CANDLE_10S_CONFIRMED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
-      "RANGE_RSI_MACD_TURN",
+      "RANGE_MOMENTUM_TURN",
       "RANGE_CONFIRMING_CANDLE",
+      "RANGE_INDICATOR_SUPPORT",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ],
   };
@@ -252,7 +253,7 @@ test("authoritative breakout/retest metadata is not re-vetoed by a duplicate ATR
       "PRICE_BREAKOUT_RETEST",
       "PRICE_BREAKOUT_RESUMPTION",
       "INDICATORS_CONFIRMED_BREAKOUT_RETEST",
-      "BREAKOUT_ATR_CONFIRMED",
+      "BREAKOUT_EVIDENCE_CONSENSUS",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ],
     indicators: {

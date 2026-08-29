@@ -123,7 +123,7 @@ test("multi-horizon regime classification recognizes a 0.62% move instead of cal
   assert.ok(regime.horizons.every((horizon) => horizon.atrPercent > 0));
 });
 
-test("operator-selected scalp score rails are active", () => {
+test("operator-selected scalp score rails remain descriptive without vetoing complete structure", () => {
   assert.equal(SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE, 0.58);
   assert.equal(DEFAULT_SCALP_LEARNING_PROFILE.minimumPriceActionScore, 0.58);
   assert.equal(SCALP_CONTINUATION_MIN_PRICE_ACTION_SCORE, 0.6);
@@ -142,8 +142,8 @@ test("operator-selected scalp score rails are active", () => {
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
     regime: bullishRegime,
   });
-  assert.equal(belowFloor.qualified, false);
-  assert.match(belowFloor.reasons.join(" "), /0\.59 is below.*0\.60/);
+  assert.equal(belowFloor.qualified, true);
+  assert.doesNotMatch(belowFloor.reasons.join(" "), /below.*floor/);
 
   const improvingCandidate = evaluateScalpTrendContinuation({
     priceAction: { ...confirmedBullishPriceAction, score: 0.6 },
@@ -188,7 +188,7 @@ test("every independently confirmed scalp path is authorized for live routing", 
   assert.equal(SCALP_EXHAUSTION_BLOCK_ENABLED, false);
 });
 
-test("a continuation uses three-of-four indicator consensus plus hard structural safety", () => {
+test("a continuation uses two-of-four indicator consensus plus hard structural safety", () => {
   const evaluate = (indicators: IndicatorSnapshot, points = pullbackRetestCandles()) => evaluateScalpTrendContinuation({
     priceAction: confirmedBullishPriceAction,
     previousPriceAction: confirmedBullishPriceAction,
@@ -222,14 +222,26 @@ test("a continuation uses three-of-four indicator consensus plus hard structural
     minusDi: 30,
     macdHistogramChange: -0.01,
   });
-  assert.equal(insufficientConsensus.qualified, false);
-  assert.match(insufficientConsensus.reasons.join(" "), /2 of 4 groups/);
+  assert.equal(insufficientConsensus.qualified, true);
+  assert.equal(insufficientConsensus.confirmationGroupsPassed, 2);
+  const oneGroupOnly = evaluate({
+    ...confirmedBullishIndicators,
+    plusDi: 10,
+    minusDi: 30,
+    macdHistogramChange: -0.01,
+    rsi: 50,
+    bollingerPosition: 0.9,
+    volumeRatio: 0.5,
+  });
+  assert.equal(oneGroupOnly.qualified, false);
+  assert.match(oneGroupOnly.reasons.join(" "), /1 of 4 groups/);
   const materiallyOpposed = evaluate({
     ...confirmedBullishIndicators,
     emaFast: 99.8,
     emaSlow: 100,
     plusDi: 10,
     minusDi: 30,
+    adx: 40,
   });
   assert.equal(materiallyOpposed.qualified, false);
   assert.match(materiallyOpposed.reasons.join(" "), /materially oppose/);
@@ -298,8 +310,9 @@ test("a genuine breakout, retest, and resumption emits an independently tagged s
     indicators: { ...confirmedBullishIndicators, atrPercent: 0.089 },
     regime,
   });
-  assert.equal(thinAtr.qualified, false);
-  assert.match(thinAtr.reasons.join(" "), /0\.09%/);
+  assert.equal(thinAtr.qualified, true);
+  assert.equal(thinAtr.tags.includes("BREAKOUT_ATR_CONFIRMED"), false);
+  assert.ok(thinAtr.tags.includes("BREAKOUT_EVIDENCE_CONSENSUS"));
 
   const signal = detectAdaptiveScalpSignal({
     symbol: "SOL/USD",
@@ -316,7 +329,8 @@ test("a genuine breakout, retest, and resumption emits an independently tagged s
     indicators: { ...confirmedBullishIndicators, volumeRatio: null },
     regime: bullishRegime,
   });
-  assert.equal(missingVolume.qualified, false, "breakout execution fails closed without relative-volume evidence");
+  assert.equal(missingVolume.qualified, true, "relative volume contributes quality without vetoing complete breakout structure");
+  assert.equal(missingVolume.tags.includes("BREAKOUT_VOLUME_CONFIRMED"), false);
 });
 
 test("range reversal is a completed state machine, not a one-candle synthetic score", () => {
@@ -350,10 +364,11 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
   });
 
   assert.equal(evaluation.qualified, true);
-  assert.equal(evaluation.score, 1, "the score records completion of every observable state, not estimated extremity");
+  assert.ok(evaluation.score >= 0.68 && evaluation.score <= 0.9);
   assert.ok(evaluation.tags.includes("RANGE_EXTREME_OBSERVED"));
   assert.ok(evaluation.tags.includes("RANGE_BAND_REENTRY"));
-  assert.ok(evaluation.tags.includes("RANGE_RSI_MACD_TURN"));
+  assert.ok(evaluation.tags.includes("RANGE_MOMENTUM_TURN"));
+  assert.ok(evaluation.tags.includes("RANGE_INDICATOR_SUPPORT"));
   assert.ok(evaluation.tags.includes("RANGE_CONFIRMING_CANDLE"));
 
   const previouslyUnreachableProfile = structuredClone(DEFAULT_SCALP_LEARNING_PROFILE);
@@ -387,7 +402,7 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
     profile: DEFAULT_SCALP_LEARNING_PROFILE,
     regime: sidewaysRegime,
   });
-  assert.equal(missingVolume.qualified, false, "range execution fails closed without relative-volume evidence");
+  assert.equal(missingVolume.qualified, true, "relative volume contributes quality without vetoing a complete range sequence");
 
   const premature = evaluateScalpRangeReversal({
     points: points.slice(0, -5),
