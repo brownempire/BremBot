@@ -146,8 +146,7 @@ const PROFIT_LOCK_STOP_CLAIM_TTL_MS = 7 * 24 * 60 * 60_000;
 const localProfitLockClaims = new Map<string, string>();
 export const SCALP_SIGNAL_COOLDOWN_SECONDS = SCALP_STANDARD_COOLDOWN_SECONDS;
 export const SCALP_ONE_SECOND_ENTRY_INTERVAL_MS = 1_000;
-export const SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS = 10_000;
-export const SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS = SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS;
+export const SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS = 2_500;
 const SCALP_ONE_SECOND_ROUTE_RESERVE_MS = 15_000;
 
 export type ProfitLockSideEffectClaim = {
@@ -984,10 +983,6 @@ export function evaluateScalpAdverseEntryDrift(input: {
 
 export type ScalpOneSecondEntryPointEvaluation = ReturnType<typeof evaluateScalpOneSecondEntryPoint>;
 
-export function resolveScalpNextCandleConfirmationDeadline(signalCandleStartedAt: number) {
-  return signalCandleStartedAt + 60_000 + SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS;
-}
-
 export function evaluateScalpOneSecondEntryPoint(input: {
   side: "long" | "short";
   referencePrice: number;
@@ -999,12 +994,12 @@ export function evaluateScalpOneSecondEntryPoint(input: {
     ? (input.livePrice - input.referencePrice) / input.referencePrice * 100
     : Number.POSITIVE_INFINITY;
   const directionalMovePercent = input.side === "long" ? signedMovePercent : -signedMovePercent;
-  // A live entry must confirm the completed-candle direction without chasing
-  // farther than the same ATR-relative band used by the adverse-drift guard.
+  // The completed signal candle establishes direction. The live quote only
+  // protects execution from a stale entry or an ATR-relative price chase; it
+  // is not a second directional confirmation candle.
   const triggered = drift.allowed
     && Number.isFinite(directionalMovePercent)
-    && directionalMovePercent >= 0
-    && directionalMovePercent <= drift.tolerancePercent;
+    && Math.abs(directionalMovePercent) <= drift.tolerancePercent;
   return {
     triggered,
     invalidated: !drift.allowed,
@@ -1061,7 +1056,7 @@ export async function monitorScalpOneSecondEntryPoint(options: {
   let lastEvaluation: ScalpOneSecondEntryPointEvaluation | null = null;
   let lastSpreadBps: number | null = null;
   let lastTradeImbalance: number | null = null;
-  const requiredConfirmations = Math.max(1, options.requiredConfirmations ?? 3);
+  const requiredConfirmations = Math.max(1, options.requiredConfirmations ?? 1);
   const confirmationWindow = Math.max(requiredConfirmations, options.confirmationWindow ?? 5);
   const maximumSpreadBps = Math.max(0, options.maximumSpreadBps ?? 12);
   const maximumOpposingTradeImbalance = clamp(options.maximumOpposingTradeImbalance ?? 0.35, 0, 1);
@@ -2380,13 +2375,9 @@ export async function runAutonomousPerpsMonitor(
       let oneSecondEntryPoint: ScalpOneSecondEntryMonitorResult | null = null;
       if (strategyClass === "scalp" && scalpEntryPath) {
         const completedCandleEntryReference = entryPrice;
-        const signalCandleStartedAt = scalpPoints.at(-1)?.t ?? 0;
         const routeBudgetDeadline = Date.parse(startedAt)
           + 55_000
           - SCALP_ONE_SECOND_ROUTE_RESERVE_MS;
-        const nextCandleConfirmationDeadline = resolveScalpNextCandleConfirmationDeadline(
-          signalCandleStartedAt
-        );
         oneSecondEntryPoint = await deps.monitorScalpEntryPoint({
           side,
           referencePrice: completedCandleEntryReference,
@@ -2395,11 +2386,14 @@ export async function runAutonomousPerpsMonitor(
           fetchSample: overrides.fetchLivePrice && !overrides.fetchLiveSample
             ? undefined
             : () => deps.fetchLiveSample(`${asset}-USD`),
-          // Replace the former second completed-candle requirement with the
-          // first ten live seconds of the immediately following candle.
-          deadlineAt: Math.min(routeBudgetDeadline, nextCandleConfirmationDeadline),
+          // The qualified completed candle is the signal. Sample the live
+          // market immediately only to reject stale/chased prices, wide
+          // spreads, or strongly opposing order flow before submission.
+          deadlineAt: routeBudgetDeadline,
           maxWaitMs: SCALP_ONE_SECOND_ENTRY_MAX_WAIT_MS,
           intervalMs: SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
+          requiredConfirmations: 1,
+          confirmationWindow: 1,
           assertActive: leaseGuard?.assertOwned,
         });
         if (oneSecondEntryPoint.status !== "triggered" || oneSecondEntryPoint.price === null) {
@@ -2407,8 +2401,8 @@ export async function runAutonomousPerpsMonitor(
           const reason = oneSecondEntryPoint.status === "invalidated" && evaluation
             ? `The one-second Coinbase entry monitor observed a ${evaluation.adverseMovePercent.toFixed(3)}% counter-directional move beyond its ${evaluation.tolerancePercent.toFixed(3)}% ATR-relative limit.`
             : oneSecondEntryPoint.status === "unavailable"
-              ? "The one-second Coinbase entry monitor could not obtain a usable live price during the next candle's 10-second confirmation window."
-              : "The next candle did not confirm the completed signal candle during its first 10 seconds.";
+              ? "The one-second Coinbase entry monitor could not obtain a usable live price for immediate execution validation."
+              : "The immediate live price, spread, or order flow did not pass the completed-candle candidate's execution safety check.";
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
           results.push(skip(
             config,
@@ -2417,16 +2411,15 @@ export async function runAutonomousPerpsMonitor(
               ? "SCALP_ADVERSE_ENTRY_DRIFT"
               : oneSecondEntryPoint.status === "unavailable"
                 ? "SCALP_ONE_SECOND_ENTRY_UNAVAILABLE"
-                : "SCALP_ONE_SECOND_ENTRY_TIMEOUT",
+                : "SCALP_IMMEDIATE_ENTRY_REJECTED",
             reason
           ));
           continue;
         }
         entryPrice = oneSecondEntryPoint.price;
 
-        // The completed signal candle establishes the setup and the next
-        // candle's live 10-second window establishes directional persistence.
-        // Refetch completed candles after the trigger to ensure the originating
+        // The completed signal candle establishes the setup. Refetch completed
+        // candles after the immediate live-price check to ensure the originating
         // setup still resolves to the same direction and an authorized path.
         let freshPoints: PricePoint[];
         try {
@@ -2523,8 +2516,8 @@ export async function runAutonomousPerpsMonitor(
         });
         if (!finalEntryPoint.triggered) {
           const reason = finalEntryPoint.invalidated
-            ? `The live Coinbase price moved ${finalEntryPoint.adverseMovePercent.toFixed(3)}% against the signal during next-candle confirmation, exceeding the ${finalEntryPoint.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`
-            : `The live Coinbase price left the direction-confirming ${finalEntryPoint.tolerancePercent.toFixed(3)}% entry band before submission.`;
+            ? `The live Coinbase price moved ${finalEntryPoint.adverseMovePercent.toFixed(3)}% against the completed-candle signal, exceeding the ${finalEntryPoint.tolerancePercent.toFixed(3)}% ATR-relative tolerance.`
+            : `The live Coinbase price left the ${finalEntryPoint.tolerancePercent.toFixed(3)}% immediate-entry band before submission.`;
           scalpCandidateRecord = await rejectPersistedScalpCandidate(deps, scalpCandidateRecord, reason);
           results.push(skip(config, asset, "SCALP_ONE_SECOND_ENTRY_MOVED", reason));
           continue;
@@ -2534,7 +2527,7 @@ export async function runAutonomousPerpsMonitor(
         routingIndicatorScore = scoreIndicatorSnapshot(freshIndicators, signal.direction, indicatorSettings);
         const confirmedTags = [
           ...freshEvaluation.signal!.priceActionTags,
-          "NEXT_CANDLE_10S_CONFIRMED",
+          "LIVE_ENTRY_PRICE_VALIDATED",
           "SIGNAL_CANDLE_FINAL_REVALIDATION",
         ];
         executionScalpMetadata = {
@@ -2553,11 +2546,11 @@ export async function runAutonomousPerpsMonitor(
               oneSecondEntryConfirmations: oneSecondEntryPoint.confirmations ?? 0,
               oneSecondEntrySpreadBps: oneSecondEntryPoint.spreadBps ?? null,
               oneSecondEntryTradeImbalance: oneSecondEntryPoint.tradeImbalance ?? null,
-              oneMinuteConfirmationPrice: livePrice,
+              finalLiveEntryPrice: livePrice,
             },
             tags: [...new Set([
               ...scalpCandidateRecord.tags,
-              "NEXT_CANDLE_10S_CONFIRMED",
+              "LIVE_ENTRY_PRICE_VALIDATED",
               "SIGNAL_CANDLE_FINAL_REVALIDATION",
             ])],
           });
@@ -2681,7 +2674,7 @@ export async function runAutonomousPerpsMonitor(
       const firstPrice = windowPoints[0]?.v ?? entryPrice;
       const recentPriceChangePercent = firstPrice > 0 ? ((entryPrice - firstPrice) / firstPrice) * 100 : 0;
       const scalpEntryTimingSummary = strategyClass === "scalp" && oneSecondEntryPoint?.status === "triggered"
-        ? `The completed signal candle and next-candle 10-second confirmation passed at ${new Date(oneSecondEntryPoint.observedAt ?? Date.now()).toISOString()}. `
+        ? `The completed-candle candidate passed immediate live-entry validation at ${new Date(oneSecondEntryPoint.observedAt ?? Date.now()).toISOString()}. `
         : "";
       leaseGuard?.assertOwned();
       const routed = await deps.routeSignal(config.walletAddress, {

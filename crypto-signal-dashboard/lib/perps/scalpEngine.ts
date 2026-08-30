@@ -1032,7 +1032,11 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
       setupType: breakoutRetest.setupType,
       score: breakoutRetest.score,
       quality: breakoutRetest.score,
-      tags: [...breakoutRetest.tags, "SCALP_EXHAUSTION_GUARD_PASSED"],
+      tags: [
+        ...breakoutRetest.tags,
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
+        "SCALP_EXHAUSTION_GUARD_PASSED",
+      ],
       indicatorBypass: false,
       summary: `${breakoutRetest.direction === "bullish" ? "Bullish" : "Bearish"} breakout retest resumed with multi-horizon evidence consensus.`,
     });
@@ -1053,7 +1057,7 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
         ...priceAction.tags,
         "INDICATORS_CONFIRMED_TREND_CONTINUATION",
         "SIGNAL_CANDLE_CONFIRMED",
-        "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
         "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
         "CONTINUATION_CONFIRMATION_CONSENSUS",
         ...continuationEvaluation.confirmationTags,
@@ -1092,7 +1096,7 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
             ? "INDICATORS_CONFIRMED_STRONG_PRICE_ACTION"
             : "INDICATORS_CONFIRMED_PRICE_ACTION",
         "SIGNAL_CANDLE_CONFIRMED",
-        "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
         ...(priceAction.score < SCALP_BASIC_REVERSAL_MIN_PRICE_ACTION_SCORE
           ? ["REVERSAL_BELOW_OPERATOR_SCORE_TIER"]
           : []),
@@ -1111,7 +1115,7 @@ export function evaluateAdaptiveScalpCandidate(options: AdaptiveScalpSignalOptio
       quality: rangeReversal.score,
       tags: [
         ...rangeReversal.tags,
-        "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
         "SCALP_EXHAUSTION_GUARD_PASSED",
       ],
       indicatorBypass: false,

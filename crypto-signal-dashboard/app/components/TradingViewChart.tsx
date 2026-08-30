@@ -987,7 +987,7 @@ export function TradingViewChart({
           >
             <span className="scalp-chart-status-dot" aria-hidden="true" />
             <strong>{scalpPanelMinimized ? "Waiting" : scalpOverlayError ? "Scalp profile unavailable" : scalpSnapshot?.headline ?? "Loading Scalp Agent…"}</strong>
-            {!scalpPanelMinimized ? <span className="scalp-chart-status-view">1s entry · 1m confirm</span> : null}
+            {!scalpPanelMinimized ? <span className="scalp-chart-status-view">1m signal · live entry</span> : null}
             <button
               type="button"
               className="scalp-chart-status-size-button"

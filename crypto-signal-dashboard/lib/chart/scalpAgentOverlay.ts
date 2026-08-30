@@ -188,7 +188,7 @@ function historicalMarkers(
       confidence: 0,
       kind: candidate.executionId
         ? "executed"
-        : candidate.tags.includes("NEXT_CANDLE_10S_CONFIRMED")
+        : candidate.tags.includes("LIVE_ENTRY_PRICE_VALIDATED")
           ? "confirmed"
           : "candidate",
       profitableProbability: candidate.prediction
@@ -310,7 +310,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
   } else if (liveSignal) {
     state = "watching";
     headline = `${liveSignal.direction === "bullish" ? "Bullish" : "Bearish"} ${liveSignal.setupType.replace(/-/g, " ")} candidate`;
-    reasons.push("The signal candle qualified; the first 10 seconds of the next candle must confirm its direction before entry.");
+    reasons.push("The completed signal candle qualified and can enter immediately after the live price and spread safety check.");
   } else if (rawSignal && input.recentClosedTrade) {
     state = "blocked";
     headline = "Qualifying setup is in cooldown";
@@ -337,7 +337,7 @@ export function buildScalpAgentOverlaySnapshot(input: {
         : `outcome learner · ${input.profile.outcomeModel.labeledSampleCount}/${input.profile.outcomeModel.retrainBatchSize} labels`
     : "outcome learner initializing";
   const detail = signal
-    ? `Setup score ${signal.priceActionScore.toFixed(2)} · detector heuristic ${(signal.confidence * 100).toFixed(0)}% · awaiting next-candle confirmation · ${modelStatus}`
+    ? `Setup score ${signal.priceActionScore.toFixed(2)} · detector heuristic ${(signal.confidence * 100).toFixed(0)}% · ready for immediate live-entry validation · ${modelStatus}`
     : `Price action ${priceAction.score.toFixed(2)} · ${getScalpTrendBias(input.points)} market · ${modelStatus}`;
 
   return {

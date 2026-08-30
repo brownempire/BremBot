@@ -52,7 +52,8 @@ function continuationPayload(overrides: Partial<TradeDecisionPayload> = {}): Tra
       priceActionTags: [
         "INDICATORS_CONFIRMED_TREND_CONTINUATION",
         "SIGNAL_CANDLE_CONFIRMED",
-        "NEXT_CANDLE_10S_CONFIRMED",
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
+        "LIVE_ENTRY_PRICE_VALIDATED",
         "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
         "CONTINUATION_CONFIRMATION_CONSENSUS",
         "SCALP_EXHAUSTION_GUARD_PASSED",
@@ -100,10 +101,10 @@ test("independent scalp veto accepts a fully confirmed, aligned continuation", (
   assert.ok(result.explanationTags.includes("scalp-path-continuation"));
 });
 
-test("independent scalp veto rejects continuation without next-candle live confirmation", () => {
+test("independent scalp veto rejects continuation without immediate live-entry validation", () => {
   const payload = continuationPayload();
   payload.strategyContext!.priceActionTags = payload.strategyContext!.priceActionTags!
-    .filter((tag) => tag !== "NEXT_CANDLE_10S_CONFIRMED");
+    .filter((tag) => tag !== "LIVE_ENTRY_PRICE_VALIDATED");
 
   const result = evaluateTradeDecision(payload);
 
@@ -225,7 +226,8 @@ test("independent scalp veto accepts a statefully confirmed range reversal", () 
     priceActionTags: [
       "SCALP_RANGE",
       "SCALP_RANGE_LOW",
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
       "RANGE_MOMENTUM_TURN",
@@ -249,7 +251,8 @@ test("authoritative breakout/retest metadata is not re-vetoed by a duplicate ATR
     priceActionScore: 0.75,
     priceActionTags: [
       "PRICE_BREAKOUT",
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "PRICE_BREAKOUT_RETEST",
       "PRICE_BREAKOUT_RESUMPTION",
       "INDICATORS_CONFIRMED_BREAKOUT_RETEST",

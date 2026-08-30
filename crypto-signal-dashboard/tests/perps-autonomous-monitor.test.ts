@@ -18,11 +18,9 @@ import {
   resolveProfitLockPositionProvenance,
   resolveRevalidatedScalpEntryPath,
   resolveScalpProbationCollateralPercent,
-  resolveScalpNextCandleConfirmationDeadline,
   runAutonomousPerpsMonitor as runAutonomousPerpsMonitorImpl,
   runWithRenewingAutonomousMonitorLease,
   SCALP_ONE_SECOND_ENTRY_INTERVAL_MS,
-  SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS,
   SCALP_SIGNAL_COOLDOWN_SECONDS,
   type AutonomousMonitorLeaseGuard,
   type AutonomousMonitorLeaseStore,
@@ -431,7 +429,7 @@ test("enabled exceptional liquidity-sweep layer still respects the exceptional A
   assert.equal(signal, null);
 });
 
-test("a completed exceptional bearish sweep arms next-candle live confirmation", () => {
+test("a completed exceptional bearish sweep establishes a one-candle candidate", () => {
   const points = exceptionalBullishSweepPoints().map((point) => ({
     ...point,
     v: 200 - point.v,
@@ -460,7 +458,7 @@ test("a completed exceptional bearish sweep arms next-candle live confirmation",
   assert.ok(priceAction.score >= SCALP_EXCEPTIONAL_REVERSAL_SCORE);
   assert.ok(signal);
   assert.equal(signal.direction, "bearish");
-  assert.ok(signal.priceActionTags.includes("NEXT_CANDLE_10S_CONFIRMATION_REQUIRED"));
+  assert.ok(signal.priceActionTags.includes("ONE_CANDLE_CANDIDATE_CONFIRMED"));
 });
 
 test("a lone price spike without reclaim and momentum confirmation cannot bypass indicators", () => {
@@ -628,7 +626,7 @@ test("pre-submit revalidation accepts a same-direction path transition but rejec
       priceActionTags: [
         "INDICATORS_CONFIRMED_TREND_CONTINUATION",
         "SIGNAL_CANDLE_CONFIRMED",
-        "NEXT_CANDLE_10S_CONFIRMATION_REQUIRED",
+        "ONE_CANDLE_CANDIDATE_CONFIRMED",
         "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
         "CONTINUATION_CONFIRMATION_CONSENSUS",
       ],
@@ -673,8 +671,8 @@ test("pre-submit scalp drift uses a bounded ATR-relative adverse tolerance", () 
   assert.ok(rejected.adverseMovePercent > rejected.tolerancePercent);
 });
 
-test("one-second entry evaluation requires direction confirmation without chasing beyond the ATR band", () => {
-  const waiting = evaluateScalpOneSecondEntryPoint({
+test("immediate entry evaluation accepts bounded drift but prevents chasing beyond the ATR band", () => {
+  const boundedPullback = evaluateScalpOneSecondEntryPoint({
     side: "long",
     referencePrice: 100,
     livePrice: 99.96,
@@ -693,21 +691,15 @@ test("one-second entry evaluation requires direction confirmation without chasin
     atrPercent: 0.1,
   });
 
-  assert.equal(waiting.triggered, false);
-  assert.equal(waiting.invalidated, false);
+  assert.equal(boundedPullback.triggered, true);
+  assert.equal(boundedPullback.invalidated, false);
   assert.equal(triggered.triggered, true);
   assert.equal(chasing.triggered, false);
   assert.equal(chasing.invalidated, false);
 });
 
-test("next-candle confirmation is restricted to its first ten seconds", async () => {
-  const signalCandleStartedAt = 1_785_600_000_000;
-  const deadline = resolveScalpNextCandleConfirmationDeadline(signalCandleStartedAt);
-  assert.equal(
-    deadline,
-    signalCandleStartedAt + 60_000 + SCALP_NEXT_CANDLE_CONFIRMATION_WINDOW_MS
-  );
-
+test("immediate entry validation samples a qualified one-candle candidate without a next-candle deadline", async () => {
+  let clock = 0;
   let fetchCalls = 0;
   const result = await monitorScalpOneSecondEntryPoint({
     side: "long",
@@ -717,25 +709,28 @@ test("next-candle confirmation is restricted to its first ten seconds", async ()
       fetchCalls += 1;
       return 100.01;
     },
-    deadlineAt: deadline,
-    now: () => deadline + 1,
+    maxWaitMs: 2_500,
+    now: () => clock,
+    wait: async (milliseconds) => { clock += milliseconds; },
   });
 
-  assert.equal(result.status, "expired");
-  assert.equal(result.samples, 0);
-  assert.equal(fetchCalls, 0);
+  assert.equal(result.status, "triggered");
+  assert.equal(result.samples, 1);
+  assert.equal(fetchCalls, 1);
 });
 
-test("one-second entry monitor requires three confirming samples instead of entering on one tick", async () => {
+test("one-second entry monitor can require multiple safety samples when explicitly requested", async () => {
   let clock = 0;
   const waits: number[] = [];
-  const prices = [99.96, 100.01, 100.02, 100.01];
+  const prices = [100.06, 100.01, 100.02, 100.01];
   const result = await monitorScalpOneSecondEntryPoint({
     side: "long",
     referencePrice: 100,
     atrPercent: 0.1,
     fetchPrice: async () => prices.shift() ?? null,
     deadlineAt: 5_000,
+    maxWaitMs: 5_000,
+    requiredConfirmations: 3,
     now: () => clock,
     wait: async (milliseconds) => {
       waits.push(milliseconds);
@@ -1132,7 +1127,7 @@ test("a rejected scalp route does not write a cooldown cursor", async () => {
   assert.equal(cursorWrites, 0);
 });
 
-test("an adverse one-second tick vetoes a scalp before final one-minute confirmation", async () => {
+test("an adverse one-second tick vetoes a qualified one-candle scalp before revalidation", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
@@ -1178,7 +1173,7 @@ test("an adverse one-second tick vetoes a scalp before final one-minute confirma
   assert.equal(routeCalls, 0);
 });
 
-test("a one-second entry signal is followed by final one-minute confirmation before routing", async () => {
+test("a one-candle candidate is followed by immediate live-entry validation before routing", async () => {
   const points = qualifyingRangePoints();
   const base = createConfig();
   const config = createConfig({
@@ -1199,7 +1194,7 @@ test("a one-second entry signal is followed by final one-minute confirmation bef
       return points;
     },
     monitorScalpEntryPoint: async (options) => {
-      events.push("next-candle-10s-trigger");
+      events.push("immediate-live-entry-validation");
       return {
         status: "triggered",
         price: options.referencePrice + 0.01,
@@ -1235,19 +1230,20 @@ test("a one-second entry signal is followed by final one-minute confirmation bef
   assert.equal(result.results[0]?.status, "executed", JSON.stringify(result.results));
   assert.deepEqual(events, [
     "signal-candle-context",
-    "next-candle-10s-trigger",
+    "immediate-live-entry-validation",
     "signal-candle-final-revalidation",
     "final-live-price",
     "route",
   ]);
   const routed = routedSignal as PerpsAgentSignal | null;
   assert.equal(routed?.marketContext?.spotPrice, points.at(-1)!.v + 0.01);
-  assert.ok(routed?.strategyContext?.priceActionTags?.includes("NEXT_CANDLE_10S_CONFIRMED"));
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("ONE_CANDLE_CANDIDATE_CONFIRMED"));
+  assert.ok(routed?.strategyContext?.priceActionTags?.includes("LIVE_ENTRY_PRICE_VALIDATED"));
   assert.ok(routed?.strategyContext?.priceActionTags?.includes("SIGNAL_CANDLE_FINAL_REVALIDATION"));
-  assert.match(routed?.summary ?? "", /signal candle and next-candle 10-second confirmation passed/i);
+  assert.match(routed?.summary ?? "", /completed-candle candidate passed immediate live-entry validation/i);
 });
 
-test("a one-second entry signal cannot route when final one-minute confirmation fails", async () => {
+test("a one-candle candidate cannot route when completed-candle revalidation fails", async () => {
   const points = qualifyingRangePoints();
   const flatPoints = points.map((point) => ({
     ...point,

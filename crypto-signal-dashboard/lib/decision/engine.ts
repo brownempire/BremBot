@@ -56,7 +56,8 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   if (path === "continuation") {
     return includesAll(tags, [
       "SIGNAL_CANDLE_CONFIRMED",
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "CONTINUATION_PULLBACK_RETEST_RESUMPTION",
       "CONTINUATION_CONFIRMATION_CONSENSUS",
       "SCALP_EXHAUSTION_GUARD_PASSED",
@@ -64,7 +65,8 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   }
   if (path === "breakout-retest") {
     return includesAll(tags, [
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "PRICE_BREAKOUT",
       "PRICE_BREAKOUT_RETEST",
       "PRICE_BREAKOUT_RESUMPTION",
@@ -74,7 +76,8 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   }
   if (path === "range-reversal") {
     return includesAll(tags, [
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
       "RANGE_MOMENTUM_TURN",
@@ -86,7 +89,8 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
   if (path === "reversal") {
     return includesAll(tags, [
       "SIGNAL_CANDLE_CONFIRMED",
-      "NEXT_CANDLE_10S_CONFIRMED",
+      "ONE_CANDLE_CANDIDATE_CONFIRMED",
+      "LIVE_ENTRY_PRICE_VALIDATED",
       "SCALP_EXHAUSTION_GUARD_PASSED",
     ]);
   }
