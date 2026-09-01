@@ -16,6 +16,8 @@ import {
   resolveConservativeScalpFeeRate,
 } from "../lib/perps/scalpExit";
 import {
+  SCALP_PROFIT_LOCK_RESCUE_ARM_ROE_PERCENT,
+  SCALP_PROFIT_LOCK_RESCUE_EXIT_ROE_PERCENT,
   SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT,
   SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT,
   SCALP_PROFIT_LOCK_FINAL_ARM_ROE_PERCENT,
@@ -26,6 +28,8 @@ import {
 
 test("scalp protection uses the 15% hard SL and retains the profit staircase", () => {
   assert.equal(SCALP_STOP_LOSS_ROE_PERCENT, 15);
+  assert.equal(SCALP_PROFIT_LOCK_RESCUE_ARM_ROE_PERCENT, 4);
+  assert.equal(SCALP_PROFIT_LOCK_RESCUE_EXIT_ROE_PERCENT, 2);
   assert.equal(SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT, 10);
   assert.equal(SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT, 7);
   assert.equal(SCALP_PROFIT_LOCK_RUNNER_ARM_ROE_PERCENT, 30);

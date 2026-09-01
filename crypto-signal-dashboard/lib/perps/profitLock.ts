@@ -6,6 +6,8 @@ export const PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 15;
 export const PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 10;
 export const PROFIT_LOCK_ARM_ROE_PERCENT = 20;
 export const PROFIT_LOCK_EXIT_ROE_PERCENT = 15;
+export const SCALP_PROFIT_LOCK_RESCUE_ARM_ROE_PERCENT = 4;
+export const SCALP_PROFIT_LOCK_RESCUE_EXIT_ROE_PERCENT = 2;
 export const SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT = 10;
 export const SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT = 7;
 export const SCALP_PROFIT_LOCK_RUNNER_ARM_ROE_PERCENT = 30;
@@ -16,6 +18,7 @@ export const SCALP_PROFIT_LOCK_MINIMUM_NET_ROE_PERCENT = 1;
 const PROFIT_LOCK_ROE_EPSILON = 1e-9;
 
 export type PerpsProfitLockTier =
+  | "four-to-two"
   | "ten-to-seven"
   | "fifteen-to-ten"
   | "twenty-to-fifteen"
@@ -213,6 +216,8 @@ export function evaluatePerpsProfitLock(options: {
       ? "fifteen-to-ten"
       : strategyClass === "scalp" && peakRoePercent >= SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
         ? "ten-to-seven"
+        : strategyClass === "scalp" && peakRoePercent >= SCALP_PROFIT_LOCK_RESCUE_ARM_ROE_PERCENT
+          ? "four-to-two"
       : null;
   const armRoePercent = activeTier === "forty-to-thirty-two"
     ? SCALP_PROFIT_LOCK_FINAL_ARM_ROE_PERCENT
@@ -222,9 +227,11 @@ export function evaluatePerpsProfitLock(options: {
     ? PROFIT_LOCK_ARM_ROE_PERCENT
     : activeTier === "fifteen-to-ten"
       ? PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
-      : strategyClass === "scalp"
+      : activeTier === "ten-to-seven"
         ? SCALP_PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT
-        : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
+        : strategyClass === "scalp"
+          ? SCALP_PROFIT_LOCK_RESCUE_ARM_ROE_PERCENT
+          : PROFIT_LOCK_INITIAL_ARM_ROE_PERCENT;
   const baseExitRoePercent = activeTier === "forty-to-thirty-two"
     ? SCALP_PROFIT_LOCK_FINAL_EXIT_ROE_PERCENT
     : activeTier === "thirty-to-twenty-three"
@@ -233,7 +240,11 @@ export function evaluatePerpsProfitLock(options: {
     ? PROFIT_LOCK_EXIT_ROE_PERCENT
     : activeTier === "fifteen-to-ten"
       ? PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT
-      : SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT;
+      : activeTier === "ten-to-seven"
+        ? SCALP_PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT
+        : activeTier === "four-to-two" || strategyClass === "scalp"
+          ? SCALP_PROFIT_LOCK_RESCUE_EXIT_ROE_PERCENT
+          : PROFIT_LOCK_INITIAL_EXIT_ROE_PERCENT;
   // Jupiter's primary feed supplies after-fee PnL, and the RPC fallback is
   // normalized to the same basis above. Staircase thresholds are therefore
   // net-ROE targets. Adding fee ROE here would count fees twice (and at legacy
