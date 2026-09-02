@@ -38,6 +38,13 @@ export const SCALP_CONTINUATION_STANDARD_PRICE_ACTION_SCORE = 0.68;
 export const SCALP_CONTINUATION_MIN_CONFIRMATION_GROUPS = 2;
 export const SCALP_BREAKOUT_RETEST_MIN_PRICE_ACTION_SCORE = 0.68;
 export const SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE = 0.82;
+// A range extreme is actionable for only the next five completed candles.
+// Entry travel stays deliberately tight so a detected reversal cannot be
+// chased after most of the move away from the extreme has already happened.
+export const SCALP_RANGE_REVERSAL_MAX_EXTREME_AGE_CANDLES = 5;
+export const SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_ATR_MULTIPLIER = 1.5;
+export const SCALP_RANGE_REVERSAL_MIN_ENTRY_TRAVEL_PERCENT = 0.08;
+export const SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_PERCENT = 0.25;
 export const SCALP_CONTINUATION_MAX_EMA_SPREAD_PERCENT = 0.45;
 export const SCALP_CONTINUATION_MIN_ATR_PERCENT = 0.1;
 export const SCALP_CONTINUATION_MIN_VOLUME_RATIO = 1.15;
@@ -777,8 +784,22 @@ export function evaluateScalpRangeReversal(options: {
   const latestIndex = points.length - 1;
   const latest = points[latestIndex]!;
   const previous = points[latestIndex - 1]!;
+  const atrPercent = indicators.atrPercent;
+  if (atrPercent === null || !Number.isFinite(atrPercent) || atrPercent <= 0) {
+    return emptyStructuredEvaluation(["A current ATR measurement is required to keep the range-reversal entry close to its extreme."]);
+  }
+  const maximumEntryTravelPercent = clamp(
+    atrPercent * SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_ATR_MULTIPLIER,
+    SCALP_RANGE_REVERSAL_MIN_ENTRY_TRAVEL_PERCENT,
+    SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_PERCENT,
+  );
+  let expiredTravel: { actual: number; maximum: number } | null = null;
   for (const direction of ["bullish", "bearish"] as const) {
-    for (let extremeIndex = Math.max(35, latestIndex - 12); extremeIndex <= latestIndex - 3; extremeIndex += 1) {
+    for (
+      let extremeIndex = Math.max(35, latestIndex - SCALP_RANGE_REVERSAL_MAX_EXTREME_AGE_CANDLES);
+      extremeIndex <= latestIndex - 3;
+      extremeIndex += 1
+    ) {
       const extremeIndicators = computeIndicatorSnapshot(points.slice(0, extremeIndex + 1));
       const extremeReached = extremeIndicators.bollingerPosition !== null
         && extremeIndicators.rsi !== null
@@ -798,6 +819,18 @@ export function evaluateScalpRangeReversal(options: {
           : snapshot.bollingerPosition < profile.shortBollingerMinimum - 0.03);
       });
       if (reentry === undefined) continue;
+      const extremePrice = direction === "bullish"
+        ? candleLow(points[extremeIndex]!)
+        : candleHigh(points[extremeIndex]!);
+      const entryTravelPercent = direction === "bullish"
+        ? percent(latest.v - extremePrice, extremePrice)
+        : percent(extremePrice - latest.v, extremePrice);
+      if (entryTravelPercent < 0 || entryTravelPercent > maximumEntryTravelPercent) {
+        if (entryTravelPercent > maximumEntryTravelPercent) {
+          expiredTravel = { actual: entryTravelPercent, maximum: maximumEntryTravelPercent };
+        }
+        continue;
+      }
       const rsiTurned = indicators.rsi !== null && extremeIndicators.rsi !== null && (direction === "bullish"
         ? indicators.rsi >= extremeIndicators.rsi + 3
         : indicators.rsi <= extremeIndicators.rsi - 3);
@@ -836,6 +869,7 @@ export function evaluateScalpRangeReversal(options: {
           direction === "bullish" ? "SCALP_RANGE_LOW" : "SCALP_RANGE_HIGH",
           "RANGE_EXTREME_OBSERVED",
           "RANGE_BAND_REENTRY",
+          "RANGE_ENTRY_DISTANCE_VALIDATED",
           "RANGE_MOMENTUM_TURN",
           ...(rsiTurned ? ["RANGE_RSI_TURN"] : []),
           ...(macdTurned ? ["RANGE_MACD_TURN"] : []),
@@ -846,6 +880,11 @@ export function evaluateScalpRangeReversal(options: {
         reasons: [],
       };
     }
+  }
+  if (expiredTravel) {
+    return emptyStructuredEvaluation([
+      `The range reversal expired after moving ${expiredTravel.actual.toFixed(3)}% from its extreme; the current maximum is ${expiredTravel.maximum.toFixed(3)}%.`,
+    ]);
   }
   return emptyStructuredEvaluation(["Waiting for a range extreme, band re-entry, momentum turn, confirming candle, and at least two supporting indicators."]);
 }

@@ -10,6 +10,8 @@ import {
   SCALP_CONTINUATION_LIVE_ENABLED,
   SCALP_EXHAUSTION_BLOCK_ENABLED,
   SCALP_RANGE_REVERSAL_LIVE_ENABLED,
+  SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_PERCENT,
+  SCALP_RANGE_REVERSAL_MAX_EXTREME_AGE_CANDLES,
   SCALP_RANGE_REVERSAL_SIGNAL_CONFIDENCE,
   SCALP_EXCEPTIONAL_REVERSAL_SCORE,
   SCALP_STRONG_REVERSAL_SCORE,
@@ -104,6 +106,14 @@ function breakoutRetestCandles(): PricePoint[] {
 }
 
 function rangeReentryCandles(): PricePoint[] {
+  const closes = [
+    ...Array.from({ length: 50 }, (_, index) => 100 + Math.sin(index) * 0.015),
+    99.96, 99.88, 99.78, 99.68, 99.64, 99.68, 99.72, 99.76, 99.8, 99.84,
+  ];
+  return candlesFromCloses(closes);
+}
+
+function staleRangeReentryCandles(): PricePoint[] {
   const closes = [
     ...Array.from({ length: 50 }, (_, index) => 100 + Math.sin(index) * 0.015),
     99.96, 99.88, 99.78, 99.68, 99.64, 99.72, 99.8, 99.88, 99.94, 100,
@@ -334,6 +344,8 @@ test("a genuine breakout, retest, and resumption emits an independently tagged s
 });
 
 test("range reversal is a completed state machine, not a one-candle synthetic score", () => {
+  assert.equal(SCALP_RANGE_REVERSAL_MAX_EXTREME_AGE_CANDLES, 5);
+  assert.equal(SCALP_RANGE_REVERSAL_MAX_ENTRY_TRAVEL_PERCENT, 0.25);
   const points = rangeReentryCandles();
   const sidewaysRegime: ScalpMarketRegime = {
     bias: "sideways",
@@ -367,6 +379,7 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
   assert.ok(evaluation.score >= 0.68 && evaluation.score <= 0.9);
   assert.ok(evaluation.tags.includes("RANGE_EXTREME_OBSERVED"));
   assert.ok(evaluation.tags.includes("RANGE_BAND_REENTRY"));
+  assert.ok(evaluation.tags.includes("RANGE_ENTRY_DISTANCE_VALIDATED"));
   assert.ok(evaluation.tags.includes("RANGE_MOMENTUM_TURN"));
   assert.ok(evaluation.tags.includes("RANGE_INDICATOR_SUPPORT"));
   assert.ok(evaluation.tags.includes("RANGE_CONFIRMING_CANDLE"));
@@ -403,6 +416,15 @@ test("range reversal is a completed state machine, not a one-candle synthetic sc
     regime: sidewaysRegime,
   });
   assert.equal(missingVolume.qualified, true, "relative volume contributes quality without vetoing a complete range sequence");
+
+  const stale = evaluateScalpRangeReversal({
+    points: staleRangeReentryCandles(),
+    indicators: rangeIndicators,
+    profile: DEFAULT_SCALP_LEARNING_PROFILE,
+    regime: sidewaysRegime,
+  });
+  assert.equal(stale.qualified, false, "a range reversal must expire after entry travels too far from its extreme");
+  assert.match(stale.reasons.join(" "), /expired after moving/);
 
   const premature = evaluateScalpRangeReversal({
     points: points.slice(0, -5),

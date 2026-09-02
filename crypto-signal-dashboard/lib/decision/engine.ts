@@ -80,6 +80,7 @@ function scalpPathHasCompleteConfirmation(path: ScalpDecisionPath, tags: Set<str
       "LIVE_ENTRY_PRICE_VALIDATED",
       "RANGE_EXTREME_OBSERVED",
       "RANGE_BAND_REENTRY",
+      "RANGE_ENTRY_DISTANCE_VALIDATED",
       "RANGE_MOMENTUM_TURN",
       "RANGE_CONFIRMING_CANDLE",
       "RANGE_INDICATOR_SUPPORT",
