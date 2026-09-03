@@ -16,6 +16,7 @@ import { useJupiterPerpsPositions } from "@/hooks/useJupiterPerpsPositions";
 import { useNativeJupiterWalletConnect } from "@/hooks/useNativeJupiterWalletConnect";
 import { isNativeMacRuntime, isNativeShellRuntime } from "@/app/lib/nativeShell";
 import { formatUsd } from "@/lib/utils";
+import { estimateNetExitPnl, projectedNetExitPnl, realizedTradePnl } from "@/lib/perps/pnlAccounting";
 import { validatePerpsTriggerPriceAgainstMark } from "@/lib/perps/triggerValidation";
 import {
   tpslPercentToTriggerPrice,
@@ -559,9 +560,11 @@ function EditableTpslMetric({
       : tpslPercentToTriggerPrice(position, kind, parsedDraftValue)
     : null;
   const estimatedPnl = draftTriggerPrice !== null && draftTriggerPrice > 0
-    ? estimateTriggerPnl(position, draftTriggerPrice)
+    ? projectedNetExitPnl(position, draftTriggerPrice)
     : null;
-  const estimatedPnlIsTooSmall = estimatedPnl !== null && Math.abs(estimatedPnl) < MIN_TPSL_EXPECTED_PNL_USD;
+  // Keep the pre-existing order-entry guard separate from presentation costs.
+  const grossTriggerPnl = estimateTriggerPnl(position, draftTriggerPrice);
+  const estimatedPnlIsTooSmall = grossTriggerPnl !== null && Math.abs(grossTriggerPnl) < MIN_TPSL_EXPECTED_PNL_USD;
 
   function formatValueForMode(nextValue: number | null, mode: InputMode) {
     if (mode === "price") return formatEditableUsdPrice(nextValue);
@@ -662,7 +665,7 @@ function EditableTpslMetric({
             <span className="perps-metric-status">Trigger price: {formatUsd(draftTriggerPrice)}</span>
           ) : null}
           <span className={`perps-metric-status ${estimatedPnl !== null ? (estimatedPnl >= 0 ? "pnl-positive" : "pnl-negative") : ""}`}>
-            Expected PnL: {formatSignedUsd(estimatedPnl)}
+            Estimated net PnL: {formatSignedUsd(estimatedPnl)}
           </span>
           {estimatedPnlIsTooSmall ? (
             <span className="perps-metric-status">Minimum expected PnL: {formatUsd(MIN_TPSL_EXPECTED_PNL_USD)}</span>
@@ -717,18 +720,11 @@ function PositionCard({
   position: JupiterPerpsPosition;
   writeEnabled: boolean;
 }) {
-  const pnlValue = position.unrealizedPnl;
+  const estimate = estimateNetExitPnl(position);
+  const pnlValue = estimate?.estimatedNetPnlUsd ?? null;
   const isPositive = typeof pnlValue === "number" && pnlValue > 0;
   const isNegative = typeof pnlValue === "number" && pnlValue < 0;
-  const pnlPercent = (
-    typeof pnlValue === "number"
-    && Number.isFinite(pnlValue)
-    && typeof position.collateralValue === "number"
-    && Number.isFinite(position.collateralValue)
-    && position.collateralValue > 0
-  )
-    ? (pnlValue / position.collateralValue) * 100
-    : null;
+  const pnlPercent = estimate?.estimatedNetRoePercent ?? null;
   const pnlPercentLabel = pnlPercent === null
     ? null
     : `(${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%)`;
@@ -810,8 +806,8 @@ function PositionCard({
           value={stopLossTrigger?.triggerPrice ?? position.stopLoss}
         />
         <PositionMetric
-          label="Unrealized PnL"
-          value={position.unrealizedPnl === null ? "-" : formatUsd(position.unrealizedPnl)}
+          label="Est. net PnL"
+          value={pnlValue === null ? "-" : formatUsd(pnlValue)}
           secondaryValue={pnlPercentLabel}
           positive={isPositive}
           negative={isNegative}
@@ -820,7 +816,7 @@ function PositionCard({
           label={position.liquidationPriceIsEstimated ? "Liquidation (est.)" : "Liquidation"}
           value={position.liquidationPrice === null ? "-" : formatUsd(position.liquidationPrice)}
         />
-        <PositionMetric label="Realized PnL" value={position.realizedPnl === null ? "-" : formatUsd(position.realizedPnl)} />
+        <PositionMetric label="Realized net PnL" value="See reconciled closed trades" />
       </div>
 
       <div className="perps-position-footer">
@@ -871,8 +867,10 @@ function PendingTriggerCard({ trigger }: { trigger: JupiterPerpsPendingTrigger }
 }
 
 function TradeCard({ trade }: { trade: JupiterPerpsTrade }) {
-  const pnlPositive = typeof trade.pnl === "number" && trade.pnl > 0;
-  const pnlNegative = typeof trade.pnl === "number" && trade.pnl < 0;
+  const accounting = realizedTradePnl(trade);
+  const pnl = accounting?.netPnlUsd ?? null;
+  const pnlPositive = pnl !== null && pnl > 0;
+  const pnlNegative = pnl !== null && pnl < 0;
 
   return (
     <article className="perps-trigger-card">
@@ -895,8 +893,10 @@ function TradeCard({ trade }: { trade: JupiterPerpsTrade }) {
           {trade.action} · {trade.orderType} · Size {trade.sizeUsd === null ? "-" : formatUsd(trade.sizeUsd)}
         </span>
         <span className={pnlPositive ? "subtext pnl-positive" : pnlNegative ? "subtext pnl-negative" : "subtext"}>
-          Realized PnL {formatSignedUsd(trade.pnl)}
-          {trade.pnlPercentage !== null ? ` (${trade.pnlPercentage.toFixed(2)}%)` : ""}
+          {accounting ? `Realized net PnL ${formatSignedUsd(pnl)}`
+            : trade.pnlAccounting?.status === "included" ? "Included in the position’s closing total"
+              : trade.pnlAccounting?.status === "open" ? "Position open · PnL not yet realized" : "Actual net PnL reconciling"}
+          {accounting?.netRoePercent != null ? ` (${accounting.netRoePercent.toFixed(2)}%)` : ""}
         </span>
         <span className="subtext">Updated {formatTimestamp(trade.lastUpdated)}</span>
       </div>

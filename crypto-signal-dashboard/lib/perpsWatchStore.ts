@@ -8,6 +8,13 @@ export type StoredPerpsWatchState = {
   monitoredWalletAddress?: string;
   lastCheckedAt: number;
   snapshot: JupiterPerpsAccountSnapshot;
+  pendingPnlClosures?: {
+    position: JupiterPerpsAccountSnapshot["positions"][number];
+    triggers: JupiterPerpsAccountSnapshot["pendingTriggers"];
+    closingTxHash: string | null;
+    observedAfter?: number;
+    observedBefore?: number;
+  }[];
 };
 
 const STORE_FILE_PATH = process.env.PERPS_WATCH_STATE_FILE || "/tmp/brembot-perps-watch-state.json";

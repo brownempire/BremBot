@@ -1,5 +1,7 @@
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
-import { fetchJupiterPerpsAccountSnapshot, type JupiterPerpsPosition } from "@/lib/jupiterPerps";
+import { type JupiterPerpsPosition } from "@/lib/jupiterPerps";
+import { loadAccountedPerpsSnapshot } from "@/lib/perps/pnlAccountingServer";
+import { summarizeNetExitPnl, projectedNetExitPnl } from "@/lib/perps/pnlAccounting";
 import { getPerpsSession } from "@/lib/perps/sessionStore";
 import type { PerpsAutomationSession, PerpsUserExecution } from "@/lib/perps/sessionTypes";
 import { listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
@@ -104,15 +106,7 @@ function buildChartCandles(points: PricePoint[] = []): WidgetChartCandle[] {
 }
 
 function calculateExpectedPnl(position: JupiterPerpsPosition | null, targetPrice: number | null | undefined) {
-  const entryPrice = finiteOrNull(position?.entryPrice);
-  const positionSize = finiteOrNull(position?.positionSize);
-  const target = finiteOrNull(targetPrice);
-  if (!position || entryPrice === null || positionSize === null || target === null || positionSize <= 0) {
-    return null;
-  }
-
-  const priceDelta = position.side === "long" ? target - entryPrice : entryPrice - target;
-  return Number((priceDelta * positionSize).toFixed(2));
+  return position ? projectedNetExitPnl(position, targetPrice) : null;
 }
 
 function calculatePerpsWalletEquity(availableUsdc: number | null, positions: JupiterPerpsPosition[]) {
@@ -177,13 +171,18 @@ export function buildWidgetServerSnapshot({
 }: WidgetSnapshotInput): WidgetServerSnapshot {
   const liveAgentPositions = getLivePositions(agentPositions);
   const liveMainPositions = getLivePositions(mainPositions);
-  const position = liveAgentPositions[0] ?? liveMainPositions[0] ?? null;
+  const preferredPosition = liveAgentPositions[0] ?? liveMainPositions[0] ?? null;
+  const marketPositions = [...new Map([...liveAgentPositions, ...liveMainPositions]
+    .filter(p=>getChartAsset(p) === (chartSymbol ?? getChartAsset(preferredPosition)))
+    .map(p=>[p.accountRef ?? p.id,p])).values()];
+  const position = marketPositions[0] ?? null;
+  const singlePosition = marketPositions.length === 1 ? position : null;
   const positionExecution = findPositionExecution(position, executions);
-  const positionPnl = finiteOrNull(position?.unrealizedPnl);
-  const positionCollateral = finiteOrNull(position?.collateralValue);
-  const pnlPercent = positionPnl !== null && positionCollateral !== null && positionCollateral > 0
-    ? (positionPnl / positionCollateral) * 100
-    : null;
+  const estimate = summarizeNetExitPnl(marketPositions);
+  const positionPnl = estimate?.estimatedNetPnlUsd ?? null;
+  const positionCollateral = marketPositions.length && marketPositions.every(p=>finiteOrNull(p.collateralValue)!==null)
+    ? marketPositions.reduce((sum,p)=>sum+p.collateralValue!,0) : null;
+  const pnlPercent = estimate?.estimatedNetRoePercent ?? null;
   const mainWalletBalanceUsd = calculatePerpsWalletEquity(mainAvailableUsdc, liveMainPositions);
   const agentWalletBalanceUsd = calculatePerpsWalletEquity(agentAvailableUsdc, liveAgentPositions);
   const chartCandles = buildChartCandles(chartPoints);
@@ -206,6 +205,10 @@ export function buildWidgetServerSnapshot({
         : null,
     ].filter((value): value is string => value !== null);
     openPerpDetail = details.join(" • ") || "Live Jupiter Perps position";
+    if (marketPositions.length > 1) {
+      openPerpLabel = `${market} · ${marketPositions.length} positions`;
+      openPerpDetail = "Combined estimated net PnL across Main and Agent positions in this market.";
+    }
   }
 
   const clockedIn = session?.sessionState === "clocked_in";
@@ -217,21 +220,22 @@ export function buildWidgetServerSnapshot({
     openPerpPnlUsd: positionPnl,
     openPerpPnlPercent: finiteOrNull(pnlPercent),
     openPerpMarket: position ? position.marketSymbol.replace(/\s+/g, "").toUpperCase() : null,
-    openPerpSide: position?.side ?? null,
-    openPerpStrategy: positionExecution?.strategyClass ?? null,
-    openPerpPositionValueUsd: finiteOrNull(position?.positionValue),
+    openPerpSide: marketPositions.every(p=>p.side===position?.side) ? position?.side ?? null : null,
+    openPerpStrategy: singlePosition ? positionExecution?.strategyClass ?? null : null,
+    openPerpPositionValueUsd: marketPositions.length && marketPositions.every(p=>finiteOrNull(p.positionValue)!==null)
+      ? marketPositions.reduce((sum,p)=>sum+p.positionValue!,0) : null,
     openPerpCollateralUsd: positionCollateral,
-    openPerpEntryPrice: finiteOrNull(position?.entryPrice),
-    openPerpEntryTimestamp: executionTimestamp(positionExecution),
+    openPerpEntryPrice: finiteOrNull(singlePosition?.entryPrice),
+    openPerpEntryTimestamp: singlePosition ? executionTimestamp(positionExecution) : null,
     // The mark doubles as the current market price in the idle dashboard. It
     // does not imply that a position is open; openPerpMarket remains null.
     openPerpMarkPrice: finiteOrNull(position?.markPrice) ?? latestChartPrice,
-    openPerpLeverage: finiteOrNull(position?.leverage),
-    openPerpLiquidationPrice: finiteOrNull(position?.liquidationPrice),
-    openPerpTakeProfitPrice: finiteOrNull(position?.takeProfit),
-    openPerpStopLossPrice: finiteOrNull(position?.stopLoss),
-    openPerpTakeProfitPnlUsd: calculateExpectedPnl(position, position?.takeProfit),
-    openPerpStopLossPnlUsd: calculateExpectedPnl(position, position?.stopLoss),
+    openPerpLeverage: finiteOrNull(singlePosition?.leverage),
+    openPerpLiquidationPrice: finiteOrNull(singlePosition?.liquidationPrice),
+    openPerpTakeProfitPrice: finiteOrNull(singlePosition?.takeProfit),
+    openPerpStopLossPrice: finiteOrNull(singlePosition?.stopLoss),
+    openPerpTakeProfitPnlUsd: calculateExpectedPnl(singlePosition, singlePosition?.takeProfit),
+    openPerpStopLossPnlUsd: calculateExpectedPnl(singlePosition, singlePosition?.stopLoss),
     chartSymbol: chartSymbol ?? getChartAsset(position),
     chartCandles,
     walletBalanceUsd: finiteOrNull(agentWalletBalanceUsd),
@@ -254,8 +258,8 @@ export async function loadWidgetServerSnapshot() {
   }
 
   const [agentPortfolioResult, mainPortfolioResult, mainBalanceResult, agentBalanceResult, sessionResult, executionsResult] = await Promise.allSettled([
-    fetchJupiterPerpsAccountSnapshot(agentWallet),
-    fetchJupiterPerpsAccountSnapshot(ownerWallet),
+    loadAccountedPerpsSnapshot(agentWallet),
+    loadAccountedPerpsSnapshot(ownerWallet),
     getWalletUsdcBalance(ownerWallet),
     getWalletUsdcBalance(agentWallet),
     getPerpsSession(ownerWallet),

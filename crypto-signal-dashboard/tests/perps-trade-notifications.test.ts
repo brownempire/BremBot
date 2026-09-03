@@ -137,8 +137,8 @@ test("entry notification shows concise estimated net TP/SL PnL and liquidation",
   assert.equal(notification.title, "Smart Long Opened · SOL");
   assert.match(notification.body, /Entry \$100\.00 · Mark \$101\.00/);
   assert.match(notification.body, /\$202\.00 position \/ \$20\.00 collateral · 10x/);
-  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.76\)/);
-  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.24\)/);
+  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.46\)/);
+  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.54\)/);
   assert.match(notification.body, /Liq \$91\.00/);
   assert.equal(notification.sound, "brem_approval.wav");
 });
@@ -153,15 +153,15 @@ test("entry notification identifies scalp trades", () => {
   assert.equal(notification.title, "Scalp Short Opened · SOL");
 });
 
-test("entry notification falls back to the round-trip fee estimate when live net PnL is unavailable", () => {
+test("entry notification omits net estimates when current price and borrowing baseline are unavailable", () => {
   const notification = buildTradeEntryNotification({
     walletAddress,
     position: { ...position, markPrice: null, unrealizedPnl: null },
     execution,
   });
 
-  assert.match(notification.body, /TP \$110\.00 \(Est\. net \+\$19\.59\)/);
-  assert.match(notification.body, /SL \$95\.00 \(Est\. net -\$10\.41\)/);
+  assert.match(notification.body, /TP \$110\.00 · SL \$95\.00/);
+  assert.doesNotMatch(notification.body, /Est\. net/);
 });
 
 test("an exit near SL is not mislabeled as TP when both triggers existed", () => {
@@ -182,7 +182,7 @@ test("an exit near SL is not mislabeled as TP when both triggers existed", () =>
     execution,
   });
   assert.equal(notification.title, "SL Hit · Smart SOL Long");
-  assert.match(notification.body, /Exit \$95\.01 · Realized -\$10\.20/);
+  assert.match(notification.body, /Exit \$95\.01 · Actual net PnL reconciling/);
   assert.equal(notification.sound, "brem_sl.wav");
 });
 

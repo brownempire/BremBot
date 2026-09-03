@@ -1,4 +1,4 @@
-import { DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE } from "@/lib/perps/scalpExit";
+import { estimateNetExitPnl, type OpenPnlAccounting } from "@/lib/perps/pnlAccounting";
 
 export type PositionOverlayGuide = {
   editable?: boolean;
@@ -27,6 +27,7 @@ export type PositionGuideSource = {
   liquidationPrice: number | null;
   side?: "long" | "short";
   unrealizedPnl?: number | null;
+  pnlCostBasis?: OpenPnlAccounting | null;
 };
 
 export type PositionEntryMarker = {
@@ -61,8 +62,6 @@ export type EstimatedPositionNetPnl = {
   estimatedNetPnlUsd: number;
 };
 
-const JUPITER_OPEN_FEE_RATE = 0.0006;
-const ESTIMATED_SOLANA_EXIT_TRANSACTION_USD = 0.01;
 
 function finite(value: number | null | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -98,31 +97,17 @@ function positionReference(position: PositionGuideSource) {
  * Jupiter's live `pnlAfterFeesUsd` is the best baseline because it retains the
  * actual open fee and accrued borrow costs. The close has not happened yet, so
  * reserve the unconsumed part of the conservative observed round-trip rate plus
- * a small transaction allowance. RPC-direct PnL is gross mark-to-market and
- * therefore receives the complete round-trip reserve.
+ * a small transaction allowance. Gross-only fallback feeds cannot provide
+ * accrued borrowing and deliberately do not publish an all-in net figure.
  */
 export function estimatePositionNetExitPnl(
   position: PositionGuideSource
 ): EstimatedPositionNetPnl | null {
-  const pnl = finite(position.unrealizedPnl);
-  const entryPrice = finite(position.entryPrice);
-  const positionValue = finite(position.positionValue)
-    ?? (
-      entryPrice !== null && finite(position.positionSize) !== null
-        ? Math.abs(entryPrice * finite(position.positionSize)!)
-        : null
-    );
-  if (pnl === null || positionValue === null || positionValue <= 0) return null;
-
-  const remainingRate = position.source === "live-api"
-    ? Math.max(0, DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE - JUPITER_OPEN_FEE_RATE)
-    : DEFAULT_CONSERVATIVE_PERPS_ROUND_TRIP_FEE_RATE;
-  const estimatedExitCostsUsd = positionValue * remainingRate + ESTIMATED_SOLANA_EXIT_TRANSACTION_USD;
-
-  return {
-    estimatedExitCostsUsd: Number(estimatedExitCostsUsd.toFixed(2)),
-    estimatedNetPnlUsd: Number((pnl - estimatedExitCostsUsd).toFixed(2)),
-  };
+  const result = estimateNetExitPnl({ ...position,
+    positionValue: finite(position.positionValue), positionSize: finite(position.positionSize),
+    collateralValue: finite(position.collateralValue), unrealizedPnl: finite(position.unrealizedPnl),
+  });
+  return result ? {estimatedExitCostsUsd:result.estimatedExitCostsUsd,estimatedNetPnlUsd:result.estimatedNetPnlUsd} : null;
 }
 
 export function summarizePositionOverlayEstimatedNetPnl(
@@ -139,9 +124,9 @@ export function summarizePositionOverlayEstimatedNetPnlPercent(
 ) {
   const estimatedPnl = summarizePositionOverlayEstimatedNetPnl(positions);
   if (estimatedPnl === null || positions.some(
-    (position) => finite(position.collateralValue) === null || finite(position.collateralValue)! <= 0
+    (position) => finite(position.pnlCostBasis?.capitalUsd ?? position.collateralValue) === null || finite(position.pnlCostBasis?.capitalUsd ?? position.collateralValue)! <= 0
   )) return null;
-  const totalCollateral = positions.reduce((sum, position) => sum + finite(position.collateralValue)!, 0);
+  const totalCollateral = positions.reduce((sum, position) => sum + finite(position.pnlCostBasis?.capitalUsd ?? position.collateralValue)!, 0);
   return Number(((estimatedPnl / totalCollateral) * 100).toFixed(2));
 }
 
@@ -219,7 +204,8 @@ function projectedNetPnl(position: PositionGuideSource, targetPrice: number) {
   }
 
   const pnlPerPriceUnit = position.side === "short" ? -positionSize : positionSize;
-  return Number((unrealizedPnl + (targetPrice - markPrice) * pnlPerPriceUnit).toFixed(2));
+  const estimate = estimatePositionNetExitPnl(position);
+  return estimate ? Number((estimate.estimatedNetPnlUsd + (targetPrice - markPrice) * pnlPerPriceUnit).toFixed(2)) : null;
 }
 
 export function summarizePositionOverlayPnl(

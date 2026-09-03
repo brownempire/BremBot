@@ -32,10 +32,7 @@ test("chart PnL reserves realistic remaining costs without double-counting Jupit
     estimatedExitCostsUsd: 0.74,
     estimatedNetPnlUsd: 1.26,
   });
-  assert.deepEqual(estimatePositionNetExitPnl(rpc), {
-    estimatedExitCostsUsd: 1.04,
-    estimatedNetPnlUsd: 0.96,
-  });
+  assert.equal(estimatePositionNetExitPnl(rpc), null);
   assert.equal(summarizePositionOverlayEstimatedNetPnl([live]), 1.26);
   assert.equal(summarizePositionOverlayEstimatedNetPnlPercent([live]), 6.3);
 });
@@ -160,7 +157,7 @@ test("live position fields map to all four native Advanced Chart levels", () => 
   );
 });
 
-test("editable TP and SL guides project Jupiter's live post-fee PnL", () => {
+test("editable TP and SL guides include the same estimated closing reserve as the open label", () => {
   const guides = buildPositionOverlayGuides([{
     id: "position-sol",
     entryPrice: 72.86,
@@ -175,10 +172,10 @@ test("editable TP and SL guides project Jupiter's live post-fee PnL", () => {
 
   const tp = guides.find((guide) => guide.kind === "tp");
   const sl = guides.find((guide) => guide.kind === "sl");
-  assert.equal(tp?.estimatedNetPnlUsd, 0.65);
+  assert.equal(tp?.estimatedNetPnlUsd, -0.48);
   assert.equal(tp?.pnlPerPriceUnit, 7.5);
-  assert.equal(sl?.estimatedNetPnlUsd, -2.95);
-  assert.equal(tp ? projectOverlayGuideNetPnl(tp, 73.1) : null, 1.4);
+  assert.equal(sl?.estimatedNetPnlUsd, -4.08);
+  assert.equal(tp ? projectOverlayGuideNetPnl(tp, 73.1) : null, 0.27);
 });
 
 test("multiple live positions receive distinct numbered chart labels", () => {

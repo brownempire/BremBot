@@ -72,7 +72,7 @@ function liveActivityChartCandles(candles: WidgetChartCandle[]) {
 }
 
 export function liveActivityPositionKey(snapshot: WidgetServerSnapshot) {
-  if (!snapshot.openPerpMarket || !snapshot.openPerpSide) return null;
+  if (!snapshot.openPerpMarket) return null;
   return `${upperOrFallback(snapshot.openPerpMarket, "PERPS")}-${upperOrFallback(snapshot.openPerpSide, "OPEN")}`;
 }
 

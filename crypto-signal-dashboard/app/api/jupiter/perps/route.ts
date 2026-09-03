@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 
-import { fetchJupiterPerpsAccountSnapshot } from "@/lib/jupiterPerps";
+import { loadAccountedPerpsSnapshot } from "@/lib/perps/pnlAccountingServer";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const snapshot = await fetchJupiterPerpsAccountSnapshot(walletAddress);
+    const snapshot = await loadAccountedPerpsSnapshot(walletAddress);
     return Response.json(snapshot, {
       status: 200,
       headers: {

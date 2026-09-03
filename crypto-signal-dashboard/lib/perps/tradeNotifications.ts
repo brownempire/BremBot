@@ -6,10 +6,11 @@ import {
   type JupiterPerpsTrade,
 } from "@/lib/jupiterPerps";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
-import { ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE } from "@/lib/perps/scalpExit";
+import { projectedNetExitPnl, realizedTradePnl } from "@/lib/perps/pnlAccounting";
+import { loadAccountedPerpsSnapshot } from "@/lib/perps/pnlAccountingServer";
 import type { PerpsUserExecution } from "@/lib/perps/sessionTypes";
 import { listUserPerpsExecutions } from "@/lib/perps/userExecutionAudit";
-import { getPerpsWatchState, savePerpsWatchState } from "@/lib/perpsWatchStore";
+import { getPerpsWatchState, savePerpsWatchState, type StoredPerpsWatchState } from "@/lib/perpsWatchStore";
 import { getAnyPushConfigError, sendNotificationPayload } from "@/lib/push/dispatch";
 import { listNativePushDevices } from "@/lib/push/nativeStore";
 import { listSubscribedWalletAddresses } from "@/lib/push/store";
@@ -28,6 +29,7 @@ export type TradeNotification = {
 type ExitReason = "take-profit" | "stop-loss" | "liquidation" | "manual" | "unknown";
 
 type WatchDependencies = {
+  getPushConfigError?: typeof getAnyPushConfigError;
   listSubscribedWallets: typeof listSubscribedWalletAddresses;
   listNativeDevices: typeof listNativePushDevices;
   getWatchState: typeof getPerpsWatchState;
@@ -44,7 +46,7 @@ const defaultDependencies: WatchDependencies = {
   getWatchState: getPerpsWatchState,
   saveWatchState: savePerpsWatchState,
   getAgentWallet: getAgentWalletForOwner,
-  fetchSnapshot: fetchJupiterPerpsAccountSnapshot,
+  fetchSnapshot: loadAccountedPerpsSnapshot,
   listExecutions: listUserPerpsExecutions,
   sendNotification: sendNotificationPayload,
 };
@@ -111,31 +113,7 @@ function matchesPrice(price: number | null | undefined, target: number | null | 
 }
 
 function expectedNetPnl(position: JupiterPerpsPosition, targetPrice: number | null | undefined) {
-  const entry = finite(position.entryPrice);
-  const mark = finite(position.markPrice);
-  const target = finite(targetPrice);
-  const size = finite(position.positionSize)
-    ?? (
-      finite(position.positionValue) !== null && entry !== null && entry > 0
-        ? finite(position.positionValue)! / entry
-        : null
-    );
-  if (entry === null || target === null || size === null || size <= 0) return null;
-  const priceDelta = position.side === "long" ? target - entry : entry - target;
-  const grossTargetPnl = priceDelta * size;
-  const liveNetPnl = finite(position.unrealizedPnl);
-
-  // Jupiter's live unrealized PnL is already fee-adjusted. Projecting from that
-  // value preserves the fees and borrow accrued on the actual position instead
-  // of showing the user a misleading gross-price result.
-  if (mark !== null && liveNetPnl !== null) {
-    const markToTargetDelta = position.side === "long" ? target - mark : mark - target;
-    return Number((liveNetPnl + markToTargetDelta * size).toFixed(2));
-  }
-
-  const positionSizeUsd = finite(position.positionValue) ?? Math.abs(entry * size);
-  const estimatedFeesUsd = positionSizeUsd * ESTIMATED_PERPS_ROUND_TRIP_FEE_RATE;
-  return Number((grossTargetPnl - estimatedFeesUsd).toFixed(2));
+  return projectedNetExitPnl(position, targetPrice);
 }
 
 function strategyLabel(execution: PerpsUserExecution | null) {
@@ -256,23 +234,26 @@ export function buildTradeExitNotification(options: {
   previousTriggers: JupiterPerpsPendingTrigger[];
   recentTrades: JupiterPerpsTrade[];
   execution?: PerpsUserExecution | null;
+  closingTrade?: JupiterPerpsTrade;
 }): TradeNotification {
   const execution = options.execution ?? null;
   const reason = inferTradeExitReason(options);
-  const trade = latestExitTrade(options.position, options.recentTrades);
+  const trade = options.closingTrade ?? latestExitTrade(options.position, options.recentTrades);
   const strategy = strategyLabel(execution);
   const asset = marketAsset(options.position.marketSymbol);
   const tp = finite(options.position.takeProfit) ?? finite(execution?.takeProfitPrice);
   const sl = finite(options.position.stopLoss) ?? finite(execution?.stopLossPrice);
-  const netPnl = finite(trade?.pnl);
+  const accounting = trade ? realizedTradePnl(trade) : null;
+  const netPnl = finite(accounting?.netPnlUsd);
   const exitTimestamp = trade ? tradeTime(trade) : 0;
   const durationMinutes = execution && exitTimestamp > 0
     ? Math.max(0, (exitTimestamp - Date.parse(execution.createdAt)) / 60_000)
     : null;
   const body = [
-    `Exit ${formatPrice(trade?.price)}${netPnl === null ? "" : ` · Realized ${formatUsd(netPnl, true)}`}`,
+    `Exit ${formatPrice(trade?.price)}${netPnl === null ? " · Actual net PnL reconciling" : ` · Realized net ${formatUsd(netPnl, true)}${accounting?.netRoePercent != null ? ` (${accounting.netRoePercent.toFixed(2)}%)` : ""}`}`,
     `Entry ${formatPrice(options.position.entryPrice)} · ${formatLeverage(options.position.leverage ?? execution?.leverage)}`,
-    `${targetSummary("TP", options.position, tp)} · ${targetSummary("SL", options.position, sl)}`,
+    // Closed notifications do not mix settlement with stale pre-close estimates.
+    `TP ${formatPrice(tp)} · SL ${formatPrice(sl)}`,
     durationMinutes === null ? null : `Held ${durationMinutes < 60 ? `${Math.round(durationMinutes)}m` : `${(durationMinutes / 60).toFixed(1)}h`}`,
   ].filter((value): value is string => Boolean(value)).join(". ");
 
@@ -325,7 +306,7 @@ export function buildTradeLifecycleNotifications(options: {
 export async function runPerpsTradeNotificationWatch(
   dependencies: WatchDependencies = defaultDependencies
 ) {
-  const configError = getAnyPushConfigError();
+  const configError = (dependencies.getPushConfigError ?? getAnyPushConfigError)();
   if (configError) {
     return { ok: false, error: configError, wallets: 0, notifications: 0, sent: 0 };
   }
@@ -337,8 +318,8 @@ export async function runPerpsTradeNotificationWatch(
       .map((device) => device.walletAddress?.trim())
       .filter((walletAddress): walletAddress is string => Boolean(walletAddress)),
   ])];
-  const notifications: TradeNotification[] = [];
-
+  let notificationCount = 0;
+  let sent = 0;
   for (const walletAddress of walletAddresses) {
     const monitoredWalletAddress = dependencies.getAgentWallet(walletAddress) ?? walletAddress;
     const [previousState, snapshot, executions] = await Promise.all([
@@ -347,6 +328,21 @@ export async function runPerpsTradeNotificationWatch(
       dependencies.listExecutions(walletAddress).catch(() => []),
     ]);
     if (!snapshot) continue;
+    const pendingPnlClosures: NonNullable<StoredPerpsWatchState["pendingPnlClosures"]> = [...(previousState?.monitoredWalletAddress === monitoredWalletAddress
+      ? previousState.pendingPnlClosures ?? [] : [])];
+    const notifications: { notification: TradeNotification; pending?: typeof pendingPnlClosures[number] }[] = [];
+    for (const pending of pendingPnlClosures) {
+      const trade = pending.closingTxHash
+        ? snapshot.recentTrades.find(t => t.txHash === pending.closingTxHash && t.positionPubkey === pending.position.accountRef)
+        : latestExitTrade(pending.position, snapshot.recentTrades.filter(t =>
+          tradeTime(t) >= (pending.observedAfter ?? 0) && tradeTime(t) <= (pending.observedBefore ?? Infinity)));
+      if (trade?.txHash) pending.closingTxHash = trade.txHash;
+      if (!trade || !realizedTradePnl(trade)) continue;
+      const notification = buildTradeExitNotification({walletAddress,position:pending.position,previousTriggers:pending.triggers,
+        recentTrades:snapshot.recentTrades,closingTrade:trade,execution:findExecution(pending.position,executions)});
+      notification.title = `PnL reconciled · ${pending.position.marketSymbol} ${sideLabel(pending.position.side)}`;
+      notifications.push({notification, pending});
+    }
 
     // A missing/legacy state is a bootstrap, not a newly opened trade. This
     // prevents a deployment or wallet-role migration from alerting old positions.
@@ -354,29 +350,45 @@ export async function runPerpsTradeNotificationWatch(
       previousState
       && previousState.monitoredWalletAddress === monitoredWalletAddress
     ) {
-      notifications.push(...buildTradeLifecycleNotifications({
-        walletAddress,
-        previousSnapshot: previousState.snapshot,
-        currentSnapshot: snapshot,
-        executions,
-      }));
+      for (const position of snapshot.positions) {
+        if (previousState.snapshot.positions.some(p => positionKey(p) === positionKey(position))) continue;
+        notifications.push({notification:buildTradeEntryNotification({walletAddress,position,execution:findExecution(position,executions)})});
+      }
+      for (const position of previousState.snapshot.positions) {
+        if (snapshot.positions.some(p => positionKey(p) === positionKey(position))) continue;
+        const observedAfter = previousState.lastCheckedAt - 5000;
+        const observedBefore = Date.now();
+        const candidates = snapshot.recentTrades.filter(t=>tradeTime(t)>=observedAfter && tradeTime(t)<=observedBefore);
+        const trade = latestExitTrade(position,candidates);
+        const pending = {position,triggers:previousState.snapshot.pendingTriggers,closingTxHash:trade?.txHash ?? null,observedAfter,observedBefore};
+        pendingPnlClosures.push(pending);
+        notifications.push({notification:buildTradeExitNotification({walletAddress,position,previousTriggers:pending.triggers,
+          recentTrades:candidates,execution:findExecution(position,executions)}),pending:trade && realizedTradePnl(trade) ? pending : undefined});
+      }
     }
 
-    await dependencies.saveWatchState({
+    const state: StoredPerpsWatchState = {
       walletAddress,
       monitoredWalletAddress,
       lastCheckedAt: Date.now(),
       snapshot,
-    });
+      pendingPnlClosures,
+    };
+    // Persist pending settlements BEFORE delivery, retire only after success.
+    await dependencies.saveWatchState(state);
+    const resolved = new Set<typeof pendingPnlClosures[number]>();
+    for (const item of notifications) {
+      notificationCount++;
+      const result = await dependencies.sendNotification(item.notification).catch(()=>null);
+      sent += result?.sent ?? 0;
+      if (result?.sent && item.pending) resolved.add(item.pending);
+    }
+    if (resolved.size) await dependencies.saveWatchState({...state,pendingPnlClosures:pendingPnlClosures.filter(p=>!resolved.has(p))});
   }
-
-  const results = await Promise.all(
-    notifications.map((notification) => dependencies.sendNotification(notification))
-  );
   return {
     ok: true,
     wallets: walletAddresses.length,
-    notifications: notifications.length,
-    sent: results.reduce((sum, result) => sum + result.sent, 0),
+    notifications: notificationCount,
+    sent,
   };
 }

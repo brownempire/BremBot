@@ -1,4 +1,5 @@
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
+import type { OpenPnlAccounting, RealizedPnlAccounting } from "@/lib/perps/pnlAccounting";
 
 export type JupiterPerpsPositionSide = "long" | "short";
 export type JupiterPerpsPositionSource = "live-api" | "portfolio-api" | "mock" | "rpc-direct" | "rpc-placeholder";
@@ -24,6 +25,7 @@ export type JupiterPerpsPosition = {
   collateralValue: number | null;
   leverage: number | null;
   unrealizedPnl: number | null;
+  pnlCostBasis?: OpenPnlAccounting | null;
   realizedPnl: number | null;
   liquidationPrice: number | null;
   fundingSnapshot: string | null;
@@ -127,6 +129,7 @@ export type JupiterPerpsTrade = {
   feeUsd: number | null;
   pnl: number | null;
   pnlPercentage: number | null;
+  pnlAccounting?: RealizedPnlAccounting;
   txHash: string | null;
   lastUpdated: number | null;
   createdAt: number | null;

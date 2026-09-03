@@ -103,8 +103,8 @@ test("widget summary contains display-safe position data and agent equity", () =
 
   assert.equal(snapshot.openPerpLabel, "SOL/USD LONG");
   assert.match(snapshot.openPerpDetail, /\$310\.00 position/);
-  assert.equal(snapshot.openPerpPnlUsd, 10);
-  assert.equal(snapshot.openPerpPnlPercent, 10);
+  assert.equal(snapshot.openPerpPnlUsd, 9.54);
+  assert.equal(snapshot.openPerpPnlPercent, 9.54);
   assert.equal(snapshot.openPerpMarket, "SOL/USD");
   assert.equal(snapshot.openPerpSide, "long");
   assert.equal(snapshot.openPerpStrategy, "smart");
@@ -117,8 +117,8 @@ test("widget summary contains display-safe position data and agent equity", () =
   assert.equal(snapshot.openPerpLiquidationPrice, 120);
   assert.equal(snapshot.openPerpTakeProfitPrice, 175);
   assert.equal(snapshot.openPerpStopLossPrice, 135);
-  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 50);
-  assert.equal(snapshot.openPerpStopLossPnlUsd, -30);
+  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 49.54);
+  assert.equal(snapshot.openPerpStopLossPnlUsd, -30.46);
   assert.equal(snapshot.chartSymbol, "SOL");
   assert.equal(snapshot.chartCandles.length, 60);
   assert.deepEqual(snapshot.chartCandles[0], {
@@ -196,14 +196,14 @@ test("idle widget keeps wallet balances and monitored SOL market data without in
 
 test("widget expected P/L reverses price direction for short positions", () => {
   const snapshot = buildWidgetServerSnapshot({
-    agentPositions: [{ ...position, side: "short", takeProfit: 135, stopLoss: 175 }],
+    agentPositions: [{ ...position, side: "short", unrealizedPnl: -10, takeProfit: 135, stopLoss: 175 }],
     mainAvailableUsdc: 0,
     agentAvailableUsdc: 100,
     session: liveSession,
   });
 
-  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 30);
-  assert.equal(snapshot.openPerpStopLossPnlUsd, -50);
+  assert.equal(snapshot.openPerpTakeProfitPnlUsd, 29.54);
+  assert.equal(snapshot.openPerpStopLossPnlUsd, -50.46);
 });
 
 test("mock positions are never exposed by the production widget summary", () => {

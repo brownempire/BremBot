@@ -259,6 +259,8 @@ type PerpsPnlPayload = {
   role: PnlMode;
   walletAddress?: string;
   historyComplete?: boolean;
+  accountingComplete?: boolean;
+  pendingTradeCount?: number;
   historyTotalCount?: number;
   points?: PerpsPnlPoint[];
   realizedPnlUsd?: number;
@@ -4717,7 +4719,7 @@ function DashboardPage() {
       setPnlStatus(selectedPerpsPnl.message ?? `No ${pnlMode === "primary" ? "Main" : "Agent"} wallet Perps history is available.`);
     } else {
       const coverage = selectedPerpsPnl.historyComplete ? "complete available history" : `latest ${selectedPerpsPnl.tradeCount ?? 0} records`;
-      setPnlStatus(`Tracking ${pnlMode === "primary" ? "Main" : "Agent"} wallet Jupiter Perps PnL from ${coverage}.`);
+      setPnlStatus(`Tracking ${pnlMode === "primary" ? "Main" : "Agent"} wallet Jupiter Perps PnL from ${coverage}.${selectedPerpsPnl.accountingComplete === false ? ` Available subtotal only; ${selectedPerpsPnl.pendingTradeCount ?? 0} position record(s) awaiting actual-fee reconciliation, or open-position fee data unavailable. Missing records are not treated as zero-profit trades.` : " Closed trades use actual cashflows; open PnL is estimated net if closed now."}`);
     }
   }, [pnlMode, remoteAuthToken, selectedPerpsPnl]);
 
@@ -5737,7 +5739,7 @@ function DashboardPage() {
           <div className="subtext" style={{ marginBottom: 10 }}>{pnlStatus}</div>
           {selectedPerpsPnl?.available ? (
             <div className="subtext" style={{ marginBottom: 10 }}>
-              Total {formatUsd(selectedPerpsPnl.totalPnlUsd ?? 0)} · Realized {formatUsd(selectedPerpsPnl.realizedPnlUsd ?? 0)} · Open {formatUsd(selectedPerpsPnl.unrealizedPnlUsd ?? 0)} · {selectedPerpsPnl.tradeCount ?? 0} Perps records
+              {selectedPerpsPnl.accountingComplete === false ? "Reconciled subtotal" : "Total"} {formatUsd(selectedPerpsPnl.totalPnlUsd ?? 0)} · Realized net {formatUsd(selectedPerpsPnl.realizedPnlUsd ?? 0)} · Estimated open net {formatUsd(selectedPerpsPnl.unrealizedPnlUsd ?? 0)} · {selectedPerpsPnl.tradeCount ?? 0} settled positions
             </div>
           ) : null}
           <div className="pnl-metrics">

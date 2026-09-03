@@ -1,9 +1,9 @@
 import { getAgentWalletForOwner, type PerpsWalletRole } from "@/lib/perps/agentWallet";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 import {
-  fetchJupiterPerpsAccountSnapshot,
   type JupiterPerpsAccountSnapshot,
 } from "@/lib/jupiterPerps";
+import { loadAccountedPerpsSnapshot } from "@/lib/perps/pnlAccountingServer";
 import { getWalletUsdcBalance } from "@/lib/perps/walletBalance";
 
 export const dynamic = "force-dynamic";
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
   ];
   const results = await Promise.allSettled(
     wallets.map(async (wallet) => labelSnapshot(
-      await fetchJupiterPerpsAccountSnapshot(wallet.address),
+      await loadAccountedPerpsSnapshot(wallet.address),
       wallet.address,
       wallet.role
     ))

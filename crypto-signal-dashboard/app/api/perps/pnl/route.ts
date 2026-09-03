@@ -1,11 +1,11 @@
 import {
-  fetchJupiterPerpsAccountSnapshot,
   fetchJupiterPerpsTradeHistory,
   type JupiterPerpsTrade,
   type JupiterPerpsTradeHistory,
 } from "@/lib/jupiterPerps";
 import { getAgentWalletForOwner } from "@/lib/perps/agentWallet";
 import { buildPerpsPnlSummary } from "@/lib/perps/pnl";
+import { enrichPerpsPnlAccounting, loadAccountedPerpsSnapshot } from "@/lib/perps/pnlAccountingServer";
 import { getAuthorizedWalletAddress } from "@/lib/perps/sessionAuth";
 
 export const dynamic = "force-dynamic";
@@ -66,16 +66,17 @@ export async function GET(request: Request) {
 
   try {
     const [snapshot, history] = await Promise.all([
-      fetchJupiterPerpsAccountSnapshot(walletAddress, { includeRecentTrades: false }),
+      loadAccountedPerpsSnapshot(walletAddress),
       getPerpsHistory(walletAddress),
     ]);
+    const accounted = await enrichPerpsPnlAccounting(walletAddress, snapshot, history.trades);
     return Response.json({
       available: true,
       role,
       walletAddress,
       historyComplete: history.complete,
       historyTotalCount: history.totalCount,
-      ...buildPerpsPnlSummary(history.trades, snapshot.positions),
+      ...buildPerpsPnlSummary(accounted.recentTrades, accounted.positions),
     }, {
       headers: { "Cache-Control": "no-store, max-age=0" },
     });

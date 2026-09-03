@@ -199,8 +199,8 @@ export function PerpsPnlChart({
             <span><small>Price</small>{selectedTrade.price === null ? "—" : formatUsd(selectedTrade.price)}</span>
             <span><small>Size</small>{selectedTrade.sizeUsd === null ? "—" : formatUsd(selectedTrade.sizeUsd)}</span>
             <span><small>Collateral Δ</small>{selectedTrade.collateralUsdDelta === null ? "—" : formatUsd(selectedTrade.collateralUsdDelta)}</span>
-            <span><small>Fee</small>{selectedTrade.feeUsd === null ? "—" : formatUsd(selectedTrade.feeUsd)}</span>
-            <span><small>Trade PnL</small><b className={selectedTrade.pnlUsd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(selectedTrade.pnlUsd)}</b></span>
+            <span><small>Paid SOL fees (USD)</small>{selectedTrade.networkFeeUsd == null ? "—" : formatUsd(selectedTrade.networkFeeUsd)}</span>
+            <span><small>Realized net PnL</small><b className={selectedTrade.pnlUsd >= 0 ? "pnl-positive" : "pnl-negative"}>{formatUsd(selectedTrade.pnlUsd)}{selectedTrade.pnlPercentage != null ? ` (${selectedTrade.pnlPercentage.toFixed(2)}%)` : ""}</b></span>
             <span><small>Cumulative</small>{formatUsd(selectedTrade.cumulativePnlUsd)}</span>
           </div>
           <div className="pnl-trade-identifiers">

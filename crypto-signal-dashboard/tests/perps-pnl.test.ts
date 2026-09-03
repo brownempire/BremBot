@@ -24,28 +24,32 @@ function trade(overrides: Partial<JupiterPerpsTrade>): JupiterPerpsTrade {
     txHash: null,
     lastUpdated: null,
     createdAt: 1,
+    pnlAccounting: {
+      version: 1, episodeId: overrides.id ?? "episode", status: overrides.action === "Increase" ? "included" : "reconciled",
+      netPnlUsd: overrides.pnl ?? 0, netRoePercent: null, capitalUsd: 20, asOf: 1,
+    },
     ...overrides,
   };
 }
 
-test("Perps PnL combines fee-adjusted realized history with current open-position PnL", () => {
+test("Perps PnL combines reconciled closed episodes and estimated open net without double counting entry fees", () => {
   const trades = [
     trade({ id: "entry", action: "Increase", pnl: null, feeUsd: 0.25, createdAt: 1_000 }),
     trade({ id: "win", pnl: 12.5, feeUsd: 0.5, createdAt: 2_000 }),
     trade({ id: "loss", pnl: -3, feeUsd: 0.4, createdAt: 3_000 }),
   ];
-  const positions = [{ unrealizedPnl: 4.75 }] as JupiterPerpsPosition[];
+  const positions = [{ source: "live-api", unrealizedPnl: 4.75, positionValue: 100, collateralValue: 20 }] as JupiterPerpsPosition[];
   const summary = buildPerpsPnlSummary(trades, positions, 4_000);
 
-  assert.equal(summary.realizedPnlUsd, 9.25);
-  assert.equal(summary.unrealizedPnlUsd, 4.75);
-  assert.equal(summary.totalPnlUsd, 14);
-  assert.deepEqual(summary.points.map((point) => point.v), [-0.25, 12.25, 9.25, 14]);
-  assert.equal(summary.points[0]?.trade?.action, "Increase");
-  assert.equal(summary.points[1]?.trade?.pnlUsd, 12.5);
-  assert.equal(summary.points[2]?.trade?.cumulativePnlUsd, 9.25);
-  assert.equal(summary.points[3]?.trade, undefined);
-  assert.equal(new Set(summary.points.flatMap((point) => point.trade?.id ?? [])).size, 3);
+  assert.equal(summary.realizedPnlUsd, 9.5);
+  assert.equal(summary.unrealizedPnlUsd, 4.59);
+  assert.equal(summary.totalPnlUsd, 14.09);
+  assert.deepEqual(summary.points.map((point) => point.v), [12.5, 9.5, 14.09]);
+  assert.equal(summary.points[0]?.trade?.action, "Close");
+  assert.equal(summary.points[0]?.trade?.pnlUsd, 12.5);
+  assert.equal(summary.points[1]?.trade?.cumulativePnlUsd, 9.5);
+  assert.equal(summary.points[2]?.trade, undefined);
+  assert.equal(new Set(summary.points.flatMap((point) => point.trade?.id ?? [])).size, 2);
 });
 
 test("range PnL uses the last cumulative value before the cutoff", () => {
