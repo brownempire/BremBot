@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 
 import { createBremLogicDatafeed } from "@/lib/chart/tradingViewDatafeed";
 import { clampFloatingPanelPosition, type FloatingPanelPosition } from "@/lib/chart/floatingPanel";
 import type { ScalpAgentOverlaySnapshot } from "@/lib/chart/scalpAgentOverlay";
+import { createForegroundPoller } from "@/lib/chart/foregroundPoller";
 import {
   projectOverlayGuideNetPnl,
   validOverlayGuides,
@@ -610,29 +613,71 @@ export function TradingViewChart({
     }
 
     let cancelled = false;
-    const loadSnapshot = async () => {
+    const loadSnapshot = async (signal: AbortSignal) => {
       try {
         const query = new URLSearchParams({ symbol });
         const response = await fetch(`/api/perps/scalp-overlay?${query}`, {
+          signal,
           cache: "no-store",
           headers: { Authorization: `Bearer ${scalpOverlayAuthToken}` },
         });
         const payload = await response.json().catch(() => null) as (ScalpAgentOverlaySnapshot & { error?: string }) | null;
         if (!response.ok || !payload) throw new Error(payload?.error || "Scalp overlay data is unavailable.");
-        if (!cancelled) {
+        if (!cancelled && !signal.aborted) {
           setScalpSnapshot(payload);
           setScalpOverlayError(null);
         }
       } catch (error) {
-        if (!cancelled) setScalpOverlayError(error instanceof Error ? error.message : "Scalp overlay data is unavailable.");
+        if (!cancelled && !signal.aborted) setScalpOverlayError(error instanceof Error ? error.message : "Scalp overlay data is unavailable.");
       }
     };
 
-    void loadSnapshot();
-    const timer = window.setInterval(loadSnapshot, 15_000);
+    const poller = createForegroundPoller({load:loadSnapshot,intervalMs:15_000});
+    let pageShown = true;
+    const native = Capacitor.isNativePlatform();
+    let nativeActive = !native;
+    let windowFocused = document.hasFocus();
+    const syncVisibility = () => poller.setActive(pageShown && nativeActive && document.visibilityState === "visible" && (native || windowFocused));
+    const hide = () => { pageShown = false; syncVisibility(); };
+    const show = () => { pageShown = true; syncVisibility(); };
+    const focus = () => { windowFocused = true; syncVisibility(); };
+    const blur = () => { windowFocused = false; syncVisibility(); };
+    document.addEventListener("visibilitychange",syncVisibility);
+    window.addEventListener("pagehide",hide);
+    window.addEventListener("pageshow",show);
+    window.addEventListener("focus",focus);
+    window.addEventListener("blur",blur);
+    let nativeListener: {remove:()=>Promise<void>} | null = null;
+    if (native) {
+      let nativeEventSeen = false;
+      void App.addListener("appStateChange",({isActive})=>{
+        nativeEventSeen = true;
+        nativeActive = isActive;
+        syncVisibility();
+      }).then(listener=>{
+        if (cancelled) void listener.remove();
+        else nativeListener = listener;
+      }).catch(()=>undefined);
+      void App.getState().then(({isActive})=>{
+        if (cancelled || nativeEventSeen) return;
+        nativeActive = isActive;
+        syncVisibility();
+      }).catch(()=>{
+        if (cancelled || nativeEventSeen) return;
+        nativeActive = true; // Browser visibility remains the fallback gate.
+        syncVisibility();
+      });
+    }
+    syncVisibility();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      poller.dispose();
+      document.removeEventListener("visibilitychange",syncVisibility);
+      window.removeEventListener("pagehide",hide);
+      window.removeEventListener("pageshow",show);
+      window.removeEventListener("focus",focus);
+      window.removeEventListener("blur",blur);
+      void nativeListener?.remove().catch(()=>undefined);
     };
   }, [scalpOverlayAuthToken, scalpOverlayEnabled, symbol]);
 

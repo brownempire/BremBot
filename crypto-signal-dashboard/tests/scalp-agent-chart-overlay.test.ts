@@ -198,7 +198,8 @@ test("TradingView overlay installs and removes studies in place without rebuildi
   assert.match(route, /fetchCoinbaseMinuteCandles\(market\.product, 240\)/);
   assert.match(overlay, /Math\.max\(SCALP_EXHAUSTION_LOOKBACK_MINUTES - 1, points\.length - 120\)/);
   assert.match(route, /profile\?\.indicatorSettings/);
-  assert.match(route, /listTradeLearningOutcomes\(walletAddress\)/);
+  assert.match(route, /loadScalpOverlayHistory\(walletAddress, market\.asset\)/);
+  assert.doesNotMatch(route, /listTradeLearningOutcomes|listScalpCandidates/);
   assert.match(route, /getLastAutonomousMonitorRun\(\)/);
   assert.match(route, /getActiveScalpAsset\(config\)/);
   assert.match(route, /scalpModeEnabled: Boolean\(activeScalpAsset\)/);
